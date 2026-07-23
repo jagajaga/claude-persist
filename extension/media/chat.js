@@ -339,7 +339,13 @@
         endStreaming();
         const bits = [];
         if (typeof event.durationMs === 'number') bits.push(`${(event.durationMs / 1000).toFixed(1)}s`);
-        if (typeof event.costUsd === 'number') bits.push(`$${event.costUsd.toFixed(4)}`);
+        if (typeof event.contextTokens === 'number') {
+          bits.push(
+            event.contextTokens >= 1000
+              ? `${(event.contextTokens / 1000).toFixed(1)}k tokens`
+              : `${event.contextTokens} tokens`,
+          );
+        }
         threadEl.appendChild(el('div', 'meta', bits.length ? bits.join(' · ') : 'done'));
         updateRing(event.contextTokens, event.contextWindow);
         setRunning(false);

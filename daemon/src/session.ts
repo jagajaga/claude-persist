@@ -174,7 +174,17 @@ export class DaemonSession {
         this.resolvePermission(requestId, true);
       }
     }
-    await this.activeQuery?.setPermissionMode(mode);
+    try {
+      await this.activeQuery?.setPermissionMode(mode);
+    } catch (err) {
+      // Surface instead of dying as an unhandled rejection; keep this.status
+      // untouched — this is a mode-switch failure, not a session failure.
+      this.appendEvent({
+        type: 'status',
+        status: this.status,
+        detail: `Could not switch permission mode: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
   }
 
   resolvePermission(requestId: string, allow: boolean, message?: string): void {
@@ -203,6 +213,9 @@ export class DaemonSession {
         ...(this.meta.sdkSessionId ? { resume: this.meta.sdkSessionId } : {}),
         includePartialMessages: true,
         permissionMode: this.meta.permissionMode ?? 'default',
+        // Launch with the bypass *capability* so the mode can be toggled
+        // mid-session; actual behavior is still governed by permissionMode.
+        allowDangerouslySkipPermissions: true,
         canUseTool: this.canUseTool,
       },
     });

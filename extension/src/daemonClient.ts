@@ -16,6 +16,10 @@ import type {
 const baseDir = path.join(os.homedir(), '.claude-persist');
 const socketPath = path.join(baseDir, 'daemon.sock');
 
+// Keep in sync with PROTOCOL_VERSION in shared/src/protocol.ts (the shared
+// package is ESM, so the constant can't be require()d from this CJS module).
+const EXPECTED_PROTOCOL = 2;
+
 /** Omit that distributes over a union (plain Omit collapses union members). */
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
 
@@ -54,21 +58,46 @@ export class DaemonClient {
   async connect(): Promise<void> {
     try {
       await this.tryConnect();
+      await this.verifyProtocol();
+      return;
     } catch {
-      await this.spawnDaemon();
-      // Give the daemon a moment to bind the socket, with retries.
-      let lastError: unknown;
-      for (let attempt = 0; attempt < 20; attempt++) {
-        await new Promise((r) => setTimeout(r, 250));
-        try {
-          await this.tryConnect();
-          return;
-        } catch (err) {
-          lastError = err;
-        }
-      }
-      throw new Error(`Could not start claude-persist daemon: ${String(lastError)}`);
+      // Not running, or an outdated daemon was just told to exit — (re)spawn.
     }
+    await this.spawnDaemon();
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await new Promise((r) => setTimeout(r, 250));
+      try {
+        await this.tryConnect();
+        await this.verifyProtocol();
+        return;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw new Error(`Could not start claude-persist daemon: ${String(lastError)}`);
+  }
+
+  /**
+   * Kill and replace a daemon speaking an older protocol (left over from a
+   * previous extension version). Sessions themselves survive this: transcripts
+   * and SDK session ids are on disk, and the new daemon resumes them.
+   */
+  private async verifyProtocol(): Promise<void> {
+    const info = await this.request<{ protocolVersion: number; pid: number }>({
+      op: 'hello',
+      protocolVersion: EXPECTED_PROTOCOL,
+    });
+    if (info.protocolVersion === EXPECTED_PROTOCOL) return;
+    this.socket?.destroy();
+    this.socket = null;
+    try {
+      process.kill(info.pid, 'SIGTERM');
+    } catch {
+      // already gone
+    }
+    await new Promise((r) => setTimeout(r, 600));
+    throw new Error(`Outdated daemon (protocol ${info.protocolVersion}) — restarting`);
   }
 
   private tryConnect(): Promise<void> {

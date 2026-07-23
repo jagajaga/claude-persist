@@ -20,8 +20,8 @@
   const chipsEl = document.getElementById('chips');
   const ringBtn = document.getElementById('context-ring');
 
-  const CONTEXT_WINDOW = 200000;
   const RING_CIRCUMFERENCE = 47.1;
+  let contextWindow = 1000000; // default 1M; overwritten by the SDK's reported window
 
   let streamingEl = null;
   let bypass = false;
@@ -101,15 +101,17 @@
     if (running) statusText.textContent = detail || 'Working…';
   }
 
-  function updateRing(tokens) {
+  function updateRing(tokens, windowSize) {
+    if (typeof windowSize === 'number' && windowSize > 0) contextWindow = windowSize;
     if (typeof tokens !== 'number' || tokens <= 0) return;
-    const pct = Math.min(1, tokens / CONTEXT_WINDOW);
+    const pct = Math.min(1, tokens / contextWindow);
     ringBtn.hidden = false;
     const fg = ringBtn.querySelector('.ring-fg');
     fg.setAttribute('stroke-dashoffset', String(RING_CIRCUMFERENCE * (1 - pct)));
     ringBtn.classList.toggle('warn', pct >= 0.7 && pct < 0.9);
     ringBtn.classList.toggle('hot', pct >= 0.9);
-    ringBtn.title = `Context: ~${Math.round(pct * 100)}% of ${CONTEXT_WINDOW / 1000}k tokens — click to compact`;
+    const pctText = pct < 0.01 ? '<1' : String(Math.round(pct * 100));
+    ringBtn.title = `Context: ~${pctText}% of ${Math.round(contextWindow / 1000)}k tokens — click to compact`;
   }
 
   // ---------- diff rendering --------------------------------------------------
@@ -339,7 +341,7 @@
         if (typeof event.durationMs === 'number') bits.push(`${(event.durationMs / 1000).toFixed(1)}s`);
         if (typeof event.costUsd === 'number') bits.push(`$${event.costUsd.toFixed(4)}`);
         threadEl.appendChild(el('div', 'meta', bits.length ? bits.join(' · ') : 'done'));
-        updateRing(event.contextTokens);
+        updateRing(event.contextTokens, event.contextWindow);
         setRunning(false);
         break;
       }

@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 export type SessionStatus = 'idle' | 'running' | 'error';
 
@@ -38,7 +38,7 @@ export type ChatEvent =
   | { type: 'permission_request'; requestId: string; toolName: string; input: unknown }
   | { type: 'permission_resolved'; requestId: string; allowed: boolean }
   | { type: 'status'; status: SessionStatus; detail?: string }
-  | { type: 'result'; summary: string; costUsd?: number; durationMs?: number; contextTokens?: number };
+  | { type: 'result'; summary: string; costUsd?: number; durationMs?: number; contextTokens?: number; contextWindow?: number };
 
 export interface PersistedEvent {
   seq: number;

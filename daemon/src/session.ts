@@ -304,12 +304,20 @@ export class DaemonSession {
             num(usage.cache_creation_input_tokens) +
             num(usage.output_tokens)
           : undefined;
+        let contextWindow: number | undefined;
+        const modelUsage = msg.modelUsage as Record<string, { contextWindow?: unknown }> | undefined;
+        for (const entry of Object.values(modelUsage ?? {})) {
+          if (typeof entry.contextWindow === 'number') {
+            contextWindow = Math.max(contextWindow ?? 0, entry.contextWindow);
+          }
+        }
         this.appendEvent({
           type: 'result',
           summary: summarize(summaryText, 400),
           costUsd: typeof msg.total_cost_usd === 'number' ? msg.total_cost_usd : undefined,
           durationMs: typeof msg.duration_ms === 'number' ? msg.duration_ms : undefined,
           ...(contextTokens ? { contextTokens } : {}),
+          ...(contextWindow ? { contextWindow } : {}),
         });
         this.setStatus('idle');
         break;

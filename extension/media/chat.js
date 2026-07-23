@@ -37,6 +37,20 @@
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
+  // "Pinned" scrolling: while the user is at (or near) the bottom, keep them
+  // there through input growth, viewport resizes (mobile keyboard!), and new
+  // content. If they scrolled up to read, leave them alone.
+  let pinned = true;
+  function isNearBottom() {
+    return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 40;
+  }
+  messagesEl.addEventListener('scroll', () => {
+    pinned = isNearBottom();
+  });
+  window.addEventListener('resize', () => {
+    if (pinned) scrollToBottom();
+  });
+
   function pretty(value, max) {
     let text;
     if (typeof value === 'string') text = value;
@@ -370,7 +384,7 @@
       }
     }
     keepWorkingLast();
-    scrollToBottom();
+    if (pinned) scrollToBottom();
   }
 
   function applyPermissionMode(mode) {
@@ -401,6 +415,7 @@
           setRunning(msg.info.status === 'running');
           applyPermissionMode(msg.info.permissionMode);
         }
+        pinned = true;
         scrollToBottom();
         break;
       }
@@ -415,7 +430,7 @@
         }
         streamingEl.textContent += msg.text;
         keepWorkingLast();
-        scrollToBottom();
+        if (pinned) scrollToBottom();
         break;
       }
       case 'attachments':
@@ -440,6 +455,9 @@
   function autosize() {
     inputEl.style.height = 'auto';
     inputEl.style.height = `${Math.min(inputEl.scrollHeight, window.innerHeight * 0.38)}px`;
+    // The growing composer shrinks the messages area; keep the conversation
+    // pinned to the bottom so the last lines stay visible while typing.
+    if (pinned) scrollToBottom();
   }
 
   sendBtn.addEventListener('click', send);

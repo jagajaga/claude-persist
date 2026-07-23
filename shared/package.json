@@ -1,0 +1,10 @@
+{
+  "name": "@claude-persist/shared",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/protocol.js",
+  "types": "dist/protocol.d.ts",
+  "scripts": {
+    "build": "tsc -p ."
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "claude-persist",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Persistent Claude Code sessions for VS Code / code-server: a server-side session daemon plus a chat webview extension that survives window reloads",
+  "workspaces": [
+    "shared",
+    "daemon",
+    "extension"
+  ],
+  "scripts": {
+    "build": "npm run build -w shared && npm run build -w daemon && npm run build -w extension",
+    "daemon": "node daemon/dist/main.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
+  }
+}

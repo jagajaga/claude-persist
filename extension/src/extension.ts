@@ -1,0 +1,164 @@
+import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
+import type { SessionInfo } from '@claude-persist/shared';
+import { DaemonClient } from './daemonClient';
+import { ChatPanelManager, VIEW_TYPE } from './chatPanel';
+
+let client: DaemonClient | null = null;
+let panels: ChatPanelManager;
+let statusItem: vscode.StatusBarItem;
+
+function resolveDaemonEntry(context: vscode.ExtensionContext): string {
+  const configured = vscode.workspace.getConfiguration('claudePersist').get<string>('daemonEntry');
+  if (configured) return configured;
+  // Monorepo dev layout: <repo>/extension and <repo>/daemon side by side.
+  const candidates = [
+    path.join(context.extensionPath, '..', 'daemon', 'dist', 'main.js'),
+    path.join(context.extensionPath, 'daemon', 'dist', 'main.js'), // bundled into the .vsix
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return candidates[0];
+}
+
+async function ensureClient(context: vscode.ExtensionContext): Promise<DaemonClient> {
+  if (client?.connected) return client;
+  const fresh = new DaemonClient(resolveDaemonEntry(context), {
+    onEvent: (sessionId, event) => panels.handleEvent(sessionId, event),
+    onDelta: (sessionId, text) => panels.handleDelta(sessionId, text),
+    onSessionsChanged: () => undefined,
+    onDisconnect: () => {
+      statusItem.text = '$(debug-disconnect) Claude Persist';
+      statusItem.tooltip = 'Daemon disconnected — will reconnect on next action';
+    },
+  });
+  await fresh.connect();
+  client = fresh;
+  statusItem.text = '$(sparkle) Claude Persist';
+  statusItem.tooltip = 'Connected to claude-persist daemon';
+  await panels.reattachAll();
+  return fresh;
+}
+
+async function pickCwd(): Promise<string | undefined> {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  if (folders.length === 1) return folders[0].uri.fsPath;
+  if (folders.length > 1) {
+    const picked = await vscode.window.showWorkspaceFolderPick();
+    return picked?.uri.fsPath;
+  }
+  const picked = await vscode.window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    title: 'Select working directory for the Claude session',
+  });
+  return picked?.[0]?.fsPath;
+}
+
+async function pickSession(c: DaemonClient): Promise<SessionInfo | undefined> {
+  const sessions = await c.listSessions();
+  if (sessions.length === 0) {
+    void vscode.window.showInformationMessage('No Claude Persist sessions yet — create one first.');
+    return undefined;
+  }
+  const picked = await vscode.window.showQuickPick(
+    sessions.map((s) => ({
+      label: s.title,
+      description: s.status === 'running' ? '$(sync~spin) running' : s.status,
+      detail: s.cwd,
+      session: s,
+    })),
+    { title: 'Open Claude session' },
+  );
+  return picked?.session;
+}
+
+export function activate(context: vscode.ExtensionContext): void {
+  panels = new ChatPanelManager(context, () => client);
+
+  statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  statusItem.text = '$(sparkle) Claude Persist';
+  statusItem.command = 'claudePersist.openSession';
+  statusItem.show();
+  context.subscriptions.push(statusItem);
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('claudePersist.newSession', async () => {
+      try {
+        const c = await ensureClient(context);
+        const cwd = await pickCwd();
+        if (!cwd) return;
+        const title = await vscode.window.showInputBox({
+          title: 'Session title',
+          value: path.basename(cwd),
+        });
+        const info = await c.createSession(cwd, title || undefined);
+        await panels.openSession(info);
+      } catch (err) {
+        void vscode.window.showErrorMessage(
+          `Claude Persist: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }),
+
+    vscode.commands.registerCommand('claudePersist.openSession', async () => {
+      try {
+        const c = await ensureClient(context);
+        const session = await pickSession(c);
+        if (session) await panels.openSession(session);
+      } catch (err) {
+        void vscode.window.showErrorMessage(
+          `Claude Persist: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }),
+
+    vscode.commands.registerCommand('claudePersist.deleteSession', async () => {
+      try {
+        const c = await ensureClient(context);
+        const session = await pickSession(c);
+        if (!session) return;
+        const confirmed = await vscode.window.showWarningMessage(
+          `Delete session "${session.title}" and its history?`,
+          { modal: true },
+          'Delete',
+        );
+        if (confirmed === 'Delete') await c.deleteSession(session.id);
+      } catch (err) {
+        void vscode.window.showErrorMessage(
+          `Claude Persist: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }),
+  );
+
+  // Restore chat tabs after a window reload (including browser refresh in
+  // code-server). The panel state carries the sessionId; the webview replays
+  // its transcript from the daemon on 'ready'.
+  vscode.window.registerWebviewPanelSerializer(VIEW_TYPE, {
+    deserializeWebviewPanel: async (panel, state: { sessionId?: string } | undefined) => {
+      const sessionId = state?.sessionId;
+      if (!sessionId) {
+        panel.dispose();
+        return;
+      }
+      panels.bindPanel(panel, sessionId);
+      try {
+        await ensureClient(context);
+      } catch {
+        // Daemon not reachable yet; panel will attach on next action.
+      }
+    },
+  });
+
+  // Connect eagerly so restored panels attach right after reload; don't spawn
+  // errors at the user on startup if the daemon isn't built yet.
+  void ensureClient(context).catch(() => undefined);
+}
+
+export function deactivate(): void {
+  client?.dispose();
+}

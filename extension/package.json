@@ -1,0 +1,54 @@
+{
+  "name": "claude-persist-vscode",
+  "displayName": "Claude Persist",
+  "description": "Persistent Claude Code sessions that survive window reloads — chat tabs backed by a server-side daemon (code-server friendly)",
+  "version": "0.1.0",
+  "publisher": "jaga",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "claudePersist.newSession",
+        "title": "Claude Persist: New Session"
+      },
+      {
+        "command": "claudePersist.openSession",
+        "title": "Claude Persist: Open Session"
+      },
+      {
+        "command": "claudePersist.deleteSession",
+        "title": "Claude Persist: Delete Session"
+      }
+    ],
+    "configuration": {
+      "title": "Claude Persist",
+      "properties": {
+        "claudePersist.daemonEntry": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the daemon entry point (daemon/dist/main.js). Leave empty to auto-detect the monorepo layout next to the extension."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p ."
+  },
+  "dependencies": {
+    "@claude-persist/shared": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0"
+  }
+}

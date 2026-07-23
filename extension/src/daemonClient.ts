@@ -6,6 +6,7 @@ import { spawn } from 'child_process';
 import type {
   Attachment,
   ClaudeSessionCandidate,
+  EffortLevel,
   PermissionMode,
   PersistedEvent,
   Request,
@@ -18,7 +19,7 @@ const socketPath = path.join(baseDir, 'daemon.sock');
 
 // Keep in sync with PROTOCOL_VERSION in shared/src/protocol.ts (the shared
 // package is ESM, so the constant can't be require()d from this CJS module).
-const EXPECTED_PROTOCOL = 6;
+const EXPECTED_PROTOCOL = 7;
 
 /** Omit that distributes over a union (plain Omit collapses union members). */
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
@@ -222,6 +223,13 @@ export class DaemonClient {
 
   setPermissionMode(sessionId: string, mode: PermissionMode): Promise<void> {
     return this.request({ op: 'setPermissionMode', sessionId, mode });
+  }
+
+  setSessionOptions(
+    sessionId: string,
+    opts: { model?: string | null; effort?: EffortLevel | null },
+  ): Promise<void> {
+    return this.request({ op: 'setSessionOptions', sessionId, ...opts });
   }
 
   renameSession(sessionId: string, title: string): Promise<SessionInfo> {

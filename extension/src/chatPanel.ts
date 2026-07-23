@@ -172,6 +172,17 @@ export class ChatPanelManager {
               msg.mode as 'default' | 'bypassPermissions',
             );
             break;
+          case 'setOptions':
+            await client.setSessionOptions(sessionId, {
+              ...(msg.model !== undefined
+                ? { model: (msg.model as string) || null }
+                : {}),
+              ...(msg.effort !== undefined
+                ? { effort: ((msg.effort as string) ||
+                    null) as import('@claude-persist/shared').EffortLevel | null }
+                : {}),
+            });
+            break;
         }
       } catch (err) {
         void vscode.window.showErrorMessage(
@@ -261,6 +272,20 @@ export class ChatPanelManager {
       <textarea id="input" rows="1" placeholder="Message Claude…"></textarea>
       <div id="composer-row">
         <button id="attach" class="icon-btn" title="Attach files">+</button>
+        <select id="model-select" class="select-pill" title="Model">
+          <option value="">model: default</option>
+          <option value="opus">opus</option>
+          <option value="sonnet">sonnet</option>
+          <option value="haiku">haiku</option>
+        </select>
+        <select id="effort-select" class="select-pill" title="Reasoning effort — how smart / how long it thinks">
+          <option value="">effort: default</option>
+          <option value="low">low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+          <option value="xhigh">xhigh</option>
+          <option value="max">max</option>
+        </select>
         <button id="context-ring" class="ring-btn" title="Context usage" hidden>
           <svg viewBox="0 0 20 20" width="18" height="18">
             <circle class="ring-bg" cx="10" cy="10" r="7.5" fill="none" stroke-width="2.5"/>

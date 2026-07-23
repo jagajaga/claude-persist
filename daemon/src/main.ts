@@ -74,6 +74,8 @@ function sessionInfo(id: string): SessionInfo {
     cwd: meta.cwd,
     status: live?.status ?? 'idle',
     permissionMode: meta.permissionMode ?? 'default',
+    ...(meta.model ? { model: meta.model } : {}),
+    ...(meta.effort ? { effort: meta.effort } : {}),
     createdAt: meta.createdAt,
     lastActivityAt: meta.lastActivityAt,
     eventCount: live?.eventCount ?? 0,
@@ -120,6 +122,11 @@ function handleRequest(client: Client, req: Request): unknown {
     }
     case 'setPermissionMode': {
       void getSession(req.sessionId).setPermissionMode(req.mode);
+      return null;
+    }
+    case 'setSessionOptions': {
+      void getSession(req.sessionId).setOptions({ model: req.model, effort: req.effort });
+      broadcastAll({ kind: 'sessions_changed' });
       return null;
     }
     case 'renameSession': {

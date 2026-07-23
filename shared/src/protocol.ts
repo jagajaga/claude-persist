@@ -6,12 +6,15 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 export type SessionStatus = 'idle' | 'running' | 'error';
 
 /** Mirrors the Agent SDK's PermissionMode (the UI exposes default/bypass). */
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
+
+/** Reasoning effort ("how smart"), mirrors the Agent SDK's EffortLevel. */
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface SessionInfo {
   id: string;
@@ -19,6 +22,10 @@ export interface SessionInfo {
   cwd: string;
   status: SessionStatus;
   permissionMode: PermissionMode;
+  /** Model alias/id override; undefined = account default. */
+  model?: string;
+  /** Reasoning effort override; undefined = default. */
+  effort?: EffortLevel;
   createdAt: number;
   lastActivityAt: number;
   eventCount: number;
@@ -76,6 +83,8 @@ export type Request =
   | { id: number; op: 'permission'; sessionId: string; requestId: string; allow: boolean; message?: string }
   | { id: number; op: 'setPermissionMode'; sessionId: string; mode: PermissionMode }
   | { id: number; op: 'renameSession'; sessionId: string; title: string }
+  /** undefined = leave unchanged; null = reset to default. */
+  | { id: number; op: 'setSessionOptions'; sessionId: string; model?: string | null; effort?: EffortLevel | null }
   | { id: number; op: 'listClaudeSessions' }
   | { id: number; op: 'importClaudeSession'; file: string }
   | { id: number; op: 'deleteSession'; sessionId: string };

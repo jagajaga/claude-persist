@@ -187,6 +187,32 @@ export class DaemonSession {
     }
   }
 
+  async setOptions(opts: {
+    model?: string | null;
+    effort?: NonNullable<SessionMeta['effort']> | null;
+  }): Promise<void> {
+    if (opts.model !== undefined) this.meta.model = opts.model ?? undefined;
+    if (opts.effort !== undefined) this.meta.effort = opts.effort ?? undefined;
+    this.callbacks.onMetaChanged();
+    // Apply live to a running query; launch options cover the next one.
+    try {
+      if (this.activeQuery) {
+        if (opts.model !== undefined) {
+          await this.activeQuery.setModel(opts.model ?? undefined);
+        }
+        if (opts.effort !== undefined) {
+          await this.activeQuery.applyFlagSettings({ effortLevel: opts.effort ?? null });
+        }
+      }
+    } catch (err) {
+      this.appendEvent({
+        type: 'status',
+        status: this.status,
+        detail: `Could not apply model/effort: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+  }
+
   resolvePermission(requestId: string, allow: boolean, message?: string): void {
     const resolve = this.pendingPermissions.get(requestId);
     if (!resolve) return;
@@ -213,6 +239,8 @@ export class DaemonSession {
         ...(this.meta.sdkSessionId ? { resume: this.meta.sdkSessionId } : {}),
         includePartialMessages: true,
         permissionMode: this.meta.permissionMode ?? 'default',
+        ...(this.meta.model ? { model: this.meta.model } : {}),
+        ...(this.meta.effort ? { effort: this.meta.effort } : {}),
         // Launch with the bypass *capability* so the mode can be toggled
         // mid-session; actual behavior is still governed by permissionMode.
         allowDangerouslySkipPermissions: true,

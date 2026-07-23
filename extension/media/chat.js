@@ -16,6 +16,8 @@
   const attachBtn = document.getElementById('attach');
   const chipsEl = document.getElementById('chips');
   const ringBtn = document.getElementById('context-ring');
+  const modelSelect = document.getElementById('model-select');
+  const effortSelect = document.getElementById('effort-select');
 
   const RING_CIRCUMFERENCE = 47.1;
   let contextWindow = 1000000; // default 1M; overwritten by the SDK's reported window
@@ -414,6 +416,8 @@
         if (msg.info) {
           setRunning(msg.info.status === 'running');
           applyPermissionMode(msg.info.permissionMode);
+          modelSelect.value = msg.info.model || '';
+          effortSelect.value = msg.info.effort || '';
         }
         pinned = true;
         scrollToBottom();
@@ -465,6 +469,10 @@
   ringBtn.addEventListener('click', () => {
     vscode.postMessage({ type: 'compact' });
   });
+  modelSelect.addEventListener('change', () =>
+    vscode.postMessage({ type: 'setOptions', model: modelSelect.value }));
+  effortSelect.addEventListener('change', () =>
+    vscode.postMessage({ type: 'setOptions', effort: effortSelect.value }));
   permToggle.addEventListener('click', () => {
     bypass = !bypass;
     permToggle.classList.toggle('active', bypass);

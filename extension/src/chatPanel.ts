@@ -247,10 +247,6 @@ export class ChatPanelManager {
 <body data-session-id="${sessionId}">
   <main id="messages"><div id="thread"></div></main>
   <footer id="composer">
-    <div id="status-line" hidden>
-      <span class="spinner"></span><span id="status-text">Working…</span>
-      <button id="stop" class="pill">Stop</button>
-    </div>
     <div id="input-box">
       <div id="chips" hidden></div>
       <textarea id="input" rows="1" placeholder="Message Claude…"></textarea>

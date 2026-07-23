@@ -12,9 +12,6 @@
   const threadEl = document.getElementById('thread');
   const inputEl = document.getElementById('input');
   const sendBtn = document.getElementById('send');
-  const stopBtn = document.getElementById('stop');
-  const statusLine = document.getElementById('status-line');
-  const statusText = document.getElementById('status-text');
   const permToggle = document.getElementById('perm-toggle');
   const attachBtn = document.getElementById('attach');
   const chipsEl = document.getElementById('chips');
@@ -98,15 +95,18 @@
 
   let workingRow = null;
   function setRunning(running, detail) {
-    statusLine.hidden = !running;
-    if (running) statusText.textContent = detail || 'Working…';
-    // Inline indicator in the conversation flow as well.
+    // Single inline indicator riding at the bottom of the conversation:
+    // spinner + label + Stop.
     if (running) {
       if (!workingRow) {
         workingRow = el('div', 'working-row');
         workingRow.appendChild(el('span', 'spinner'));
-        workingRow.appendChild(el('span', null, 'Working…'));
+        workingRow.appendChild(el('span', 'working-text', ''));
+        const stop = el('button', 'pill', 'Stop');
+        stop.addEventListener('click', () => vscode.postMessage({ type: 'interrupt' }));
+        workingRow.appendChild(stop);
       }
+      workingRow.querySelector('.working-text').textContent = detail || 'Working…';
       threadEl.appendChild(workingRow); // appending moves it to the end
     } else if (workingRow) {
       workingRow.remove();
@@ -443,7 +443,6 @@
   }
 
   sendBtn.addEventListener('click', send);
-  stopBtn.addEventListener('click', () => vscode.postMessage({ type: 'interrupt' }));
   attachBtn.addEventListener('click', () => vscode.postMessage({ type: 'pickAttachment' }));
   ringBtn.addEventListener('click', () => {
     vscode.postMessage({ type: 'compact' });

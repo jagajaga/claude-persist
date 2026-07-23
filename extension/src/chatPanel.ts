@@ -275,6 +275,7 @@ export class ChatPanelManager {
         <button id="attach" class="icon-btn" title="Attach files">+</button>
         <select id="model-select" class="select-pill" title="Model">
           <option value="">model: default</option>
+          <option value="fable">fable</option>
           <option value="opus">opus</option>
           <option value="sonnet">sonnet</option>
           <option value="haiku">haiku</option>

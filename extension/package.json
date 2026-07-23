@@ -45,10 +45,8 @@
   "scripts": {
     "build": "tsc -p ."
   },
-  "dependencies": {
-    "@claude-persist/shared": "0.1.0"
-  },
   "devDependencies": {
+    "@claude-persist/shared": "0.1.0",
     "@types/vscode": "^1.85.0"
   }
 }

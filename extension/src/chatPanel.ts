@@ -186,6 +186,15 @@ export class ChatPanelManager {
     });
   }
 
+  /** Update an open panel's tab title after a rename. */
+  setTitle(sessionId: string, title: string): void {
+    const entry = this.panels.get(sessionId);
+    if (!entry) return;
+    const running = entry.panel.title.startsWith('⏳');
+    entry.baseTitle = title;
+    entry.panel.title = (running ? '⏳ ' : '') + title;
+  }
+
   /** Re-attach every open panel — used after the daemon connection is (re)established. */
   async reattachAll(): Promise<void> {
     for (const entry of this.panels.values()) {

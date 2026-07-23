@@ -122,6 +122,13 @@ function handleRequest(client: Client, req: Request): unknown {
       void getSession(req.sessionId).setPermissionMode(req.mode);
       return null;
     }
+    case 'renameSession': {
+      const title = req.title.trim();
+      if (!title) throw new Error('Title cannot be empty');
+      registry.rename(req.sessionId, title);
+      broadcastAll({ kind: 'sessions_changed' });
+      return sessionInfo(req.sessionId);
+    }
     case 'listClaudeSessions':
       return listClaudeSessions();
     case 'importClaudeSession': {

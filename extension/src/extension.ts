@@ -142,6 +142,29 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
 
+    vscode.commands.registerCommand(
+      'claudePersist.renameSession',
+      async (item?: SessionInfo) => {
+        try {
+          const c = await ensureClient(context);
+          const session = item ?? (await pickSession(c));
+          if (!session) return;
+          const title = await vscode.window.showInputBox({
+            title: 'Rename session',
+            value: session.title,
+            validateInput: (v) => (v.trim() ? undefined : 'Title cannot be empty'),
+          });
+          if (!title?.trim()) return;
+          await c.renameSession(session.id, title.trim());
+          panels.setTitle(session.id, title.trim());
+        } catch (err) {
+          void vscode.window.showErrorMessage(
+            `Claude Persist: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+    ),
+
     vscode.commands.registerCommand('claudePersist.importSession', async () => {
       try {
         const c = await ensureClient(context);

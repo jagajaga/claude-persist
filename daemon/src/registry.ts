@@ -51,6 +51,14 @@ export class Registry {
     return meta;
   }
 
+  rename(id: string, title: string): void {
+    const meta = this.sessions.get(id);
+    if (meta) {
+      meta.title = title;
+      this.save();
+    }
+  }
+
   touch(id: string): void {
     const meta = this.sessions.get(id);
     if (meta) {

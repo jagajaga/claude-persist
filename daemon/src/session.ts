@@ -317,6 +317,12 @@ export class DaemonSession {
             num(usage.cache_creation_input_tokens) +
             num(usage.output_tokens)
           : undefined;
+        // This turn's own consumption: fresh (non-cache-read) input + output.
+        const turnTokens = usage
+          ? num(usage.input_tokens) +
+            num(usage.cache_creation_input_tokens) +
+            num(usage.output_tokens)
+          : undefined;
         let contextWindow: number | undefined;
         const modelUsage = msg.modelUsage as Record<string, { contextWindow?: unknown }> | undefined;
         for (const entry of Object.values(modelUsage ?? {})) {
@@ -331,6 +337,7 @@ export class DaemonSession {
           durationMs: typeof msg.duration_ms === 'number' ? msg.duration_ms : undefined,
           ...(contextTokens ? { contextTokens } : {}),
           ...(contextWindow ? { contextWindow } : {}),
+          ...(turnTokens ? { turnTokens } : {}),
         });
         this.setStatus('idle');
         break;

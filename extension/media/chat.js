@@ -370,11 +370,11 @@
         endStreaming();
         const bits = [];
         if (typeof event.durationMs === 'number') bits.push(`${(event.durationMs / 1000).toFixed(1)}s`);
-        if (typeof event.contextTokens === 'number') {
+        if (typeof event.turnTokens === 'number') {
           bits.push(
-            event.contextTokens >= 1000
-              ? `${(event.contextTokens / 1000).toFixed(1)}k tokens`
-              : `${event.contextTokens} tokens`,
+            event.turnTokens >= 1000
+              ? `${(event.turnTokens / 1000).toFixed(1)}k tokens`
+              : `${event.turnTokens} tokens`,
           );
         }
         threadEl.appendChild(el('div', 'meta', bits.length ? bits.join(' · ') : 'done'));

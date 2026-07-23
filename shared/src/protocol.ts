@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 export type SessionStatus = 'idle' | 'running' | 'error';
 
@@ -38,7 +38,17 @@ export type ChatEvent =
   | { type: 'permission_request'; requestId: string; toolName: string; input: unknown }
   | { type: 'permission_resolved'; requestId: string; allowed: boolean }
   | { type: 'status'; status: SessionStatus; detail?: string }
-  | { type: 'result'; summary: string; costUsd?: number; durationMs?: number; contextTokens?: number; contextWindow?: number };
+  | {
+      type: 'result';
+      summary: string;
+      costUsd?: number;
+      durationMs?: number;
+      /** Total context size after this turn (drives the context ring). */
+      contextTokens?: number;
+      contextWindow?: number;
+      /** Tokens consumed by this turn alone: fresh input + output. */
+      turnTokens?: number;
+    };
 
 export interface PersistedEvent {
   seq: number;
@@ -65,6 +75,7 @@ export type Request =
   | { id: number; op: 'interrupt'; sessionId: string }
   | { id: number; op: 'permission'; sessionId: string; requestId: string; allow: boolean; message?: string }
   | { id: number; op: 'setPermissionMode'; sessionId: string; mode: PermissionMode }
+  | { id: number; op: 'renameSession'; sessionId: string; title: string }
   | { id: number; op: 'listClaudeSessions' }
   | { id: number; op: 'importClaudeSession'; file: string }
   | { id: number; op: 'deleteSession'; sessionId: string };

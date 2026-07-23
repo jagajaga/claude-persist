@@ -1,6 +1,9 @@
 import net from 'node:net';
 import fs from 'node:fs';
+import os from 'node:os';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
+  ModelDescriptor,
   PersistedEvent,
   Request,
   ServerMessage,
@@ -39,7 +42,65 @@ function broadcastAll(message: ServerMessage): void {
   for (const client of clients) client.send(message);
 }
 
+// ---------- model list (learned from the SDK, never hardcoded) --------------
+
+let modelCache: ModelDescriptor[] | null = null;
+let modelProbe: Promise<ModelDescriptor[]> | null = null;
+
+function toDescriptors(models: unknown[]): ModelDescriptor[] {
+  const out: ModelDescriptor[] = [];
+  for (const raw of models) {
+    const m = raw as Record<string, unknown>;
+    if (typeof m.value !== 'string') continue;
+    out.push({
+      value: m.value,
+      displayName: typeof m.displayName === 'string' ? m.displayName : m.value,
+      ...(typeof m.description === 'string' ? { description: m.description } : {}),
+      ...(Array.isArray(m.supportedEffortLevels)
+        ? { effortLevels: m.supportedEffortLevels as ModelDescriptor['effortLevels'] }
+        : {}),
+    });
+  }
+  return out;
+}
+
+function cacheModels(models: unknown[]): void {
+  const descriptors = toDescriptors(models);
+  if (descriptors.length === 0) return;
+  const changed = JSON.stringify(descriptors) !== JSON.stringify(modelCache);
+  modelCache = descriptors;
+  if (changed) broadcastAll({ kind: 'models', models: descriptors });
+}
+
+/** No session has run yet: launch a throwaway query just for the init handshake. */
+function probeModels(): Promise<ModelDescriptor[]> {
+  if (modelCache) return Promise.resolve(modelCache);
+  if (modelProbe) return modelProbe;
+  modelProbe = (async () => {
+    const idleInput = (async function* () {
+      await new Promise(() => undefined); // never yields; closed via close()
+    })() as AsyncIterable<never>;
+    const q = query({ prompt: idleInput, options: { cwd: os.homedir() } });
+    try {
+      const init = await q.initializationResult();
+      if (Array.isArray(init.models)) cacheModels(init.models);
+    } finally {
+      try {
+        q.close();
+      } catch {
+        // already closed
+      }
+      modelProbe = null;
+    }
+    return modelCache ?? [];
+  })();
+  return modelProbe;
+}
+
 const callbacks = {
+  onModels(models: unknown[]): void {
+    cacheModels(models);
+  },
   onEvent(sessionId: string, event: PersistedEvent): void {
     broadcast(sessionId, { kind: 'event', sessionId, event });
     // Status flips (idle/running/error) should update every client's session
@@ -82,7 +143,7 @@ function sessionInfo(id: string): SessionInfo {
   };
 }
 
-function handleRequest(client: Client, req: Request): unknown {
+function handleRequest(client: Client, req: Request): unknown | Promise<unknown> {
   switch (req.op) {
     case 'hello':
       return { protocolVersion: PROTOCOL_VERSION, pid: process.pid };
@@ -136,6 +197,8 @@ function handleRequest(client: Client, req: Request): unknown {
       broadcastAll({ kind: 'sessions_changed' });
       return sessionInfo(req.sessionId);
     }
+    case 'listModels':
+      return modelCache ?? probeModels();
     case 'listClaudeSessions':
       return listClaudeSessions();
     case 'importClaudeSession': {
@@ -188,8 +251,16 @@ function onConnection(socket: net.Socket): void {
         continue;
       }
       try {
-        const result = handleRequest(client, req);
-        client.send({ kind: 'response', id: req.id, ok: true, result });
+        Promise.resolve(handleRequest(client, req)).then(
+          (result) => client.send({ kind: 'response', id: req.id, ok: true, result }),
+          (err) =>
+            client.send({
+              kind: 'response',
+              id: req.id,
+              ok: false,
+              error: err instanceof Error ? err.message : String(err),
+            }),
+        );
       } catch (err) {
         client.send({
           kind: 'response',

@@ -31,6 +31,7 @@ async function ensureClient(context: vscode.ExtensionContext): Promise<DaemonCli
     onEvent: (sessionId, event) => panels.handleEvent(sessionId, event),
     onDelta: (sessionId, text) => panels.handleDelta(sessionId, text),
     onSessionsChanged: () => sessionsProvider.refresh(),
+    onModels: (models) => panels.handleModels(models),
     onDisconnect: () => {
       statusItem.text = '$(debug-disconnect) Claude Persist';
       statusItem.tooltip = 'Daemon disconnected — will reconnect on next action';

@@ -7,6 +7,7 @@ import type {
   Attachment,
   ClaudeSessionCandidate,
   EffortLevel,
+  ModelDescriptor,
   PermissionMode,
   PersistedEvent,
   Request,
@@ -19,7 +20,7 @@ const socketPath = path.join(baseDir, 'daemon.sock');
 
 // Keep in sync with PROTOCOL_VERSION in shared/src/protocol.ts (the shared
 // package is ESM, so the constant can't be require()d from this CJS module).
-const EXPECTED_PROTOCOL = 7;
+const EXPECTED_PROTOCOL = 8;
 
 /** Omit that distributes over a union (plain Omit collapses union members). */
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
@@ -33,6 +34,7 @@ type PushHandler = {
   onEvent(sessionId: string, event: PersistedEvent): void;
   onDelta(sessionId: string, text: string): void;
   onSessionsChanged(): void;
+  onModels(models: ModelDescriptor[]): void;
   onDisconnect(): void;
 };
 
@@ -173,6 +175,9 @@ export class DaemonClient {
       case 'sessions_changed':
         this.handler.onSessionsChanged();
         break;
+      case 'models':
+        this.handler.onModels(message.models);
+        break;
     }
   }
 
@@ -234,6 +239,10 @@ export class DaemonClient {
 
   renameSession(sessionId: string, title: string): Promise<SessionInfo> {
     return this.request({ op: 'renameSession', sessionId, title });
+  }
+
+  listModels(): Promise<ModelDescriptor[]> {
+    return this.request({ op: 'listModels' });
   }
 
   listClaudeSessions(): Promise<ClaudeSessionCandidate[]> {

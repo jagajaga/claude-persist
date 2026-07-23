@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 
 export type SessionStatus = 'idle' | 'running' | 'error';
 
@@ -63,6 +63,14 @@ export interface PersistedEvent {
   event: ChatEvent;
 }
 
+/** A model available to this account, reported by the SDK at init. */
+export interface ModelDescriptor {
+  value: string;
+  displayName: string;
+  description?: string;
+  effortLevels?: EffortLevel[];
+}
+
 /** An existing Claude Code (CLI / official extension) session on this machine. */
 export interface ClaudeSessionCandidate {
   file: string;
@@ -85,12 +93,15 @@ export type Request =
   | { id: number; op: 'renameSession'; sessionId: string; title: string }
   /** undefined = leave unchanged; null = reset to default. */
   | { id: number; op: 'setSessionOptions'; sessionId: string; model?: string | null; effort?: EffortLevel | null }
+  | { id: number; op: 'listModels' }
   | { id: number; op: 'listClaudeSessions' }
   | { id: number; op: 'importClaudeSession'; file: string }
   | { id: number; op: 'deleteSession'; sessionId: string };
 
 export type Push =
   | { kind: 'event'; sessionId: string; event: PersistedEvent }
+  /** Broadcast when the daemon (re)learns the account's model list. */
+  | { kind: 'models'; models: ModelDescriptor[] }
   /** Live-only streaming text; not persisted, superseded by the next assistant_text event. */
   | { kind: 'delta'; sessionId: string; text: string }
   | { kind: 'sessions_changed' };

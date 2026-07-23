@@ -417,6 +417,115 @@
     permToggle.classList.toggle('active', bypass);
   }
 
+  // ---------- dynamic model / effort options (from the SDK, never hardcoded) --
+
+  const ALL_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+  let modelInfos = [];
+
+  function setOptionList(select, defaultLabel, entries, current) {
+    select.replaceChildren();
+    const def = document.createElement('option');
+    def.value = '';
+    def.textContent = defaultLabel;
+    select.appendChild(def);
+    for (const entry of entries) {
+      const opt = document.createElement('option');
+      opt.value = entry.value;
+      opt.textContent = entry.label;
+      if (entry.title) opt.title = entry.title;
+      select.appendChild(opt);
+    }
+    // Keep a persisted value visible even if it's not in the reported list.
+    if (current && ![...select.options].some((o) => o.value === current)) {
+      const opt = document.createElement('option');
+      opt.value = current;
+      opt.textContent = current;
+      select.appendChild(opt);
+    }
+    select.value = current || '';
+  }
+
+  function rebuildModelOptions(current) {
+    setOptionList(
+      modelSelect,
+      'model: default',
+      modelInfos.map((m) => ({
+        value: m.value,
+        label: m.displayName || m.value,
+        title: m.description,
+      })),
+      current !== undefined ? current : modelSelect.value,
+    );
+  }
+
+  function rebuildEffortOptions(current) {
+    const selected = modelInfos.find((m) => m.value === modelSelect.value);
+    const levels =
+      selected && Array.isArray(selected.effortLevels) && selected.effortLevels.length
+        ? selected.effortLevels
+        : ALL_EFFORTS;
+    setOptionList(
+      effortSelect,
+      'effort: default',
+      levels.map((l) => ({ value: l, label: l })),
+      current !== undefined ? current : effortSelect.value,
+    );
+  }
+
+  // ---------- dynamic model / effort options --------------------------------
+
+  const ALL_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+  let modelInfos = [];
+
+  function setOptions(select, entries, current, defaultLabel) {
+    select.replaceChildren();
+    const def = document.createElement('option');
+    def.value = '';
+    def.textContent = defaultLabel;
+    select.appendChild(def);
+    for (const entry of entries) {
+      const opt = document.createElement('option');
+      opt.value = entry.value;
+      opt.textContent = entry.label;
+      if (entry.title) opt.title = entry.title;
+      select.appendChild(opt);
+    }
+    if (current && !entries.some((e) => e.value === current)) {
+      const extra = document.createElement('option');
+      extra.value = current;
+      extra.textContent = current;
+      select.appendChild(extra);
+    }
+    select.value = current || '';
+  }
+
+  function rebuildModelOptions(current) {
+    setOptions(
+      modelSelect,
+      modelInfos.map((m) => ({
+        value: m.value,
+        label: m.displayName || m.value,
+        title: m.description,
+      })),
+      current !== undefined ? current : modelSelect.value,
+      'model: default',
+    );
+  }
+
+  function rebuildEffortOptions(current) {
+    const info = modelInfos.find((m) => m.value === modelSelect.value);
+    const levels =
+      info && Array.isArray(info.effortLevels) && info.effortLevels.length
+        ? info.effortLevels
+        : ALL_EFFORTS;
+    setOptions(
+      effortSelect,
+      levels.map((l) => ({ value: l, label: l })),
+      current !== undefined ? current : effortSelect.value,
+      'effort: default',
+    );
+  }
+
   function renderChips(items) {
     chipsEl.replaceChildren();
     chipsEl.hidden = items.length === 0;
@@ -439,8 +548,8 @@
         if (msg.info) {
           setRunning(msg.info.status === 'running');
           applyPermissionMode(msg.info.permissionMode);
-          modelSelect.value = msg.info.model || '';
-          effortSelect.value = msg.info.effort || '';
+          rebuildModelOptions(msg.info.model || '');
+          rebuildEffortOptions(msg.info.effort || '');
         }
         pinned = true;
         scrollToBottom();
@@ -462,6 +571,11 @@
       }
       case 'attachments':
         renderChips(msg.items ?? []);
+        break;
+      case 'models':
+        modelInfos = msg.models ?? [];
+        rebuildModelOptions();
+        rebuildEffortOptions();
         break;
     }
   });
@@ -492,8 +606,11 @@
   ringBtn.addEventListener('click', () => {
     vscode.postMessage({ type: 'compact' });
   });
-  modelSelect.addEventListener('change', () =>
-    vscode.postMessage({ type: 'setOptions', model: modelSelect.value }));
+  modelSelect.addEventListener('change', () => {
+    vscode.postMessage({ type: 'setOptions', model: modelSelect.value });
+    // Effort choices depend on the selected model.
+    rebuildEffortOptions();
+  });
   effortSelect.addEventListener('change', () =>
     vscode.postMessage({ type: 'setOptions', effort: effortSelect.value }));
   permToggle.addEventListener('click', () => {

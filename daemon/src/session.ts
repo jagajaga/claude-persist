@@ -52,6 +52,8 @@ export interface SessionCallbacks {
   onEvent(sessionId: string, event: PersistedEvent): void;
   onDelta(sessionId: string, text: string): void;
   onMetaChanged(): void;
+  /** Raw ModelInfo[] from the SDK init handshake. */
+  onModels(models: unknown[]): void;
 }
 
 /** Truncate long tool payloads before persisting/rendering. */
@@ -248,6 +250,12 @@ export class DaemonSession {
       },
     });
     this.activeQuery = q;
+    void q
+      .initializationResult()
+      .then((init) => {
+        if (Array.isArray(init.models)) this.callbacks.onModels(init.models);
+      })
+      .catch(() => undefined);
     void this.consume(q);
   }
 

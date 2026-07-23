@@ -1,7 +1,12 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { Attachment, PersistedEvent, SessionInfo } from '@claude-persist/shared';
+import type {
+  Attachment,
+  ModelDescriptor,
+  PersistedEvent,
+  SessionInfo,
+} from '@claude-persist/shared';
 import type { DaemonClient } from './daemonClient';
 
 export const VIEW_TYPE = 'claudePersist.chat';
@@ -55,6 +60,12 @@ export class ChatPanelManager {
   handleDelta(sessionId: string, text: string): void {
     const entry = this.panels.get(sessionId);
     if (entry) this.post(entry, { type: 'delta', text });
+  }
+
+  handleModels(models: ModelDescriptor[]): void {
+    for (const entry of this.panels.values()) {
+      this.post(entry, { type: 'models', models });
+    }
   }
 
   async openSession(info: SessionInfo): Promise<void> {
@@ -240,6 +251,11 @@ export class ChatPanelManager {
       events: result.events,
       fromSeq: entry.lastSeq,
     });
+    // Model list is account-wide; fetch lazily and push to this panel.
+    void client
+      .listModels()
+      .then((models) => this.post(entry, { type: 'models', models }))
+      .catch(() => undefined);
   }
 
   private post(entry: PanelEntry, message: unknown): void {
@@ -275,18 +291,9 @@ export class ChatPanelManager {
         <button id="attach" class="icon-btn" title="Attach files">+</button>
         <select id="model-select" class="select-pill" title="Model">
           <option value="">model: default</option>
-          <option value="fable">fable</option>
-          <option value="opus">opus</option>
-          <option value="sonnet">sonnet</option>
-          <option value="haiku">haiku</option>
         </select>
         <select id="effort-select" class="select-pill" title="Reasoning effort — how smart / how long it thinks">
           <option value="">effort: default</option>
-          <option value="low">low</option>
-          <option value="medium">medium</option>
-          <option value="high">high</option>
-          <option value="xhigh">xhigh</option>
-          <option value="max">max</option>
         </select>
         <button id="context-ring" class="ring-btn" title="Context usage" hidden>
           <svg viewBox="0 0 20 20" width="18" height="18">

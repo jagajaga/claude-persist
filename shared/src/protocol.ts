@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 
 export type SessionStatus = 'idle' | 'running' | 'error';
 
@@ -43,7 +43,18 @@ export type ChatEvent =
   | { type: 'tool_use'; toolUseId?: string; toolName: string; input: unknown }
   | { type: 'tool_result'; toolUseId?: string; summary: string; isError: boolean }
   | { type: 'permission_request'; requestId: string; toolName: string; input: unknown }
-  | { type: 'permission_resolved'; requestId: string; allowed: boolean }
+  /** Claude asked the user a question (AskUserQuestion tool). */
+  | {
+      type: 'question_request';
+      requestId: string;
+      questions: Array<{
+        question: string;
+        header: string;
+        multiSelect?: boolean;
+        options: Array<{ label: string; description?: string }>;
+      }>;
+    }
+  | { type: 'permission_resolved'; requestId: string; allowed: boolean; answers?: Record<string, string> }
   | { type: 'status'; status: SessionStatus; detail?: string }
   | {
       type: 'result';
@@ -88,7 +99,7 @@ export type Request =
   | { id: number; op: 'detach'; sessionId: string }
   | { id: number; op: 'sendMessage'; sessionId: string; text: string; attachments?: Attachment[] }
   | { id: number; op: 'interrupt'; sessionId: string }
-  | { id: number; op: 'permission'; sessionId: string; requestId: string; allow: boolean; message?: string }
+  | { id: number; op: 'permission'; sessionId: string; requestId: string; allow: boolean; message?: string; answers?: Record<string, string> }
   | { id: number; op: 'setPermissionMode'; sessionId: string; mode: PermissionMode }
   | { id: number; op: 'renameSession'; sessionId: string; title: string }
   /** undefined = leave unchanged; null = reset to default. */

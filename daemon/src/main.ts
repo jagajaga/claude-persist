@@ -178,7 +178,7 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
       return null;
     }
     case 'permission': {
-      getSession(req.sessionId).resolvePermission(req.requestId, req.allow, req.message);
+      getSession(req.sessionId).resolvePermission(req.requestId, req.allow, req.message, req.answers);
       return null;
     }
     case 'setPermissionMode': {

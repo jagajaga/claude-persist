@@ -20,7 +20,7 @@ const socketPath = path.join(baseDir, 'daemon.sock');
 
 // Keep in sync with PROTOCOL_VERSION in shared/src/protocol.ts (the shared
 // package is ESM, so the constant can't be require()d from this CJS module).
-const EXPECTED_PROTOCOL = 8;
+const EXPECTED_PROTOCOL = 9;
 
 /** Omit that distributes over a union (plain Omit collapses union members). */
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
@@ -222,8 +222,14 @@ export class DaemonClient {
     return this.request({ op: 'interrupt', sessionId });
   }
 
-  permission(sessionId: string, requestId: string, allow: boolean, message?: string): Promise<void> {
-    return this.request({ op: 'permission', sessionId, requestId, allow, message });
+  permission(
+    sessionId: string,
+    requestId: string,
+    allow: boolean,
+    message?: string,
+    answers?: Record<string, string>,
+  ): Promise<void> {
+    return this.request({ op: 'permission', sessionId, requestId, allow, message, answers });
   }
 
   setPermissionMode(sessionId: string, mode: PermissionMode): Promise<void> {

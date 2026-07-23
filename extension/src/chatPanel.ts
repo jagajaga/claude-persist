@@ -179,6 +179,9 @@ export class ChatPanelManager {
               String(msg.requestId),
               msg.allow === true,
               typeof msg.message === 'string' ? msg.message : undefined,
+              msg.answers && typeof msg.answers === 'object'
+                ? (msg.answers as Record<string, string>)
+                : undefined,
             );
             break;
           case 'setPermissionMode':

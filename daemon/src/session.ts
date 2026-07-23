@@ -76,7 +76,13 @@ export class DaemonSession {
   private events: PersistedEvent[] = [];
   private input: InputQueue<unknown> | null = null;
   private activeQuery: ReturnType<typeof query> | null = null;
-  private pendingPermissions = new Map<string, (allow: boolean, message?: string) => void>();
+  private pendingPermissions = new Map<
+    string,
+    {
+      isQuestion: boolean;
+      settle: (allow: boolean, message?: string, answers?: Record<string, string>) => void;
+    }
+  >();
   private callbacks: SessionCallbacks;
   private logStream: fs.WriteStream | null = null;
 
@@ -172,8 +178,9 @@ export class DaemonSession {
     // Bypass mode stops future canUseTool prompts; unblock any prompt that is
     // already waiting, otherwise the turn stays parked on a stale question.
     if (mode === 'bypassPermissions') {
-      for (const requestId of [...this.pendingPermissions.keys()]) {
-        this.resolvePermission(requestId, true);
+      for (const [requestId, pending] of [...this.pendingPermissions.entries()]) {
+        // Never auto-answer actual questions — only tool permissions.
+        if (!pending.isQuestion) this.resolvePermission(requestId, true);
       }
     }
     try {
@@ -215,12 +222,22 @@ export class DaemonSession {
     }
   }
 
-  resolvePermission(requestId: string, allow: boolean, message?: string): void {
-    const resolve = this.pendingPermissions.get(requestId);
-    if (!resolve) return;
+  resolvePermission(
+    requestId: string,
+    allow: boolean,
+    message?: string,
+    answers?: Record<string, string>,
+  ): void {
+    const pending = this.pendingPermissions.get(requestId);
+    if (!pending) return;
     this.pendingPermissions.delete(requestId);
-    this.appendEvent({ type: 'permission_resolved', requestId, allowed: allow });
-    resolve(allow, message);
+    this.appendEvent({
+      type: 'permission_resolved',
+      requestId,
+      allowed: allow,
+      ...(answers ? { answers } : {}),
+    });
+    pending.settle(allow, message, answers);
   }
 
   dispose(): void {
@@ -264,11 +281,37 @@ export class DaemonSession {
     input: Record<string, unknown>,
   ): Promise<{ behavior: 'allow'; updatedInput: Record<string, unknown> } | { behavior: 'deny'; message: string }> => {
     const requestId = randomUUID();
+
+    // AskUserQuestion: render as a real question card; the answer flows back
+    // through updatedInput.answers per the tool's contract.
+    if (toolName === 'AskUserQuestion' && Array.isArray(input?.questions)) {
+      this.appendEvent({
+        type: 'question_request',
+        requestId,
+        questions: input.questions as never,
+      });
+      return new Promise((resolve) => {
+        this.pendingPermissions.set(requestId, {
+          isQuestion: true,
+          settle: (allow, message, answers) => {
+            if (allow && answers) {
+              resolve({ behavior: 'allow', updatedInput: { ...input, answers } });
+            } else {
+              resolve({ behavior: 'deny', message: message ?? 'User dismissed the question.' });
+            }
+          },
+        });
+      });
+    }
+
     this.appendEvent({ type: 'permission_request', requestId, toolName, input });
     return new Promise((resolve) => {
-      this.pendingPermissions.set(requestId, (allow, message) => {
-        if (allow) resolve({ behavior: 'allow', updatedInput: input });
-        else resolve({ behavior: 'deny', message: message ?? 'User denied this tool use.' });
+      this.pendingPermissions.set(requestId, {
+        isQuestion: false,
+        settle: (allow, message) => {
+          if (allow) resolve({ behavior: 'allow', updatedInput: input });
+          else resolve({ behavior: 'deny', message: message ?? 'User denied this tool use.' });
+        },
       });
     });
   };

@@ -311,6 +311,101 @@
     threadEl.appendChild(card);
   }
 
+  // ---------- question cards (AskUserQuestion) ---------------------------------
+
+  function renderQuestionCard(event) {
+    const card = el('div', 'permission question');
+    card.dataset.requestId = event.requestId;
+    const answers = {}; // question -> label(s)
+    const picked = {}; // question -> Set for multiSelect
+
+    const submit = el('button', null, 'Answer');
+    submit.disabled = true;
+
+    const refresh = () => {
+      submit.disabled = event.questions.some((q) => {
+        const value = q.multiSelect ? (picked[q.question] || new Set()).size === 0 : !answers[q.question];
+        return value;
+      });
+      // Single question, single select: answer immediately on click.
+      if (!submit.disabled && event.questions.length === 1 && !event.questions[0].multiSelect) {
+        send();
+      }
+    };
+
+    const send = () => {
+      for (const q of event.questions) {
+        if (q.multiSelect) answers[q.question] = [...(picked[q.question] || [])].join(', ');
+      }
+      vscode.postMessage({ type: 'permission', requestId: event.requestId, allow: true, answers });
+      submit.disabled = true;
+    };
+
+    for (const q of event.questions) {
+      const block = el('div', 'q-block');
+      const head = el('div', 'q-head');
+      head.appendChild(el('span', 'q-chip', q.header || 'Question'));
+      block.appendChild(head);
+      block.appendChild(el('div', 'q-text', q.question));
+      const opts = el('div', 'q-options');
+      for (const option of q.options || []) {
+        const btn = el('button', 'opt-btn', option.label);
+        if (option.description) btn.title = option.description;
+        btn.addEventListener('click', () => {
+          if (q.multiSelect) {
+            const set = (picked[q.question] ||= new Set());
+            if (set.has(option.label)) {
+              set.delete(option.label);
+              btn.classList.remove('selected');
+            } else {
+              set.add(option.label);
+              btn.classList.add('selected');
+            }
+          } else {
+            answers[q.question] = option.label;
+            for (const other of opts.querySelectorAll('.opt-btn')) other.classList.remove('selected');
+            btn.classList.add('selected');
+          }
+          refresh();
+        });
+        opts.appendChild(btn);
+      }
+      // Free-text "Other" answer, provided automatically per the tool contract.
+      const otherBtn = el('button', 'opt-btn other', 'Other…');
+      const otherInput = el('input', 'other-input');
+      otherInput.placeholder = 'Type your own answer, Enter to set';
+      otherInput.hidden = true;
+      otherBtn.addEventListener('click', () => {
+        otherInput.hidden = false;
+        otherInput.focus();
+      });
+      otherInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && otherInput.value.trim()) {
+          const text = otherInput.value.trim();
+          if (q.multiSelect) (picked[q.question] ||= new Set()).add(text);
+          else answers[q.question] = text;
+          for (const other of opts.querySelectorAll('.opt-btn')) other.classList.remove('selected');
+          otherBtn.classList.add('selected');
+          otherBtn.textContent = text;
+          refresh();
+        }
+      });
+      opts.appendChild(otherBtn);
+      block.appendChild(opts);
+      block.appendChild(otherInput);
+      card.appendChild(block);
+    }
+
+    const actions = el('div', 'perm-actions');
+    if (!(event.questions.length === 1 && !event.questions[0].multiSelect)) {
+      actions.appendChild(submit);
+    }
+    submit.addEventListener('click', send);
+    card.appendChild(actions);
+    card.appendChild(el('div', 'perm-note', 'Claude is waiting for your answer — survives reloads.'));
+    threadEl.appendChild(card);
+  }
+
   // ---------- events ------------------------------------------------------------
 
   function renderEvent(event) {
@@ -377,12 +472,21 @@
         threadEl.appendChild(card);
         break;
       }
+      case 'question_request': {
+        endStreaming();
+        renderQuestionCard(event);
+        break;
+      }
       case 'permission_resolved': {
         const card = threadEl.querySelector(`.permission[data-request-id="${event.requestId}"]`);
         if (card) {
           card.classList.add('resolved');
           const note = card.querySelector('.perm-note');
-          if (note) note.textContent = event.allowed ? 'Allowed' : 'Denied';
+          if (note) {
+            note.textContent = event.answers
+              ? Object.entries(event.answers).map(([, v]) => v).join(' · ')
+              : event.allowed ? 'Allowed' : 'Denied';
+          }
         }
         break;
       }

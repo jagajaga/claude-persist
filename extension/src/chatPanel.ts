@@ -1,8 +1,19 @@
 import * as vscode from 'vscode';
-import type { PersistedEvent, SessionInfo } from '@claude-persist/shared';
+import * as fs from 'fs';
+import * as path from 'path';
+import type { Attachment, PersistedEvent, SessionInfo } from '@claude-persist/shared';
 import type { DaemonClient } from './daemonClient';
 
 export const VIEW_TYPE = 'claudePersist.chat';
+
+const IMAGE_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 interface PanelEntry {
   panel: vscode.WebviewPanel;
@@ -10,6 +21,8 @@ interface PanelEntry {
   lastSeq: number;
   ready: boolean;
   queue: unknown[];
+  cwd?: string;
+  pendingAttachments: Attachment[];
 }
 
 /**
@@ -55,7 +68,14 @@ export class ChatPanelManager {
   /** Called both for fresh panels and for panels restored by the serializer. */
   bindPanel(panel: vscode.WebviewPanel, sessionId: string, title?: string): void {
     if (title) panel.title = title;
-    const entry: PanelEntry = { panel, sessionId, lastSeq: 0, ready: false, queue: [] };
+    const entry: PanelEntry = {
+      panel,
+      sessionId,
+      lastSeq: 0,
+      ready: false,
+      queue: [],
+      pendingAttachments: [],
+    };
     this.panels.set(sessionId, entry);
     panel.webview.html = this.html(panel.webview, sessionId);
 
@@ -70,10 +90,65 @@ export class ChatPanelManager {
             await this.attach(entry);
             break;
           case 'send':
-            await client.sendMessage(sessionId, String(msg.text ?? ''));
+            await client.sendMessage(sessionId, String(msg.text ?? ''), entry.pendingAttachments);
+            entry.pendingAttachments = [];
+            this.post(entry, { type: 'attachments', items: [] });
             break;
+          case 'pickAttachment': {
+            const uris = await vscode.window.showOpenDialog({
+              canSelectMany: true,
+              openLabel: 'Attach',
+              defaultUri: entry.cwd ? vscode.Uri.file(entry.cwd) : undefined,
+            });
+            for (const uri of uris ?? []) {
+              const ext = path.extname(uri.fsPath).toLowerCase();
+              const mediaType = IMAGE_TYPES[ext];
+              if (mediaType) {
+                const bytes = fs.readFileSync(uri.fsPath);
+                if (bytes.byteLength > MAX_IMAGE_BYTES) {
+                  void vscode.window.showWarningMessage(
+                    `${path.basename(uri.fsPath)} is over 5 MB — attached as a path instead.`,
+                  );
+                  entry.pendingAttachments.push({ kind: 'file', path: uri.fsPath });
+                } else {
+                  entry.pendingAttachments.push({
+                    kind: 'image',
+                    name: path.basename(uri.fsPath),
+                    mediaType,
+                    data: bytes.toString('base64'),
+                  });
+                }
+              } else {
+                entry.pendingAttachments.push({ kind: 'file', path: uri.fsPath });
+              }
+            }
+            this.postChips(entry);
+            break;
+          }
+          case 'removeAttachment': {
+            const index = Number(msg.index);
+            if (Number.isInteger(index)) entry.pendingAttachments.splice(index, 1);
+            this.postChips(entry);
+            break;
+          }
+          case 'openFile': {
+            const raw = String(msg.path ?? '');
+            if (!raw) break;
+            const abs = path.isAbsolute(raw)
+              ? raw
+              : path.join(entry.cwd ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '', raw);
+            try {
+              await vscode.window.showTextDocument(vscode.Uri.file(abs), { preview: true });
+            } catch {
+              void vscode.window.showWarningMessage(`Claude Persist: cannot open ${abs}`);
+            }
+            break;
+          }
           case 'interrupt':
             await client.interrupt(sessionId);
+            break;
+          case 'compact':
+            await client.sendMessage(sessionId, '/compact');
             break;
           case 'permission':
             await client.permission(
@@ -110,11 +185,22 @@ export class ChatPanelManager {
     }
   }
 
+  private postChips(entry: PanelEntry): void {
+    this.post(entry, {
+      type: 'attachments',
+      items: entry.pendingAttachments.map((a) => ({
+        kind: a.kind,
+        label: a.kind === 'image' ? a.name : path.basename(a.path),
+      })),
+    });
+  }
+
   private async attach(entry: PanelEntry): Promise<void> {
     const client = this.client();
     if (!client) return;
     const result = await client.attach(entry.sessionId, entry.lastSeq);
     entry.panel.title = result.info.title;
+    entry.cwd = result.info.cwd;
     if (result.events.length > 0) {
       entry.lastSeq = result.events[result.events.length - 1].seq + 1;
     }
@@ -134,6 +220,8 @@ export class ChatPanelManager {
   private html(webview: vscode.Webview, sessionId: string): string {
     const mediaRoot = vscode.Uri.joinPath(this.context.extensionUri, 'media');
     const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'chat.js'));
+    const markedUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'vendor', 'marked.js'));
+    const purifyUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'vendor', 'purify.min.js'));
     const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'chat.css'));
     const nonce = Math.random().toString(36).slice(2);
     return `<!DOCTYPE html>
@@ -154,9 +242,18 @@ export class ChatPanelManager {
       <button id="stop" class="pill">Stop</button>
     </div>
     <div id="input-box">
+      <div id="chips" hidden></div>
       <textarea id="input" rows="1" placeholder="Message Claude…"></textarea>
       <div id="composer-row">
-        <button id="attach" class="icon-btn" title="Attachments — coming soon" disabled>+</button>
+        <button id="attach" class="icon-btn" title="Attach files">+</button>
+        <button id="context-ring" class="ring-btn" title="Context usage" hidden>
+          <svg viewBox="0 0 20 20" width="18" height="18">
+            <circle class="ring-bg" cx="10" cy="10" r="7.5" fill="none" stroke-width="2.5"/>
+            <circle class="ring-fg" cx="10" cy="10" r="7.5" fill="none" stroke-width="2.5"
+                    stroke-dasharray="47.1" stroke-dashoffset="47.1"
+                    transform="rotate(-90 10 10)"/>
+          </svg>
+        </button>
         <span class="flex-spacer"></span>
         <button id="perm-toggle" class="pill" title="Toggle bypass permissions">
           <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 1 2.5 3v4.1c0 3.3 2.3 6.4 5.5 7.4 3.2-1 5.5-4.1 5.5-7.4V3L8 1zm0 1.6 4 1.5v3c0 2.6-1.7 5-4 5.9-2.3-.9-4-3.3-4-5.9v-3l4-1.5z"/></svg>
@@ -168,6 +265,8 @@ export class ChatPanelManager {
       </div>
     </div>
   </footer>
+  <script nonce="${nonce}" src="${markedUri}"></script>
+  <script nonce="${nonce}" src="${purifyUri}"></script>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;

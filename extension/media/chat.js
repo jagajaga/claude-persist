@@ -1,7 +1,8 @@
 // Webview client for a single Claude Persist session, styled after the
-// official Claude Code extension: document-flow markdown, collapsible tool
-// cards with IN/OUT sections, todo checklists, permission cards, and a
-// composer with a bypass-permissions toggle.
+// official Claude Code extension. Markdown via marked + DOMPurify (vendored),
+// collapsible tool cards with IN/OUT, inline diffs for Edit/Write, clickable
+// file paths, todo checklists, attachments, permission cards, and a context
+// ring that compacts the conversation on click.
 (function () {
   const vscode = acquireVsCodeApi();
   const sessionId = document.body.dataset.sessionId;
@@ -15,10 +16,16 @@
   const statusLine = document.getElementById('status-line');
   const statusText = document.getElementById('status-text');
   const permToggle = document.getElementById('perm-toggle');
+  const attachBtn = document.getElementById('attach');
+  const chipsEl = document.getElementById('chips');
+  const ringBtn = document.getElementById('context-ring');
+
+  const CONTEXT_WINDOW = 200000;
+  const RING_CIRCUMFERENCE = 47.1;
 
   let streamingEl = null;
   let bypass = false;
-  const toolCards = new Map(); // toolUseId -> { card, body, dot }
+  const toolCards = new Map(); // toolUseId -> { body, dot }
 
   // ---------- helpers -------------------------------------------------------
 
@@ -43,76 +50,44 @@
     return text;
   }
 
-  function escapeHtml(s) {
-    return s.replace(/[&<>"']/g, (c) => (
-      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-    ));
+  function fileLink(pathText, display) {
+    const link = el('a', 'file-link', display ?? pathText);
+    link.href = '#';
+    link.title = pathText;
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      vscode.postMessage({ type: 'openFile', path: pathText });
+    });
+    return link;
   }
 
-  // ---------- minimal markdown renderer -------------------------------------
-  // Input is escaped before any tag insertion, so only tags we emit exist.
+  // ---------- markdown (marked + DOMPurify, vendored) ------------------------
 
-  function inlineMd(escaped) {
-    return escaped
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')
-      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2">$1</a>');
-  }
-
+  let markedConfigured = false;
   function renderMarkdown(md) {
     const root = el('div', 'md');
-    const segments = md.split(/```/);
-    for (let i = 0; i < segments.length; i++) {
-      if (i % 2 === 1) {
-        // fenced code block; first line may name the language
-        const lines = segments[i].split('\n');
-        if (lines.length > 1 && /^[\w+.-]*$/.test(lines[0].trim())) lines.shift();
-        const pre = el('pre');
-        pre.appendChild(el('code', null, lines.join('\n').replace(/\n$/, '')));
-        root.appendChild(pre);
-        continue;
+    if (window.marked && window.DOMPurify) {
+      if (!markedConfigured) {
+        window.marked.use({ gfm: true, breaks: true });
+        markedConfigured = true;
       }
-      const html = [];
-      let list = null; // 'ul' | 'ol'
-      const closeList = () => { if (list) { html.push(`</${list}>`); list = null; } };
-      for (const rawLine of segments[i].split('\n')) {
-        const line = rawLine;
-        const esc = escapeHtml(line);
-        const h = /^(#{1,4})\s+(.*)$/.exec(line);
-        const ul = /^\s*[-*]\s+(.*)$/.exec(line);
-        const ol = /^\s*\d+[.)]\s+(.*)$/.exec(line);
-        if (h) {
-          closeList();
-          html.push(`<h${h[1].length}>${inlineMd(escapeHtml(h[2]))}</h${h[1].length}>`);
-        } else if (/^\s*(---+|\*\*\*+)\s*$/.test(line)) {
-          closeList();
-          html.push('<hr>');
-        } else if (ul) {
-          if (list !== 'ul') { closeList(); html.push('<ul>'); list = 'ul'; }
-          html.push(`<li>${inlineMd(escapeHtml(ul[1]))}</li>`);
-        } else if (ol) {
-          if (list !== 'ol') { closeList(); html.push('<ol>'); list = 'ol'; }
-          html.push(`<li>${inlineMd(escapeHtml(ol[1]))}</li>`);
-        } else if (/^\s*>\s?/.test(line)) {
-          closeList();
-          html.push(`<blockquote>${inlineMd(esc.replace(/^\s*&gt;\s?/, ''))}</blockquote>`);
-        } else if (line.trim() === '') {
-          closeList();
-        } else {
-          closeList();
-          html.push(`<p>${inlineMd(esc)}</p>`);
-        }
+      root.innerHTML = window.DOMPurify.sanitize(window.marked.parse(md));
+      // Horizontal scroll containment for wide tables.
+      for (const table of Array.from(root.querySelectorAll('table'))) {
+        const wrap = el('div', 'table-wrap');
+        table.parentNode.insertBefore(wrap, table);
+        wrap.appendChild(table);
       }
-      closeList();
-      const wrap = el('div');
-      wrap.innerHTML = html.join('');
-      while (wrap.firstChild) root.appendChild(wrap.firstChild);
+    } else {
+      const pre = el('pre');
+      pre.appendChild(el('code', null, md));
+      root.appendChild(pre);
     }
     return root;
   }
 
-  // ---------- streaming ------------------------------------------------------
+  // ---------- streaming / status --------------------------------------------
 
   function endStreaming() {
     if (streamingEl) {
@@ -126,39 +101,78 @@
     if (running) statusText.textContent = detail || 'Working…';
   }
 
-  // ---------- tool rendering -------------------------------------------------
-
-  function toolDescription(name, input) {
-    if (!input || typeof input !== 'object') return '';
-    if (typeof input.description === 'string') return input.description;
-    if (typeof input.file_path === 'string') return input.file_path;
-    if (typeof input.path === 'string') return input.path;
-    if (typeof input.pattern === 'string') return input.pattern;
-    if (typeof input.command === 'string') return input.command.split('\n')[0];
-    if (typeof input.url === 'string') return input.url;
-    if (typeof input.query === 'string') return input.query;
-    if (typeof input.prompt === 'string') return input.prompt.slice(0, 120);
-    return '';
+  function updateRing(tokens) {
+    if (typeof tokens !== 'number' || tokens <= 0) return;
+    const pct = Math.min(1, tokens / CONTEXT_WINDOW);
+    ringBtn.hidden = false;
+    const fg = ringBtn.querySelector('.ring-fg');
+    fg.setAttribute('stroke-dashoffset', String(RING_CIRCUMFERENCE * (1 - pct)));
+    ringBtn.classList.toggle('warn', pct >= 0.7 && pct < 0.9);
+    ringBtn.classList.toggle('hot', pct >= 0.9);
+    ringBtn.title = `Context: ~${Math.round(pct * 100)}% of ${CONTEXT_WINDOW / 1000}k tokens — click to compact`;
   }
 
-  function toolInputPreview(name, input) {
-    if (input && typeof input === 'object') {
-      if (typeof input.command === 'string') return input.command;
-      if (name === 'Edit' && typeof input.old_string === 'string') {
-        return `--- old\n${input.old_string}\n+++ new\n${input.new_string ?? ''}`;
+  // ---------- diff rendering --------------------------------------------------
+
+  function diffBlock(oldText, newText) {
+    const pre = el('pre', 'io-pre diff');
+    const addLines = (text, cls, prefix) => {
+      for (const line of String(text ?? '').split('\n')) {
+        pre.appendChild(el('span', `diff-line ${cls}`, prefix + line));
       }
-      if (typeof input.content === 'string' && typeof input.file_path === 'string') {
-        return input.content;
-      }
+    };
+    addLines(oldText, 'del', '- ');
+    addLines(newText, 'add', '+ ');
+    return pre;
+  }
+
+  function newFileBlock(content) {
+    const pre = el('pre', 'io-pre diff');
+    for (const line of String(content ?? '').split('\n')) {
+      pre.appendChild(el('span', 'diff-line add', '+ ' + line));
     }
-    return pretty(input, 3000);
+    return pre;
   }
 
-  function ioRow(label, text, isError) {
-    const row = el('div', 'io-row' + (isError ? ' err' : ''));
-    row.appendChild(el('span', 'io-label', label));
-    row.appendChild(el('pre', 'io-pre', text));
-    return row;
+  // ---------- tool cards -------------------------------------------------------
+
+  function toolDescription(input) {
+    if (!input || typeof input !== 'object') return { text: '', path: null };
+    if (typeof input.file_path === 'string') return { text: input.file_path, path: input.file_path };
+    if (typeof input.path === 'string') return { text: input.path, path: input.path };
+    if (typeof input.description === 'string') return { text: input.description, path: null };
+    if (typeof input.command === 'string') return { text: input.command.split('\n')[0], path: null };
+    if (typeof input.pattern === 'string') return { text: input.pattern, path: null };
+    if (typeof input.url === 'string') return { text: input.url, path: null };
+    if (typeof input.query === 'string') return { text: input.query, path: null };
+    if (typeof input.prompt === 'string') return { text: input.prompt.slice(0, 120), path: null };
+    return { text: '', path: null };
+  }
+
+  function buildToolBody(name, input) {
+    const body = el('div', 'tool-body');
+    if (name === 'Edit' && input && typeof input.old_string === 'string') {
+      const row = el('div', 'io-row');
+      row.appendChild(el('span', 'io-label', 'DIFF'));
+      row.appendChild(diffBlock(input.old_string, input.new_string));
+      body.appendChild(row);
+      return body;
+    }
+    if (name === 'Write' && input && typeof input.content === 'string') {
+      const row = el('div', 'io-row');
+      row.appendChild(el('span', 'io-label', 'NEW'));
+      row.appendChild(newFileBlock(input.content));
+      body.appendChild(row);
+      return body;
+    }
+    const inText = input && typeof input === 'object' && typeof input.command === 'string'
+      ? input.command
+      : pretty(input, 3000);
+    const row = el('div', 'io-row');
+    row.appendChild(el('span', 'io-label', 'IN'));
+    row.appendChild(el('pre', 'io-pre', inText));
+    body.appendChild(row);
+    return body;
   }
 
   function renderTodoCard(input) {
@@ -188,52 +202,74 @@
     const dot = el('span', 'dot spin');
     head.appendChild(dot);
     head.appendChild(el('span', 'tool-name', event.toolName));
-    const desc = toolDescription(event.toolName, event.input);
-    if (desc) head.appendChild(el('span', 'tool-desc', desc));
-    else head.appendChild(el('span', 'tool-desc', ''));
+    const desc = toolDescription(event.input);
+    if (desc.path) {
+      const descWrap = el('span', 'tool-desc');
+      descWrap.appendChild(fileLink(desc.path));
+      head.appendChild(descWrap);
+    } else {
+      head.appendChild(el('span', 'tool-desc', desc.text));
+    }
     head.appendChild(el('span', 'chevron', '▸'));
     card.appendChild(head);
 
-    const body = el('div', 'tool-body');
-    body.appendChild(ioRow('IN', toolInputPreview(event.toolName, event.input), false));
+    const body = buildToolBody(event.toolName, event.input);
     card.appendChild(body);
-
     head.addEventListener('click', () => card.classList.toggle('open'));
     threadEl.appendChild(card);
-    if (event.toolUseId) toolCards.set(event.toolUseId, { card, body, dot });
+    if (event.toolUseId) toolCards.set(event.toolUseId, { body, dot });
   }
 
   function renderToolResult(event) {
     const entry = event.toolUseId ? toolCards.get(event.toolUseId) : undefined;
     if (entry) {
-      entry.body.appendChild(ioRow('OUT', event.summary, event.isError));
+      const row = el('div', 'io-row' + (event.isError ? ' err' : ''));
+      row.appendChild(el('span', 'io-label', 'OUT'));
+      row.appendChild(el('pre', 'io-pre', event.summary));
+      entry.body.appendChild(row);
       entry.dot.classList.remove('spin');
       entry.dot.classList.add(event.isError ? 'err' : 'ok');
       return;
     }
-    // Result with no matching card (old logs) — standalone collapsed card.
     const card = el('div', 'tool-card');
     const head = el('div', 'tool-head');
-    const dot = el('span', 'dot ' + (event.isError ? 'err' : 'ok'));
-    head.appendChild(dot);
+    head.appendChild(el('span', 'dot ' + (event.isError ? 'err' : 'ok')));
     head.appendChild(el('span', 'tool-name', event.isError ? 'tool error' : 'tool result'));
     head.appendChild(el('span', 'tool-desc', ''));
     head.appendChild(el('span', 'chevron', '▸'));
     const body = el('div', 'tool-body');
-    body.appendChild(ioRow('OUT', event.summary, event.isError));
+    const row = el('div', 'io-row' + (event.isError ? ' err' : ''));
+    row.appendChild(el('span', 'io-label', 'OUT'));
+    row.appendChild(el('pre', 'io-pre', event.summary));
+    body.appendChild(row);
     card.appendChild(head);
     card.appendChild(body);
     head.addEventListener('click', () => card.classList.toggle('open'));
     threadEl.appendChild(card);
   }
 
-  // ---------- event rendering ------------------------------------------------
+  // ---------- events ------------------------------------------------------------
 
   function renderEvent(event) {
     switch (event.type) {
       case 'user_message': {
         endStreaming();
-        threadEl.appendChild(el('div', 'user-msg', event.text));
+        const box = el('div', 'user-msg');
+        box.appendChild(el('div', null, event.text));
+        if (Array.isArray(event.attachments) && event.attachments.length) {
+          const row = el('div', 'user-chips');
+          for (const a of event.attachments) {
+            if (a.kind === 'file') {
+              const chip = el('span', 'chip');
+              chip.appendChild(fileLink(a.label));
+              row.appendChild(chip);
+            } else {
+              row.appendChild(el('span', 'chip', `🖼 ${a.label}`));
+            }
+          }
+          box.appendChild(row);
+        }
+        threadEl.appendChild(box);
         break;
       }
       case 'assistant_text': {
@@ -259,7 +295,9 @@
         const card = el('div', 'permission');
         card.dataset.requestId = event.requestId;
         card.appendChild(el('div', 'perm-title', `Allow ${event.toolName}?`));
-        card.appendChild(ioRow('IN', toolInputPreview(event.toolName, event.input), false));
+        const body = buildToolBody(event.toolName, event.input);
+        body.style.display = 'block';
+        card.appendChild(body);
         const actions = el('div', 'perm-actions');
         const allow = el('button', null, 'Allow');
         const deny = el('button', 'secondary', 'Deny');
@@ -301,6 +339,7 @@
         if (typeof event.durationMs === 'number') bits.push(`${(event.durationMs / 1000).toFixed(1)}s`);
         if (typeof event.costUsd === 'number') bits.push(`$${event.costUsd.toFixed(4)}`);
         threadEl.appendChild(el('div', 'meta', bits.length ? bits.join(' · ') : 'done'));
+        updateRing(event.contextTokens);
         setRunning(false);
         break;
       }
@@ -313,7 +352,19 @@
     permToggle.classList.toggle('active', bypass);
   }
 
-  // ---------- inbound messages -----------------------------------------------
+  function renderChips(items) {
+    chipsEl.replaceChildren();
+    chipsEl.hidden = items.length === 0;
+    items.forEach((item, index) => {
+      const chip = el('span', 'chip');
+      chip.appendChild(el('span', null, `${item.kind === 'image' ? '🖼 ' : '📄 '}${item.label}`));
+      const remove = el('button', 'chip-x', '×');
+      remove.addEventListener('click', () =>
+        vscode.postMessage({ type: 'removeAttachment', index }));
+      chip.appendChild(remove);
+      chipsEl.appendChild(chip);
+    });
+  }
 
   window.addEventListener('message', (e) => {
     const msg = e.data;
@@ -340,10 +391,13 @@
         scrollToBottom();
         break;
       }
+      case 'attachments':
+        renderChips(msg.items ?? []);
+        break;
     }
   });
 
-  // ---------- composer ---------------------------------------------------------
+  // ---------- composer -----------------------------------------------------------
 
   function send() {
     const text = inputEl.value.trim();
@@ -360,6 +414,10 @@
 
   sendBtn.addEventListener('click', send);
   stopBtn.addEventListener('click', () => vscode.postMessage({ type: 'interrupt' }));
+  attachBtn.addEventListener('click', () => vscode.postMessage({ type: 'pickAttachment' }));
+  ringBtn.addEventListener('click', () => {
+    vscode.postMessage({ type: 'compact' });
+  });
   permToggle.addEventListener('click', () => {
     bypass = !bypass;
     permToggle.classList.toggle('active', bypass);

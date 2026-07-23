@@ -2,7 +2,7 @@
   "name": "claude-persist-vscode",
   "displayName": "Claude Persist",
   "description": "Persistent Claude Code sessions that survive window reloads — chat tabs backed by a server-side daemon (code-server friendly)",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "jaga",
   "license": "MIT",
   "engines": {
@@ -62,6 +62,11 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "claudePersist.importSession",
+        "title": "Claude Persist: Import Claude Code Session",
+        "icon": "$(cloud-download)"
+      },
+      {
         "command": "claudePersist.openSessionFromTree",
         "title": "Open Session"
       },
@@ -82,6 +87,11 @@
           "command": "claudePersist.refreshSessions",
           "when": "view == claudePersist.sessions",
           "group": "navigation@2"
+        },
+        {
+          "command": "claudePersist.importSession",
+          "when": "view == claudePersist.sessions",
+          "group": "1_actions"
         }
       ],
       "view/item/context": [

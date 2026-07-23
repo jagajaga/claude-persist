@@ -10,6 +10,7 @@ import { PROTOCOL_VERSION } from '@claude-persist/shared';
 import { ensureDirs, socketPath, sessionLogPath, logPath } from './paths.js';
 import { Registry } from './registry.js';
 import { DaemonSession } from './session.js';
+import { importClaudeSession, listClaudeSessions } from './importer.js';
 
 ensureDirs();
 const log = fs.createWriteStream(logPath, { flags: 'a' });
@@ -102,7 +103,7 @@ function handleRequest(client: Client, req: Request): unknown {
     }
     case 'sendMessage': {
       const session = getSession(req.sessionId);
-      session.sendMessage(req.text);
+      session.sendMessage(req.text, req.attachments ?? []);
       registry.touch(req.sessionId);
       return null;
     }
@@ -117,6 +118,13 @@ function handleRequest(client: Client, req: Request): unknown {
     case 'setPermissionMode': {
       void getSession(req.sessionId).setPermissionMode(req.mode);
       return null;
+    }
+    case 'listClaudeSessions':
+      return listClaudeSessions();
+    case 'importClaudeSession': {
+      const meta = importClaudeSession(registry, req.file);
+      broadcastAll({ kind: 'sessions_changed' });
+      return sessionInfo(meta.id);
     }
     case 'deleteSession': {
       sessions.get(req.sessionId)?.dispose();

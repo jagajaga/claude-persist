@@ -4,6 +4,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import type {
+  Attachment,
+  ClaudeSessionCandidate,
   PermissionMode,
   PersistedEvent,
   Request,
@@ -172,8 +174,13 @@ export class DaemonClient {
     return this.request({ op: 'detach', sessionId });
   }
 
-  sendMessage(sessionId: string, text: string): Promise<void> {
-    return this.request({ op: 'sendMessage', sessionId, text });
+  sendMessage(sessionId: string, text: string, attachments?: Attachment[]): Promise<void> {
+    return this.request({
+      op: 'sendMessage',
+      sessionId,
+      text,
+      ...(attachments && attachments.length ? { attachments } : {}),
+    });
   }
 
   interrupt(sessionId: string): Promise<void> {
@@ -186,6 +193,14 @@ export class DaemonClient {
 
   setPermissionMode(sessionId: string, mode: PermissionMode): Promise<void> {
     return this.request({ op: 'setPermissionMode', sessionId, mode });
+  }
+
+  listClaudeSessions(): Promise<ClaudeSessionCandidate[]> {
+    return this.request({ op: 'listClaudeSessions' });
+  }
+
+  importClaudeSession(file: string): Promise<SessionInfo> {
+    return this.request({ op: 'importClaudeSession', file });
   }
 
   deleteSession(sessionId: string): Promise<void> {

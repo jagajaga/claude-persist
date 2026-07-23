@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
+  Attachment,
   ChatEvent,
   PersistedEvent,
   SessionStatus,
@@ -123,12 +124,36 @@ export class DaemonSession {
     this.appendEvent({ type: 'status', status, detail });
   }
 
-  sendMessage(text: string): void {
-    this.appendEvent({ type: 'user_message', text });
+  sendMessage(text: string, attachments: Attachment[] = []): void {
+    const labels = attachments.map((a) => ({
+      kind: a.kind,
+      label: a.kind === 'image' ? a.name : a.path,
+    }));
+    this.appendEvent({
+      type: 'user_message',
+      text,
+      ...(labels.length ? { attachments: labels } : {}),
+    });
+
+    const content: unknown[] = [];
+    for (const a of attachments) {
+      if (a.kind === 'image') {
+        content.push({
+          type: 'image',
+          source: { type: 'base64', media_type: a.mediaType, data: a.data },
+        });
+      }
+    }
+    const filePaths = attachments.filter((a) => a.kind === 'file') as Array<{ path: string }>;
+    const fullText = filePaths.length
+      ? `${text}\n\nAttached files (read them as needed):\n${filePaths.map((a) => a.path).join('\n')}`
+      : text;
+    content.push({ type: 'text', text: fullText });
+
     this.ensureQuery();
     this.input!.push({
       type: 'user',
-      message: { role: 'user', content: [{ type: 'text', text }] },
+      message: { role: 'user', content },
       parent_tool_use_id: null,
       session_id: this.meta.sdkSessionId ?? '',
     });
@@ -271,11 +296,20 @@ export class DaemonSession {
       case 'result': {
         const summaryText =
           typeof msg.result === 'string' ? msg.result : `Turn finished (${String(msg.subtype ?? 'done')})`;
+        const usage = msg.usage as Record<string, unknown> | undefined;
+        const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
+        const contextTokens = usage
+          ? num(usage.input_tokens) +
+            num(usage.cache_read_input_tokens) +
+            num(usage.cache_creation_input_tokens) +
+            num(usage.output_tokens)
+          : undefined;
         this.appendEvent({
           type: 'result',
           summary: summarize(summaryText, 400),
           costUsd: typeof msg.total_cost_usd === 'number' ? msg.total_cost_usd : undefined,
           durationMs: typeof msg.duration_ms === 'number' ? msg.duration_ms : undefined,
+          ...(contextTokens ? { contextTokens } : {}),
         });
         this.setStatus('idle');
         break;

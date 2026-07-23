@@ -142,6 +142,35 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
 
+    vscode.commands.registerCommand('claudePersist.importSession', async () => {
+      try {
+        const c = await ensureClient(context);
+        const candidates = await c.listClaudeSessions();
+        if (candidates.length === 0) {
+          void vscode.window.showInformationMessage(
+            'No Claude Code sessions found under ~/.claude/projects.',
+          );
+          return;
+        }
+        const picked = await vscode.window.showQuickPick(
+          candidates.map((s) => ({
+            label: s.title,
+            description: new Date(s.mtimeMs).toLocaleString(),
+            detail: s.cwd,
+            candidate: s,
+          })),
+          { title: 'Import Claude Code session', matchOnDetail: true },
+        );
+        if (!picked) return;
+        const info = await c.importClaudeSession(picked.candidate.file);
+        await panels.openSession(info);
+      } catch (err) {
+        void vscode.window.showErrorMessage(
+          `Claude Persist: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }),
+
     vscode.commands.registerCommand('claudePersist.refreshSessions', async () => {
       try {
         await ensureClient(context);

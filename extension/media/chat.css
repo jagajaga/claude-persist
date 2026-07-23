@@ -315,3 +315,87 @@ button.secondary {
   .pill span { display: none; }         /* icon-only bypass toggle on phones */
   .pill { padding: 6px 9px; }
 }
+
+/* ---------- markdown tables ---------------------------------------------- */
+
+.table-wrap { overflow-x: auto; margin: 6px 0 12px; }
+.md table { border-collapse: collapse; font-size: 0.95em; }
+.md th, .md td {
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.35));
+  padding: 5px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.md th {
+  background: var(--vscode-editorWidget-background, rgba(128,128,128,0.08));
+  font-weight: 600;
+}
+
+/* ---------- diffs ---------------------------------------------------------- */
+
+.io-pre.diff { padding: 6px 8px; }
+.diff-line { display: block; white-space: pre-wrap; word-break: break-word; border-radius: 2px; }
+.diff-line.add { background: var(--vscode-diffEditor-insertedTextBackground, rgba(63,185,80,0.18)); }
+.diff-line.del { background: var(--vscode-diffEditor-removedTextBackground, rgba(241,76,76,0.18)); }
+
+/* ---------- clickable file paths ------------------------------------------- */
+
+.file-link {
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+  text-decoration: none;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: inherit;
+}
+.file-link:hover { text-decoration: underline; }
+
+/* ---------- attachment chips ------------------------------------------------ */
+
+#chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 4px 8px; }
+.user-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.35));
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 0.85em;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chip .file-link { color: inherit; }
+.chip-x {
+  background: transparent;
+  border: none;
+  color: inherit;
+  padding: 0 0 0 2px;
+  font-size: 1.05em;
+  line-height: 1;
+  cursor: pointer;
+}
+.chip-x:hover { background: transparent; opacity: 0.7; }
+
+/* ---------- context ring ----------------------------------------------------- */
+
+.ring-btn {
+  background: transparent;
+  border: none;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+.ring-btn:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.1)); border-radius: 6px; }
+.ring-bg { stroke: var(--vscode-editorWidget-border, rgba(128,128,128,0.35)); }
+.ring-fg {
+  stroke: var(--vscode-charts-blue, #4a9eda);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.4s ease;
+}
+.ring-btn.warn .ring-fg { stroke: var(--vscode-charts-yellow, #d6a54a); }
+.ring-btn.hot .ring-fg { stroke: var(--vscode-errorForeground, #f14c4c); }

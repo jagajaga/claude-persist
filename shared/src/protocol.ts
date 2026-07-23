@@ -24,21 +24,35 @@ export interface SessionInfo {
   eventCount: number;
 }
 
+/** Something the user attaches to a message via the composer's + button. */
+export type Attachment =
+  | { kind: 'image'; name: string; mediaType: string; data: string }
+  | { kind: 'file'; path: string };
+
 /** A single chat-visible event. Persisted events replay after reconnect. */
 export type ChatEvent =
-  | { type: 'user_message'; text: string }
+  | { type: 'user_message'; text: string; attachments?: Array<{ kind: 'image' | 'file'; label: string }> }
   | { type: 'assistant_text'; text: string }
   | { type: 'tool_use'; toolUseId?: string; toolName: string; input: unknown }
   | { type: 'tool_result'; toolUseId?: string; summary: string; isError: boolean }
   | { type: 'permission_request'; requestId: string; toolName: string; input: unknown }
   | { type: 'permission_resolved'; requestId: string; allowed: boolean }
   | { type: 'status'; status: SessionStatus; detail?: string }
-  | { type: 'result'; summary: string; costUsd?: number; durationMs?: number };
+  | { type: 'result'; summary: string; costUsd?: number; durationMs?: number; contextTokens?: number };
 
 export interface PersistedEvent {
   seq: number;
   ts: number;
   event: ChatEvent;
+}
+
+/** An existing Claude Code (CLI / official extension) session on this machine. */
+export interface ClaudeSessionCandidate {
+  file: string;
+  sdkSessionId: string;
+  cwd: string;
+  title: string;
+  mtimeMs: number;
 }
 
 export type Request =
@@ -47,10 +61,12 @@ export type Request =
   | { id: number; op: 'createSession'; cwd: string; title?: string }
   | { id: number; op: 'attach'; sessionId: string; sinceSeq: number }
   | { id: number; op: 'detach'; sessionId: string }
-  | { id: number; op: 'sendMessage'; sessionId: string; text: string }
+  | { id: number; op: 'sendMessage'; sessionId: string; text: string; attachments?: Attachment[] }
   | { id: number; op: 'interrupt'; sessionId: string }
   | { id: number; op: 'permission'; sessionId: string; requestId: string; allow: boolean; message?: string }
   | { id: number; op: 'setPermissionMode'; sessionId: string; mode: PermissionMode }
+  | { id: number; op: 'listClaudeSessions' }
+  | { id: number; op: 'importClaudeSession'; file: string }
   | { id: number; op: 'deleteSession'; sessionId: string };
 
 export type Push =

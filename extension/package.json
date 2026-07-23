@@ -6,6 +6,10 @@
   "publisher": "jaga",
   "license": "MIT",
   "icon": "media/ext-icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jagajaga/claude-persist.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },

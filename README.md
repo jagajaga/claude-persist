@@ -1,18 +1,25 @@
-# claude-persist
+<p align="center">
+  <img src="extension/media/ext-icon.png" width="128" alt="Claude Persist icon">
+</p>
 
-Persistent Claude Code sessions for VS Code / code-server. Chat with Claude in
-native editor tabs, refresh the browser, close the laptop, come back from your
-phone — the session keeps running on the server and the tab picks up where it
-left off, including turns that finished while you were gone.
+<h1 align="center">Claude Persist</h1>
+
+<p align="center">
+  Persistent Claude Code sessions for VS Code / code-server.<br>
+  Refresh the browser, close the laptop, come back from your phone —<br>
+  the session keeps running on the server and the chat picks up where it left off.
+</p>
+
+---
 
 ## Why
 
 In code-server (VS Code in the browser), a page refresh restarts the extension
 host, killing any process an extension started — which is why the official
-Claude Code extension loses its session on refresh
+Claude Code extension loses its live session on refresh
 ([anthropics/claude-code#36845](https://github.com/anthropics/claude-code/issues/36845)).
 
-This project copies VS Code's own fix for terminals (the pty host): move the
+Claude Persist copies VS Code's own fix for terminals (the pty host): move the
 long-lived state into a **server-lifetime daemon** and make every UI layer
 disposable and re-attachable.
 
@@ -26,80 +33,90 @@ browser tab            server
                        └───────────────────────────────┘      except the server)
 ```
 
-- **Daemon** (`daemon/`) — runs Claude sessions via the official
-  `@anthropic-ai/claude-agent-sdk` (streaming input, multi-turn). Every chat
-  event is sequence-numbered and appended to
-  `~/.claude-persist/sessions/<id>.jsonl`. Clients attach with the last seq
-  they saw and get a replay. Permission prompts block in the daemon until a
-  client answers — reconnect later and the question is still waiting.
-- **Extension** (`extension/`) — one webview panel (native editor tab) per
-  session. A `WebviewPanelSerializer` restores the tabs after a window reload;
-  each restored tab re-attaches and replays its transcript.
-- **Shared** (`shared/`) — the ndjson wire protocol types.
+Every chat event is sequence-numbered and appended to
+`~/.claude-persist/sessions/<id>.jsonl`. Clients attach with the last seq they
+saw and get a replay — including turns that finished, and permission prompts
+that are still waiting, while nobody was connected.
 
-Because the daemon is detached from the extension host, "start something and
-close the window" works: the turn keeps executing with nobody attached, events
-accumulate in the log, and whichever client attaches next replays them.
+## Features
 
-## Setup
+- **Reload-proof sessions** — turns keep executing with no client attached;
+  reconnect replays everything missed, mid-generation refreshes included
+- **Multiple sessions as native editor tabs**, restored after window reload,
+  plus an activity-bar sidebar with live running/idle status
+- **Claude Code look & feel** — markdown (marked + DOMPurify), collapsible
+  tool cards with IN/OUT, inline diffs for Edit/Write, todo checklists,
+  clickable file paths that open in the editor
+- **Permissions** — Allow/Deny cards that survive reloads, plus a
+  bypass-permissions toggle (switchable mid-turn)
+- **Attachments** — images embed as vision blocks, other files attach as path
+  references
+- **Context ring** — live context usage vs the model's real window; click to
+  compact the conversation
+- **Import Claude Code sessions** — converts existing `~/.claude` transcripts
+  and continues them via SDK resume, with full context
+- **Session rename**, per-turn token counts, interrupt/stop
+- **Subscription auth** — uses the same login as Claude Code (`claude /login`
+  or `ANTHROPIC_API_KEY`); on Claude Pro/Max there are no API charges
+
+## Install
+
+Grab `claude-persist-<version>.vsix` from
+[Releases](https://github.com/jagajaga/claude-persist/releases) and:
+
+```bash
+code-server --install-extension claude-persist-<version>.vsix
+# or in desktop VS Code: Extensions → … → Install from VSIX
+```
+
+Reload the window, click the Claude Persist icon in the activity bar, and
+create a session. The daemon starts automatically (detached from VS Code) and
+self-replaces on extension upgrades.
+
+The `.vsix` is self-contained (~83 MB — it bundles the Claude Agent SDK
+runtime), currently for **linux-x64** servers.
+
+## Build from source
 
 ```bash
 npm install
-npm run build
+npm run build          # tsc for shared + daemon + extension
+./scripts/package.sh   # → claude-persist-<version>.vsix
 ```
 
-Authentication: the daemon uses the Claude Agent SDK, which picks up the same
-credentials as Claude Code (e.g. `claude /login` or `ANTHROPIC_API_KEY`).
+Requirements: Node 18+, a Claude Code login on the machine that runs the
+daemon.
 
-### Run the extension (dev / monorepo layout)
+### Repo layout
 
-Symlink or copy the built extension into your extensions dir, e.g. for
-code-server:
+| Path | What it is |
+|---|---|
+| `daemon/` | Session daemon: Agent SDK sessions, unix-socket ndjson protocol, event log, permission bridge, transcript importer |
+| `extension/` | VS Code extension: daemon client, chat webview (media/), sidebar tree, panel serializer |
+| `shared/` | Wire protocol types shared by both |
+| `scripts/package.sh` | Builds and bundles everything into the `.vsix` |
 
-```bash
-ln -s "$(pwd)/extension" ~/.local/share/code-server/extensions/claude-persist
-```
+### Optional: daemon under systemd
 
-Reload the window. Commands:
-
-- **Claude Persist: New Session** — pick a folder, get a chat tab
-- **Claude Persist: Open Session** — reopen any existing session
-- **Claude Persist: Delete Session** — remove a session and its history
-
-The extension auto-spawns the daemon on first use (detached, survives the
-extension host). It finds the daemon at `../daemon/dist/main.js` relative to
-the extension folder; override with the `claudePersist.daemonEntry` setting.
-
-### Optional: run the daemon under systemd
-
-The daemon is self-spawning, but a user unit makes it survive server reboots:
+The daemon is self-spawning, but a user unit survives server reboots:
 
 ```ini
 # ~/.config/systemd/user/claude-persist.service
 [Unit]
 Description=claude-persist session daemon
-
 [Service]
-ExecStart=/usr/bin/node %h/code-workspace/claude-persist/daemon/dist/main.js
+ExecStart=/usr/bin/node /path/to/claude-persist/daemon/dist/main.js
 Restart=on-failure
-
 [Install]
 WantedBy=default.target
 ```
 
-```bash
-systemctl --user enable --now claude-persist
-```
+## Roadmap
 
-## Status / roadmap
-
-Working MVP: multi-session chat tabs, streaming text, tool-use cards,
-permission prompts, interrupt, replay-on-reload, resume across daemon
-restarts (via the SDK's `resume`).
-
-Not yet: markdown rendering, permission "always allow" rules, session rename,
-mobile-tuned layout, packaging as a `.vsix` with the daemon bundled.
+Slash-command autocomplete · model picker · "always allow" permission rules ·
+native diff-editor integration · AI titles for imported sessions ·
+multi-platform `.vsix` bundles
 
 ## License
 
-MIT
+[MIT](LICENSE)

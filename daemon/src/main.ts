@@ -42,6 +42,9 @@ function broadcastAll(message: ServerMessage): void {
 const callbacks = {
   onEvent(sessionId: string, event: PersistedEvent): void {
     broadcast(sessionId, { kind: 'event', sessionId, event });
+    // Status flips (idle/running/error) should update every client's session
+    // list, not just subscribers of this session — e.g. the sidebar tree.
+    if (event.event.type === 'status') broadcastAll({ kind: 'sessions_changed' });
   },
   onDelta(sessionId: string, text: string): void {
     broadcast(sessionId, { kind: 'delta', sessionId, text });

@@ -22,6 +22,7 @@ interface PanelEntry {
   ready: boolean;
   queue: unknown[];
   cwd?: string;
+  baseTitle: string;
   pendingAttachments: Attachment[];
 }
 
@@ -42,6 +43,12 @@ export class ChatPanelManager {
     const entry = this.panels.get(sessionId);
     if (!entry) return;
     entry.lastSeq = Math.max(entry.lastSeq, event.seq + 1);
+    // Reflect the working state in the editor tab title, so it's visible
+    // even when the tab is not focused.
+    if (event.event.type === 'status') {
+      entry.panel.title =
+        (event.event.status === 'running' ? '⏳ ' : '') + entry.baseTitle;
+    }
     this.post(entry, { type: 'event', event });
   }
 
@@ -74,6 +81,7 @@ export class ChatPanelManager {
       lastSeq: 0,
       ready: false,
       queue: [],
+      baseTitle: title ?? panel.title,
       pendingAttachments: [],
     };
     this.panels.set(sessionId, entry);
@@ -199,7 +207,9 @@ export class ChatPanelManager {
     const client = this.client();
     if (!client) return;
     const result = await client.attach(entry.sessionId, entry.lastSeq);
-    entry.panel.title = result.info.title;
+    entry.baseTitle = result.info.title;
+    entry.panel.title =
+      (result.info.status === 'running' ? '⏳ ' : '') + result.info.title;
     entry.cwd = result.info.cwd;
     if (result.events.length > 0) {
       entry.lastSeq = result.events[result.events.length - 1].seq + 1;

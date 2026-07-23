@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 export type SessionStatus = 'idle' | 'running' | 'error';
 

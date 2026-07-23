@@ -411,6 +411,9 @@
     const text = inputEl.value.trim();
     if (!text) return;
     vscode.postMessage({ type: 'send', text });
+    // Optimistic: show the working indicator immediately, before the daemon's
+    // status event makes the round trip.
+    setRunning(true);
     inputEl.value = '';
     autosize();
   }

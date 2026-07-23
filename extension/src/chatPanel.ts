@@ -99,6 +99,10 @@ export class ChatPanelManager {
     panel.webview.html = this.html(panel.webview, sessionId);
 
     panel.webview.onDidReceiveMessage(async (msg: Record<string, unknown>) => {
+      if (msg.type === 'clientError') {
+        void vscode.window.showErrorMessage(`Claude Persist webview error: ${String(msg.message)}`);
+        return;
+      }
       const client = this.client();
       if (!client) return;
       try {

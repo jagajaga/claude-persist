@@ -8,6 +8,12 @@
   const sessionId = document.body.dataset.sessionId;
   vscode.setState({ sessionId });
 
+  // Surface webview crashes as a VS Code notification instead of a silently
+  // blank panel (see the duplicated-declaration incident, v0.5.1).
+  window.addEventListener('error', (e) => {
+    vscode.postMessage({ type: 'clientError', message: `${e.message} (${e.filename}:${e.lineno})` });
+  });
+
   const messagesEl = document.getElementById('messages');
   const threadEl = document.getElementById('thread');
   const inputEl = document.getElementById('input');
@@ -449,11 +455,13 @@
     setOptionList(
       modelSelect,
       'model: default',
-      modelInfos.map((m) => ({
-        value: m.value,
-        label: m.displayName || m.value,
-        title: m.description,
-      })),
+      modelInfos
+        .filter((m) => m.value !== 'default') // our '' option already means default
+        .map((m) => ({
+          value: m.value,
+          label: m.displayName || m.value,
+          title: m.description,
+        })),
       current !== undefined ? current : modelSelect.value,
     );
   }
@@ -469,60 +477,6 @@
       'effort: default',
       levels.map((l) => ({ value: l, label: l })),
       current !== undefined ? current : effortSelect.value,
-    );
-  }
-
-  // ---------- dynamic model / effort options --------------------------------
-
-  const ALL_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
-  let modelInfos = [];
-
-  function setOptions(select, entries, current, defaultLabel) {
-    select.replaceChildren();
-    const def = document.createElement('option');
-    def.value = '';
-    def.textContent = defaultLabel;
-    select.appendChild(def);
-    for (const entry of entries) {
-      const opt = document.createElement('option');
-      opt.value = entry.value;
-      opt.textContent = entry.label;
-      if (entry.title) opt.title = entry.title;
-      select.appendChild(opt);
-    }
-    if (current && !entries.some((e) => e.value === current)) {
-      const extra = document.createElement('option');
-      extra.value = current;
-      extra.textContent = current;
-      select.appendChild(extra);
-    }
-    select.value = current || '';
-  }
-
-  function rebuildModelOptions(current) {
-    setOptions(
-      modelSelect,
-      modelInfos.map((m) => ({
-        value: m.value,
-        label: m.displayName || m.value,
-        title: m.description,
-      })),
-      current !== undefined ? current : modelSelect.value,
-      'model: default',
-    );
-  }
-
-  function rebuildEffortOptions(current) {
-    const info = modelInfos.find((m) => m.value === modelSelect.value);
-    const levels =
-      info && Array.isArray(info.effortLevels) && info.effortLevels.length
-        ? info.effortLevels
-        : ALL_EFFORTS;
-    setOptions(
-      effortSelect,
-      levels.map((l) => ({ value: l, label: l })),
-      current !== undefined ? current : effortSelect.value,
-      'effort: default',
     );
   }
 
@@ -544,7 +498,14 @@
     const msg = e.data;
     switch (msg.type) {
       case 'replay': {
-        for (const persisted of msg.events) renderEvent(persisted.event);
+        for (const persisted of msg.events) {
+          // One malformed event must never blank the whole transcript.
+          try {
+            renderEvent(persisted.event);
+          } catch (err) {
+            console.error('render failed for event', persisted.seq, err);
+          }
+        }
         if (msg.info) {
           setRunning(msg.info.status === 'running');
           applyPermissionMode(msg.info.permissionMode);

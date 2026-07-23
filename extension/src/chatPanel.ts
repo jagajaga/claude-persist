@@ -265,6 +265,7 @@ export class ChatPanelManager {
   <title>Claude</title>
 </head>
 <body data-session-id="${sessionId}">
+  <div id="prompt-bar" title="Jump to where this exchange started" hidden></div>
   <main id="messages"><div id="thread"></div></main>
   <footer id="composer">
     <div id="input-box">

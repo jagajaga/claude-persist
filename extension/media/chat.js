@@ -18,6 +18,7 @@
   const ringBtn = document.getElementById('context-ring');
   const modelSelect = document.getElementById('model-select');
   const effortSelect = document.getElementById('effort-select');
+  const promptBar = document.getElementById('prompt-bar');
 
   const RING_CIRCUMFERENCE = 47.1;
   let contextWindow = 1000000; // default 1M; overwritten by the SDK's reported window
@@ -51,6 +52,27 @@
   });
   window.addEventListener('resize', () => {
     if (pinned) scrollToBottom();
+  });
+
+  // Sticky bar showing the last user prompt whenever it has scrolled out of
+  // view; clicking jumps back to where the current exchange started.
+  let lastUserEl = null;
+  const promptObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) promptBar.hidden = entry.isIntersecting;
+    },
+    { root: messagesEl },
+  );
+  function trackUserMessage(box, text) {
+    lastUserEl = box;
+    promptBar.textContent = text.length > 160 ? `${text.slice(0, 160)}…` : text;
+    promptObserver.disconnect();
+    promptObserver.observe(box);
+  }
+  promptBar.addEventListener('click', () => {
+    if (!lastUserEl) return;
+    pinned = false;
+    lastUserEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
   });
 
   function pretty(value, max) {
@@ -305,6 +327,7 @@
           box.appendChild(row);
         }
         threadEl.appendChild(box);
+        trackUserMessage(box, event.text);
         break;
       }
       case 'assistant_text': {

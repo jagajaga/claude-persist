@@ -430,3 +430,20 @@ button.secondary {
 @media (max-width: 520px) {
   .select-pill { max-width: 92px; padding: 5px 8px; }
 }
+
+/* ---------- sticky last-prompt bar ----------------------------------------- */
+
+#prompt-bar {
+  flex: none;
+  padding: 7px 16px;
+  background: var(--vscode-editorWidget-background, rgba(128,128,128,0.08));
+  border-bottom: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.25));
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+#prompt-bar::before { content: '↑ '; color: var(--vscode-textLink-foreground); }
+#prompt-bar:hover { color: var(--vscode-foreground); }

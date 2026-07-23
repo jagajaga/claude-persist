@@ -96,9 +96,26 @@
     }
   }
 
+  let workingRow = null;
   function setRunning(running, detail) {
     statusLine.hidden = !running;
     if (running) statusText.textContent = detail || 'Working…';
+    // Inline indicator in the conversation flow as well.
+    if (running) {
+      if (!workingRow) {
+        workingRow = el('div', 'working-row');
+        workingRow.appendChild(el('span', 'spinner'));
+        workingRow.appendChild(el('span', null, 'Working…'));
+      }
+      threadEl.appendChild(workingRow); // appending moves it to the end
+    } else if (workingRow) {
+      workingRow.remove();
+    }
+  }
+
+  /** Keep the inline working indicator below the newest content. */
+  function keepWorkingLast() {
+    if (workingRow && workingRow.parentNode === threadEl) threadEl.appendChild(workingRow);
   }
 
   function updateRing(tokens, windowSize) {
@@ -352,6 +369,7 @@
         break;
       }
     }
+    keepWorkingLast();
     scrollToBottom();
   }
 
@@ -396,6 +414,7 @@
           setRunning(true);
         }
         streamingEl.textContent += msg.text;
+        keepWorkingLast();
         scrollToBottom();
         break;
       }

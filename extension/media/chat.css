@@ -399,3 +399,14 @@ button.secondary {
 }
 .ring-btn.warn .ring-fg { stroke: var(--vscode-charts-yellow, #d6a54a); }
 .ring-btn.hot .ring-fg { stroke: var(--vscode-errorForeground, #f14c4c); }
+
+/* ---------- inline working indicator in the thread ------------------------ */
+
+.working-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+  padding: 2px 0;
+}

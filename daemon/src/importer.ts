@@ -17,7 +17,69 @@ interface TranscriptLine {
   sessionId?: string;
   cwd?: string;
   timestamp?: string;
+  summary?: string;
   message?: { role?: string; content?: unknown };
+}
+
+const MAX_PARSE_LINE = 200_000; // skip parsing pathological lines (base64 blobs)
+
+interface HeadInfo {
+  cwd?: string;
+  sessionId?: string;
+  summary?: string;
+  firstUserText?: string;
+}
+
+/**
+ * Stream complete lines from the head of a transcript until metadata is
+ * found. Oversized lines (e.g. multi-MB base64 attachments) are skipped
+ * without parsing instead of aborting the scan — see the needmor bug.
+ */
+function scanHead(file: string, maxBytes = 16 * 1024 * 1024, maxLines = 400): HeadInfo {
+  const info: HeadInfo = {};
+  const fd = fs.openSync(file, 'r');
+  try {
+    const chunk = Buffer.alloc(65536);
+    let leftover = '';
+    let offset = 0;
+    let linesSeen = 0;
+    while (offset < maxBytes && linesSeen < maxLines) {
+      const read = fs.readSync(fd, chunk, 0, chunk.length, offset);
+      if (read <= 0) break;
+      offset += read;
+      leftover += chunk.toString('utf8', 0, read);
+      let nl;
+      while ((nl = leftover.indexOf('\n')) >= 0) {
+        const line = leftover.slice(0, nl);
+        leftover = leftover.slice(nl + 1);
+        linesSeen++;
+        if (!line.trim() || line.length > MAX_PARSE_LINE) continue;
+        let parsed: TranscriptLine;
+        try {
+          parsed = JSON.parse(line) as TranscriptLine;
+        } catch {
+          continue;
+        }
+        info.cwd ??= parsed.cwd;
+        info.sessionId ??= parsed.sessionId;
+        if (!info.summary && parsed.type === 'summary' && typeof parsed.summary === 'string') {
+          info.summary = parsed.summary;
+        }
+        if (!info.firstUserText && !parsed.isMeta && parsed.type === 'user') {
+          const text = firstTextOf(parsed.message?.content);
+          if (text && !text.startsWith('<')) {
+            info.firstUserText = text.slice(0, 60).replace(/\s+/g, ' ');
+          }
+        }
+        if (info.cwd && info.sessionId && (info.summary || info.firstUserText)) return info;
+      }
+      // Guard: if a single line exceeds the whole budget, drop what we have.
+      if (leftover.length > maxBytes) leftover = '';
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return info;
 }
 
 function firstTextOf(content: unknown): string | null {
@@ -50,38 +112,13 @@ export function listClaudeSessions(): ClaudeSessionCandidate[] {
       const full = path.join(dirPath, file);
       try {
         const stat = fs.statSync(full);
-        // Read only the head of the file for metadata — transcripts can be huge.
-        const fd = fs.openSync(full, 'r');
-        const buf = Buffer.alloc(32768);
-        const read = fs.readSync(fd, buf, 0, buf.length, 0);
-        fs.closeSync(fd);
-        const headLines = buf.toString('utf8', 0, read).split('\n');
-        let cwd: string | undefined;
-        let sessionId: string | undefined;
-        let title: string | undefined;
-        for (const line of headLines) {
-          if (!line.trim()) continue;
-          let parsed: TranscriptLine;
-          try {
-            parsed = JSON.parse(line) as TranscriptLine;
-          } catch {
-            continue; // last line may be cut off by the head read
-          }
-          cwd ??= parsed.cwd;
-          sessionId ??= parsed.sessionId;
-          if (!title && !parsed.isMeta && parsed.type === 'user') {
-            const text = firstTextOf(parsed.message?.content);
-            if (text && !text.startsWith('<')) title = text.slice(0, 60).replace(/\s+/g, ' ');
-          }
-          if (cwd && sessionId && title) break;
-        }
-        if (!sessionId) sessionId = path.basename(file, '.jsonl');
-        if (!cwd) continue;
+        const info = scanHead(full);
+        if (!info.cwd) continue;
         out.push({
           file: full,
-          sdkSessionId: sessionId,
-          cwd,
-          title: title ?? path.basename(cwd),
+          sdkSessionId: info.sessionId ?? path.basename(file, '.jsonl'),
+          cwd: info.cwd,
+          title: info.summary ?? info.firstUserText ?? path.basename(info.cwd),
           mtimeMs: stat.mtimeMs,
         });
       } catch {
@@ -99,6 +136,7 @@ export function importClaudeSession(registry: Registry, file: string): SessionMe
   const events: ChatEvent[] = [];
   let cwd: string | undefined;
   let sessionId: string | undefined;
+  let summaryTitle: string | undefined;
   let title: string | undefined;
   const timestamps: number[] = [];
 
@@ -112,6 +150,9 @@ export function importClaudeSession(registry: Registry, file: string): SessionMe
     }
     cwd ??= parsed.cwd;
     sessionId ??= parsed.sessionId;
+    if (parsed.type === 'summary' && typeof parsed.summary === 'string') {
+      summaryTitle ??= parsed.summary;
+    }
     if (parsed.isMeta) continue;
     const ts = parsed.timestamp ? Date.parse(parsed.timestamp) : Date.now();
     const content = parsed.message?.content;
@@ -167,7 +208,11 @@ export function importClaudeSession(registry: Registry, file: string): SessionMe
   }
 
   if (!cwd) throw new Error('Could not determine the session working directory');
-  const meta = registry.create(cwd, title ? `⤵ ${title}` : `Imported ${path.basename(file, '.jsonl')}`);
+  const bestTitle = summaryTitle ?? title;
+  const meta = registry.create(
+    cwd,
+    bestTitle ? `⤵ ${bestTitle}` : `Imported ${path.basename(file, '.jsonl')}`,
+  );
   meta.sdkSessionId = sessionId ?? path.basename(file, '.jsonl');
   registry.save();
 

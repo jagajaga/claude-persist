@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Kandinsky-inspired: quiet cream field, circles in tension, one diagonal -->
+  <rect width="256" height="256" fill="#EDE6D6"/>
+
+  <!-- large deep-blue circle, off-center (the session: persistent, whole) -->
+  <circle cx="150" cy="112" r="72" fill="#1F3A6E"/>
+  <!-- inner warm circle, eccentric within the blue (the living conversation) -->
+  <circle cx="168" cy="94" r="34" fill="#D9483B"/>
+  <!-- small yellow satellite (the reconnecting client) -->
+  <circle cx="62" cy="180" r="22" fill="#E8B33C"/>
+  <!-- thin black orbit ring around the yellow, open composition -->
+  <circle cx="62" cy="180" r="34" fill="none" stroke="#191714" stroke-width="3"/>
+
+  <!-- the diagonal: connection cutting across, survives everything -->
+  <line x1="34" y1="228" x2="222" y2="52" stroke="#191714" stroke-width="7" stroke-linecap="round"/>
+
+  <!-- small triangle accent, top-left counterweight -->
+  <path d="M 46 44 L 84 32 L 62 72 Z" fill="none" stroke="#1F3A6E" stroke-width="5" stroke-linejoin="round"/>
+
+  <!-- tiny filled dot, bottom-right balance -->
+  <circle cx="214" cy="212" r="9" fill="#191714"/>
+</svg>

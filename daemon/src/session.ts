@@ -139,6 +139,19 @@ export class DaemonSession {
     await this.activeQuery?.interrupt();
   }
 
+  async setPermissionMode(mode: NonNullable<SessionMeta['permissionMode']>): Promise<void> {
+    this.meta.permissionMode = mode;
+    this.callbacks.onMetaChanged();
+    // Bypass mode stops future canUseTool prompts; unblock any prompt that is
+    // already waiting, otherwise the turn stays parked on a stale question.
+    if (mode === 'bypassPermissions') {
+      for (const requestId of [...this.pendingPermissions.keys()]) {
+        this.resolvePermission(requestId, true);
+      }
+    }
+    await this.activeQuery?.setPermissionMode(mode);
+  }
+
   resolvePermission(requestId: string, allow: boolean, message?: string): void {
     const resolve = this.pendingPermissions.get(requestId);
     if (!resolve) return;
@@ -164,6 +177,7 @@ export class DaemonSession {
         cwd: this.meta.cwd,
         ...(this.meta.sdkSessionId ? { resume: this.meta.sdkSessionId } : {}),
         includePartialMessages: true,
+        permissionMode: this.meta.permissionMode ?? 'default',
         canUseTool: this.canUseTool,
       },
     });
@@ -218,6 +232,7 @@ export class DaemonSession {
           } else if (block.type === 'tool_use') {
             this.appendEvent({
               type: 'tool_use',
+              toolUseId: typeof block.id === 'string' ? block.id : undefined,
               toolName: String(block.name ?? 'tool'),
               input: block.input,
             });
@@ -234,7 +249,8 @@ export class DaemonSession {
             if (block.type === 'tool_result') {
               this.appendEvent({
                 type: 'tool_result',
-                summary: summarize(block.content, 800),
+                toolUseId: typeof block.tool_use_id === 'string' ? block.tool_use_id : undefined,
+                summary: summarize(block.content, 1500),
                 isError: block.is_error === true,
               });
             }

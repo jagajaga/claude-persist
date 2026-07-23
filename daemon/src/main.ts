@@ -69,6 +69,7 @@ function sessionInfo(id: string): SessionInfo {
     title: meta.title,
     cwd: meta.cwd,
     status: live?.status ?? 'idle',
+    permissionMode: meta.permissionMode ?? 'default',
     createdAt: meta.createdAt,
     lastActivityAt: meta.lastActivityAt,
     eventCount: live?.eventCount ?? 0,
@@ -111,6 +112,10 @@ function handleRequest(client: Client, req: Request): unknown {
     }
     case 'permission': {
       getSession(req.sessionId).resolvePermission(req.requestId, req.allow, req.message);
+      return null;
+    }
+    case 'setPermissionMode': {
+      void getSession(req.sessionId).setPermissionMode(req.mode);
       return null;
     }
     case 'deleteSession': {

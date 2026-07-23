@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import type {
+  PermissionMode,
   PersistedEvent,
   Request,
   ServerMessage,
@@ -181,6 +182,10 @@ export class DaemonClient {
 
   permission(sessionId: string, requestId: string, allow: boolean, message?: string): Promise<void> {
     return this.request({ op: 'permission', sessionId, requestId, allow, message });
+  }
+
+  setPermissionMode(sessionId: string, mode: PermissionMode): Promise<void> {
+    return this.request({ op: 'setPermissionMode', sessionId, mode });
   }
 
   deleteSession(sessionId: string): Promise<void> {

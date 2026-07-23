@@ -83,6 +83,12 @@ export class ChatPanelManager {
               typeof msg.message === 'string' ? msg.message : undefined,
             );
             break;
+          case 'setPermissionMode':
+            await client.setPermissionMode(
+              sessionId,
+              msg.mode as 'default' | 'bypassPermissions',
+            );
+            break;
         }
       } catch (err) {
         void vscode.window.showErrorMessage(
@@ -141,13 +147,25 @@ export class ChatPanelManager {
   <title>Claude</title>
 </head>
 <body data-session-id="${sessionId}">
-  <main id="messages"></main>
+  <main id="messages"><div id="thread"></div></main>
   <footer id="composer">
-    <div id="status-line" hidden><span class="spinner"></span><span id="status-text">Working…</span>
-      <button id="stop">Stop</button></div>
-    <div id="input-row">
-      <textarea id="input" rows="1" placeholder="Message Claude… (Enter to send, Shift+Enter for newline)"></textarea>
-      <button id="send" title="Send">➤</button>
+    <div id="status-line" hidden>
+      <span class="spinner"></span><span id="status-text">Working…</span>
+      <button id="stop" class="pill">Stop</button>
+    </div>
+    <div id="input-box">
+      <textarea id="input" rows="1" placeholder="Message Claude…"></textarea>
+      <div id="composer-row">
+        <button id="attach" class="icon-btn" title="Attachments — coming soon" disabled>+</button>
+        <span class="flex-spacer"></span>
+        <button id="perm-toggle" class="pill" title="Toggle bypass permissions">
+          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 1 2.5 3v4.1c0 3.3 2.3 6.4 5.5 7.4 3.2-1 5.5-4.1 5.5-7.4V3L8 1zm0 1.6 4 1.5v3c0 2.6-1.7 5-4 5.9-2.3-.9-4-3.3-4-5.9v-3l4-1.5z"/></svg>
+          <span>Bypass permissions</span>
+        </button>
+        <button id="send" class="send-btn" title="Send (Enter)">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M8 2.5 3 7.6l1 1 3.3-3.4V13.5h1.4V5.2L12 8.6l1-1L8 2.5z"/></svg>
+        </button>
+      </div>
     </div>
   </footer>
   <script nonce="${nonce}" src="${scriptUri}"></script>

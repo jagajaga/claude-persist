@@ -10,11 +10,15 @@ export const PROTOCOL_VERSION = 1;
 
 export type SessionStatus = 'idle' | 'running' | 'error';
 
+/** Mirrors the Agent SDK's PermissionMode (the UI exposes default/bypass). */
+export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
+
 export interface SessionInfo {
   id: string;
   title: string;
   cwd: string;
   status: SessionStatus;
+  permissionMode: PermissionMode;
   createdAt: number;
   lastActivityAt: number;
   eventCount: number;
@@ -24,8 +28,8 @@ export interface SessionInfo {
 export type ChatEvent =
   | { type: 'user_message'; text: string }
   | { type: 'assistant_text'; text: string }
-  | { type: 'tool_use'; toolName: string; input: unknown }
-  | { type: 'tool_result'; summary: string; isError: boolean }
+  | { type: 'tool_use'; toolUseId?: string; toolName: string; input: unknown }
+  | { type: 'tool_result'; toolUseId?: string; summary: string; isError: boolean }
   | { type: 'permission_request'; requestId: string; toolName: string; input: unknown }
   | { type: 'permission_resolved'; requestId: string; allowed: boolean }
   | { type: 'status'; status: SessionStatus; detail?: string }
@@ -46,6 +50,7 @@ export type Request =
   | { id: number; op: 'sendMessage'; sessionId: string; text: string }
   | { id: number; op: 'interrupt'; sessionId: string }
   | { id: number; op: 'permission'; sessionId: string; requestId: string; allow: boolean; message?: string }
+  | { id: number; op: 'setPermissionMode'; sessionId: string; mode: PermissionMode }
   | { id: number; op: 'deleteSession'; sessionId: string };
 
 export type Push =

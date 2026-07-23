@@ -8,6 +8,7 @@ export interface SessionMeta {
   cwd: string;
   /** Claude Agent SDK session id, once known — used to resume after a daemon restart. */
   sdkSessionId?: string;
+  permissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
   createdAt: number;
   lastActivityAt: number;
 }

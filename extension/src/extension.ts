@@ -4,9 +4,11 @@ import * as path from 'path';
 import type { SessionInfo } from '@claude-persist/shared';
 import { DaemonClient } from './daemonClient';
 import { ChatPanelManager, VIEW_TYPE } from './chatPanel';
+import { SessionsProvider } from './sessionsView';
 
 let client: DaemonClient | null = null;
 let panels: ChatPanelManager;
+let sessionsProvider: SessionsProvider;
 let statusItem: vscode.StatusBarItem;
 
 function resolveDaemonEntry(context: vscode.ExtensionContext): string {
@@ -28,16 +30,18 @@ async function ensureClient(context: vscode.ExtensionContext): Promise<DaemonCli
   const fresh = new DaemonClient(resolveDaemonEntry(context), {
     onEvent: (sessionId, event) => panels.handleEvent(sessionId, event),
     onDelta: (sessionId, text) => panels.handleDelta(sessionId, text),
-    onSessionsChanged: () => undefined,
+    onSessionsChanged: () => sessionsProvider.refresh(),
     onDisconnect: () => {
       statusItem.text = '$(debug-disconnect) Claude Persist';
       statusItem.tooltip = 'Daemon disconnected — will reconnect on next action';
+      sessionsProvider.refresh();
     },
   });
   await fresh.connect();
   client = fresh;
   statusItem.text = '$(sparkle) Claude Persist';
   statusItem.tooltip = 'Connected to claude-persist daemon';
+  sessionsProvider.refresh();
   await panels.reattachAll();
   return fresh;
 }
@@ -78,6 +82,10 @@ async function pickSession(c: DaemonClient): Promise<SessionInfo | undefined> {
 
 export function activate(context: vscode.ExtensionContext): void {
   panels = new ChatPanelManager(context, () => client);
+  sessionsProvider = new SessionsProvider(() => client);
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider('claudePersist.sessions', sessionsProvider),
+  );
 
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusItem.text = '$(sparkle) Claude Persist';
@@ -133,6 +141,48 @@ export function activate(context: vscode.ExtensionContext): void {
         );
       }
     }),
+
+    vscode.commands.registerCommand('claudePersist.refreshSessions', async () => {
+      try {
+        await ensureClient(context);
+      } catch {
+        // stay silent — the view's emptiness is the signal
+      }
+      sessionsProvider.refresh();
+    }),
+
+    vscode.commands.registerCommand(
+      'claudePersist.openSessionFromTree',
+      async (session: SessionInfo) => {
+        try {
+          await ensureClient(context);
+          await panels.openSession(session);
+        } catch (err) {
+          void vscode.window.showErrorMessage(
+            `Claude Persist: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+    ),
+
+    vscode.commands.registerCommand(
+      'claudePersist.deleteSessionItem',
+      async (session: SessionInfo) => {
+        try {
+          const c = await ensureClient(context);
+          const confirmed = await vscode.window.showWarningMessage(
+            `Delete session "${session.title}" and its history?`,
+            { modal: true },
+            'Delete',
+          );
+          if (confirmed === 'Delete') await c.deleteSession(session.id);
+        } catch (err) {
+          void vscode.window.showErrorMessage(
+            `Claude Persist: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+    ),
   );
 
   // Restore chat tabs after a window reload (including browser refresh in

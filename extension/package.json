@@ -2,7 +2,7 @@
   "name": "claude-persist-vscode",
   "displayName": "Claude Persist",
   "description": "Persistent Claude Code sessions that survive window reloads — chat tabs backed by a server-side daemon (code-server friendly)",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "jaga",
   "license": "MIT",
   "engines": {
@@ -17,10 +17,36 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claudePersist",
+          "title": "Claude Persist",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "claudePersist": [
+        {
+          "id": "claudePersist.sessions",
+          "name": "Sessions",
+          "icon": "media/icon.svg",
+          "contextualTitle": "Claude Persist"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "claudePersist.sessions",
+        "contents": "No Claude sessions yet.\n[New Session](command:claudePersist.newSession)\nSessions run in a server-side daemon and survive window reloads."
+      }
+    ],
     "commands": [
       {
         "command": "claudePersist.newSession",
-        "title": "Claude Persist: New Session"
+        "title": "Claude Persist: New Session",
+        "icon": "$(add)"
       },
       {
         "command": "claudePersist.openSession",
@@ -29,8 +55,53 @@
       {
         "command": "claudePersist.deleteSession",
         "title": "Claude Persist: Delete Session"
+      },
+      {
+        "command": "claudePersist.refreshSessions",
+        "title": "Claude Persist: Refresh Sessions",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "claudePersist.openSessionFromTree",
+        "title": "Open Session"
+      },
+      {
+        "command": "claudePersist.deleteSessionItem",
+        "title": "Delete Session",
+        "icon": "$(trash)"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "claudePersist.newSession",
+          "when": "view == claudePersist.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "claudePersist.refreshSessions",
+          "when": "view == claudePersist.sessions",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "claudePersist.deleteSessionItem",
+          "when": "view == claudePersist.sessions && viewItem == claudeSession",
+          "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "claudePersist.openSessionFromTree",
+          "when": "false"
+        },
+        {
+          "command": "claudePersist.deleteSessionItem",
+          "when": "false"
+        }
+      ]
+    },
     "configuration": {
       "title": "Claude Persist",
       "properties": {

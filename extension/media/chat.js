@@ -677,8 +677,14 @@
 
   const attachMenu = el('div', 'attach-menu');
   attachMenu.hidden = true;
-  const deviceBtn = el('button', 'menu-item', '📤 Upload from this device');
-  const serverBtn = el('button', 'menu-item', '📁 Browse server files');
+  const ICON_DEVICE =
+    '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M8 1.5 4.7 4.8l1 1L7.3 4.2V10h1.4V4.2l1.6 1.6 1-1L8 1.5zM3 9v4.5h10V9h-1.4v3.1H4.4V9H3z"/></svg>';
+  const ICON_SERVER =
+    '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M1.5 3.2 2.7 2h3.1l1.2 1.2H14a.5.5 0 0 1 .5.5v9a.5.5 0 0 1-.5.5H2a.5.5 0 0 1-.5-.5V3.2zm1.4.3v8.9h10.2V4.6H6.4L5.2 3.5H2.9z"/></svg>';
+  const deviceBtn = el('button', 'menu-item');
+  deviceBtn.innerHTML = `${ICON_DEVICE}<span>Upload from this device</span>`;
+  const serverBtn = el('button', 'menu-item');
+  serverBtn.innerHTML = `${ICON_SERVER}<span>Browse server files</span>`;
   attachMenu.appendChild(deviceBtn);
   attachMenu.appendChild(serverBtn);
   document.getElementById('composer').appendChild(attachMenu);

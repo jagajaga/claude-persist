@@ -303,11 +303,16 @@ button.secondary {
 #composer-row { display: flex; align-items: center; gap: 8px; }
 .flex-spacer { flex: 1; }
 
-@media (max-width: 520px) {
+@media (max-width: 640px) {
   #thread { padding: 12px 12px 6px; }
   #composer { padding-left: 12px; padding-right: 12px; }
   .pill span { display: none; }         /* icon-only bypass toggle on phones */
   .pill { padding: 6px 9px; }
+  /* Composer controls wrap instead of overflowing off-screen. */
+  #composer-row { flex-wrap: wrap; row-gap: 8px; }
+  .flex-spacer { display: none; }        /* no push-apart when wrapping */
+  .send-btn { margin-left: auto; }       /* keep send at the trailing edge */
+  .attach-menu { left: 12px; right: 12px; }
 }
 
 /* ---------- markdown tables ---------------------------------------------- */
@@ -515,6 +520,9 @@ button.secondary {
   z-index: 10;
 }
 .menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
   background: transparent;
   color: var(--vscode-foreground);
   text-align: left;
@@ -522,4 +530,6 @@ button.secondary {
   border-radius: 7px;
   white-space: nowrap;
 }
+.menu-item svg { color: var(--vscode-descriptionForeground); flex: none; }
 .menu-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
+.menu-item:hover svg { color: var(--vscode-foreground); }

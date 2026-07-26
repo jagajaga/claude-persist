@@ -1,8 +1,9 @@
 name: Update Agent SDK
 
-# Daily check for a new @anthropic-ai/claude-agent-sdk (new Claude models
-# ship through it). Opens a PR bumping the SDK + extension patch version;
-# merging it and pushing the matching tag produces a release automatically.
+# Fully automatic: when a new @anthropic-ai/claude-agent-sdk ships (new
+# Claude models arrive through it), bump it, build, commit to main, tag,
+# and publish the release with the .vsix — no human in the loop. Installed
+# extensions then pick it up via their built-in update check.
 on:
   schedule:
     - cron: '17 6 * * *'
@@ -10,10 +11,9 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
-  bump:
+  bump-and-release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,34 +32,41 @@ jobs:
           echo "latest=$latest"   >> "$GITHUB_OUTPUT"
           [ "$current" != "$latest" ] && echo "bump=yes" >> "$GITHUB_OUTPUT" || echo "bump=no" >> "$GITHUB_OUTPUT"
 
-      - name: Bump SDK and extension version
+      - name: Bump, build, package
         if: steps.check.outputs.bump == 'yes'
+        id: bump
         run: |
           npm install @anthropic-ai/claude-agent-sdk@${{ steps.check.outputs.latest }}
-          node -e "
+          version=$(node -e "
             const fs = require('fs');
             const p = JSON.parse(fs.readFileSync('extension/package.json','utf8'));
             const [a,b,c] = p.version.split('.').map(Number);
             p.version = [a, b, c+1].join('.');
             fs.writeFileSync('extension/package.json', JSON.stringify(p, null, 2) + '\n');
-            console.log('extension ->', p.version);
-          "
-          npm run build
+            console.log(p.version);
+          ")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          bash scripts/package.sh
+          echo "file=$(ls claude-persist-*.vsix)" >> "$GITHUB_OUTPUT"
 
-      - name: Open pull request
+      - name: Commit and tag
         if: steps.check.outputs.bump == 'yes'
-        uses: peter-evans/create-pull-request@v6
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json extension/package.json
+          git commit -m "chore(claude-agent-sdk): ${{ steps.check.outputs.current }} -> ${{ steps.check.outputs.latest }}"
+          git tag -a "v${{ steps.bump.outputs.version }}" -m "v${{ steps.bump.outputs.version }}"
+          git push origin HEAD:main "v${{ steps.bump.outputs.version }}"
+
+      - name: Publish release
+        if: steps.check.outputs.bump == 'yes'
+        uses: softprops/action-gh-release@v2
         with:
-          branch: ci/sdk-bump
-          title: 'chore(claude-agent-sdk): ${{ steps.check.outputs.current }} -> ${{ steps.check.outputs.latest }}'
-          commit-message: 'chore(claude-agent-sdk): ${{ steps.check.outputs.current }} -> ${{ steps.check.outputs.latest }}'
+          tag_name: v${{ steps.bump.outputs.version }}
+          name: v${{ steps.bump.outputs.version }}
+          files: ${{ steps.bump.outputs.file }}
           body: |
-            Automated SDK bump — new Claude models ship through the Agent SDK,
-            so merging this keeps the dynamic model picker current.
-
-            After merging, tag the new extension version (see the bumped
-            `extension/package.json`) to trigger the release build:
-
-            ```
-            git tag -a v<version> -m v<version> && git push origin v<version>
-            ```
+            Automated release: Claude Agent SDK ${{ steps.check.outputs.current }} → ${{ steps.check.outputs.latest }}.
+            New Claude models ship through the SDK, so the model picker stays current.
+            Installed extensions will offer this update automatically.

@@ -96,6 +96,20 @@ daemon.
 | `shared/` | Wire protocol types shared by both |
 | `scripts/package.sh` | Builds and bundles everything into the `.vsix` |
 
+### Mobile (Android) keyboard
+
+Android Chrome overlays the on-screen keyboard over code-server's
+fixed-position workbench (`resizes-visual` default), hiding the composer —
+and no webview-side code can compensate. Run once on the server (and after
+each code-server upgrade):
+
+```bash
+./scripts/fix-mobile-keyboard.sh
+```
+
+It adds `interactive-widget=resizes-content` to code-server's viewport meta
+so the keyboard resizes the whole workbench. Hard-reload the browser after.
+
 ### Optional: daemon under systemd
 
 The daemon is self-spawning, but a user unit survives server reboots:

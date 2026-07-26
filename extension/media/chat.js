@@ -60,6 +60,40 @@
     if (pinned) scrollToBottom();
   });
 
+  // Mobile keyboards shrink the visual viewport without changing layout height,
+  // which leaves the composer hidden behind the keyboard. Constrain the body to
+  // the actually-visible height so the input stays above the keyboard.
+  if (window.visualViewport) {
+    const vv = window.visualViewport;
+    const fitViewport = () => {
+      document.body.style.height = `${vv.height}px`;
+      if (pinned) scrollToBottom();
+    };
+    vv.addEventListener('resize', fitViewport);
+    vv.addEventListener('scroll', fitViewport);
+    fitViewport();
+  }
+  // When the field gains focus (keyboard opening), force the composer into
+  // view. The webview is an iframe inside code-server's page, so we rely on
+  // scrollIntoView propagating to the top-level viewport — and mobile keyboard
+  // animations settle late, so repeat until they do.
+  function revealComposer() {
+    for (const delay of [50, 250, 600, 1100]) {
+      setTimeout(() => {
+        if (document.activeElement !== inputEl) return;
+        if (pinned) scrollToBottom();
+        document.getElementById('composer').scrollIntoView({ block: 'end' });
+      }, delay);
+    }
+  }
+  inputEl.addEventListener('focus', revealComposer);
+  inputEl.addEventListener('input', () => {
+    // Keep the composer revealed while typing grows the box.
+    if (document.activeElement === inputEl) {
+      document.getElementById('composer').scrollIntoView({ block: 'end' });
+    }
+  });
+
   // Sticky bar showing the last user prompt whenever it has scrolled out of
   // view; clicking jumps back to where the current exchange started.
   let lastUserEl = null;

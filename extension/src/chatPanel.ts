@@ -45,7 +45,21 @@ export class ChatPanelManager {
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly client: () => DaemonClient | null,
+    /** Connects (or reconnects) to the daemon; used when client() is null. */
+    private readonly ensure?: () => Promise<DaemonClient>,
   ) {}
+
+  /** Current client, or connect on demand — never silently null for actions. */
+  private async requireClient(): Promise<DaemonClient | null> {
+    const existing = this.client();
+    if (existing?.connected) return existing;
+    if (!this.ensure) return null;
+    try {
+      return await this.ensure();
+    } catch {
+      return null;
+    }
+  }
 
   handleEvent(sessionId: string, event: PersistedEvent): void {
     const entry = this.panels.get(sessionId);
@@ -129,15 +143,25 @@ export class ChatPanelManager {
         this.postChips(entry);
         return;
       }
-      const client = this.client();
-      if (!client) return;
+      // 'ready' must never be dropped: mark the panel ready even with no
+      // daemon connection yet, so reattachAll() finds it after connect.
+      if (msg.type === 'ready') {
+        entry.ready = true;
+        for (const queued of entry.queue.splice(0)) void panel.webview.postMessage(queued);
+        if (await this.requireClient()) {
+          await this.attach(entry).catch(() => undefined);
+        }
+        return;
+      }
+      const client = await this.requireClient();
+      if (!client) {
+        void vscode.window.showWarningMessage(
+          'Claude Persist: daemon not reachable yet — reconnecting in the background, try again in a moment.',
+        );
+        return;
+      }
       try {
         switch (msg.type) {
-          case 'ready':
-            entry.ready = true;
-            for (const queued of entry.queue.splice(0)) void panel.webview.postMessage(queued);
-            await this.attach(entry);
-            break;
           case 'send':
             await client.sendMessage(sessionId, String(msg.text ?? ''), entry.pendingAttachments);
             entry.pendingAttachments = [];

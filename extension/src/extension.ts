@@ -11,6 +11,19 @@ let client: DaemonClient | null = null;
 let panels: ChatPanelManager;
 let sessionsProvider: SessionsProvider;
 let statusItem: vscode.StatusBarItem;
+let reconnectTimer: NodeJS.Timeout | undefined;
+let connecting: Promise<DaemonClient> | null = null;
+
+/** Background reconnect with backoff after a daemon disconnect. */
+function scheduleReconnect(context: vscode.ExtensionContext, delayMs = 1000): void {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = undefined;
+    ensureClient(context).catch(() =>
+      scheduleReconnect(context, Math.min(delayMs * 2, 15000)),
+    );
+  }, delayMs);
+}
 
 function resolveDaemonEntry(context: vscode.ExtensionContext): string {
   const configured = vscode.workspace.getConfiguration('claudePersist').get<string>('daemonEntry');
@@ -28,15 +41,25 @@ function resolveDaemonEntry(context: vscode.ExtensionContext): string {
 
 async function ensureClient(context: vscode.ExtensionContext): Promise<DaemonClient> {
   if (client?.connected) return client;
+  if (connecting) return connecting; // collapse concurrent connect attempts
+  connecting = doConnect(context).finally(() => {
+    connecting = null;
+  });
+  return connecting;
+}
+
+async function doConnect(context: vscode.ExtensionContext): Promise<DaemonClient> {
   const fresh = new DaemonClient(resolveDaemonEntry(context), {
     onEvent: (sessionId, event) => panels.handleEvent(sessionId, event),
     onDelta: (sessionId, text) => panels.handleDelta(sessionId, text),
     onSessionsChanged: () => sessionsProvider.refresh(),
     onModels: (models) => panels.handleModels(models),
     onDisconnect: () => {
+      client = null;
       statusItem.text = '$(debug-disconnect) Claude Persist';
-      statusItem.tooltip = 'Daemon disconnected — will reconnect on next action';
+      statusItem.tooltip = 'Daemon disconnected — reconnecting…';
       sessionsProvider.refresh();
+      scheduleReconnect(context);
     },
   });
   await fresh.connect();
@@ -83,7 +106,7 @@ async function pickSession(c: DaemonClient): Promise<SessionInfo | undefined> {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-  panels = new ChatPanelManager(context, () => client);
+  panels = new ChatPanelManager(context, () => client, () => ensureClient(context));
   sessionsProvider = new SessionsProvider(() => client);
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('claudePersist.sessions', sessionsProvider),

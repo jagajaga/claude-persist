@@ -666,8 +666,87 @@
     if (pinned) scrollToBottom();
   }
 
+  // ---------- attachments from this device (browser) --------------------------
+
+  const MAX_UPLOAD = 10 * 1024 * 1024;
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.multiple = true;
+  fileInput.hidden = true;
+  document.body.appendChild(fileInput);
+
+  const attachMenu = el('div', 'attach-menu');
+  attachMenu.hidden = true;
+  const deviceBtn = el('button', 'menu-item', '📤 Upload from this device');
+  const serverBtn = el('button', 'menu-item', '📁 Browse server files');
+  attachMenu.appendChild(deviceBtn);
+  attachMenu.appendChild(serverBtn);
+  document.getElementById('composer').appendChild(attachMenu);
+
+  function hideMenu() {
+    attachMenu.hidden = true;
+  }
+
+  function sendFiles(files) {
+    for (const file of files) {
+      if (file.size > MAX_UPLOAD) {
+        vscode.postMessage({
+          type: 'notify',
+          message: `${file.name} is over 10 MB — too large to upload from the browser`,
+        });
+        continue;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = String(reader.result).split(',')[1] || '';
+        vscode.postMessage({
+          type: 'uploadAttachment',
+          name: file.name,
+          mediaType: file.type || 'application/octet-stream',
+          data: base64,
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+
+  fileInput.addEventListener('change', () => {
+    sendFiles([...fileInput.files]);
+    fileInput.value = '';
+  });
+  deviceBtn.addEventListener('click', () => {
+    hideMenu();
+    fileInput.click();
+  });
+  serverBtn.addEventListener('click', () => {
+    hideMenu();
+    vscode.postMessage({ type: 'pickAttachment' });
+  });
+  document.addEventListener('click', (e) => {
+    if (!attachMenu.hidden && !attachMenu.contains(e.target) && e.target !== attachBtn) hideMenu();
+  });
+
+  // Paste an image/file straight into the input.
+  inputEl.addEventListener('paste', (e) => {
+    const files = [...(e.clipboardData?.files || [])];
+    if (files.length) {
+      e.preventDefault();
+      sendFiles(files);
+    }
+  });
+  // Drag & drop anywhere onto the chat.
+  document.body.addEventListener('dragover', (e) => e.preventDefault());
+  document.body.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const files = [...(e.dataTransfer?.files || [])];
+    if (files.length) sendFiles(files);
+  });
+
   sendBtn.addEventListener('click', send);
-  attachBtn.addEventListener('click', () => vscode.postMessage({ type: 'pickAttachment' }));
+  attachBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    attachMenu.hidden = !attachMenu.hidden;
+  });
   ringBtn.addEventListener('click', () => {
     vscode.postMessage({ type: 'compact' });
   });

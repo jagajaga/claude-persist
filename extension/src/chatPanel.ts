@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import type {
   Attachment,
@@ -19,6 +20,8 @@ const IMAGE_TYPES: Record<string, string> = {
   '.webp': 'image/webp',
 };
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const IMAGE_MIMES = new Set(Object.values(IMAGE_TYPES));
+const uploadsDir = path.join(os.homedir(), '.claude-persist', 'uploads');
 
 interface PanelEntry {
   panel: vscode.WebviewPanel;
@@ -101,6 +104,29 @@ export class ChatPanelManager {
     panel.webview.onDidReceiveMessage(async (msg: Record<string, unknown>) => {
       if (msg.type === 'clientError') {
         void vscode.window.showErrorMessage(`Claude Persist webview error: ${String(msg.message)}`);
+        return;
+      }
+      if (msg.type === 'notify') {
+        void vscode.window.showWarningMessage(`Claude Persist: ${String(msg.message)}`);
+        return;
+      }
+      // Upload from the user's device (browser): images become vision blocks,
+      // anything else is written server-side and attached as a path.
+      if (msg.type === 'uploadAttachment') {
+        const name = String(msg.name || 'file').replace(/[^\w.\-]+/g, '_').slice(-80) || 'file';
+        const mediaType = String(msg.mediaType || 'application/octet-stream');
+        const data = String(msg.data || '');
+        const bytes = Buffer.from(data, 'base64');
+        if (IMAGE_MIMES.has(mediaType) && bytes.byteLength <= MAX_IMAGE_BYTES) {
+          entry.pendingAttachments.push({ kind: 'image', name, mediaType, data });
+        } else {
+          const dir = path.join(uploadsDir, sessionId);
+          fs.mkdirSync(dir, { recursive: true });
+          const filePath = path.join(dir, `${Date.now()}-${name}`);
+          fs.writeFileSync(filePath, bytes);
+          entry.pendingAttachments.push({ kind: 'file', path: filePath });
+        }
+        this.postChips(entry);
         return;
       }
       const client = this.client();

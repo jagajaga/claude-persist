@@ -496,3 +496,30 @@ button.secondary {
   font-family: inherit;
 }
 .permission.question.resolved .opt-btn { pointer-events: none; opacity: 0.7; }
+
+/* ---------- attach source menu --------------------------------------------- */
+
+#composer { position: relative; }
+.attach-menu {
+  position: absolute;
+  bottom: 58px;
+  left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px;
+  border-radius: 10px;
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.35));
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+  z-index: 10;
+}
+.menu-item {
+  background: transparent;
+  color: var(--vscode-foreground);
+  text-align: left;
+  padding: 8px 14px;
+  border-radius: 7px;
+  white-space: nowrap;
+}
+.menu-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }

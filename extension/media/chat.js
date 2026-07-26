@@ -719,9 +719,52 @@
   deviceBtn.innerHTML = `${ICON_DEVICE}<span>Upload from this device</span>`;
   const serverBtn = el('button', 'menu-item');
   serverBtn.innerHTML = `${ICON_SERVER}<span>Browse server files</span>`;
+  const ICON_PASTE =
+    '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M6 1.5h4l.5 1H13a.5.5 0 0 1 .5.5v10.5a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5h2.5l.5-1zm.9 1.4-.5 1H4v9.2h8V3.9h-2.4l-.5-1H6.9zM5.5 6.5h5v1.2h-5V6.5zm0 2.6h5v1.2h-5V9.1z"/></svg>';
+  const pasteBtn = el('button', 'menu-item');
+  pasteBtn.innerHTML = `${ICON_PASTE}<span>Paste from clipboard</span>`;
   attachMenu.appendChild(deviceBtn);
+  attachMenu.appendChild(pasteBtn);
   attachMenu.appendChild(serverBtn);
   document.getElementById('composer').appendChild(attachMenu);
+
+  // Mobile long-press paste is unreliable inside webview iframes; this reads
+  // the clipboard explicitly via the async API (permission prompt on first use).
+  async function pasteFromClipboard() {
+    try {
+      let attached = false;
+      if (navigator.clipboard.read) {
+        for (const item of await navigator.clipboard.read()) {
+          const imageType = item.types.find((t) => t.startsWith('image/'));
+          if (imageType) {
+            const blob = await item.getType(imageType);
+            const ext = imageType.split('/')[1] || 'png';
+            sendFiles([new File([blob], `clipboard.${ext}`, { type: imageType })]);
+            attached = true;
+          }
+        }
+      }
+      if (!attached && navigator.clipboard.readText) {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          const start = inputEl.selectionStart ?? inputEl.value.length;
+          inputEl.value =
+            inputEl.value.slice(0, start) + text + inputEl.value.slice(inputEl.selectionEnd ?? start);
+          inputEl.dispatchEvent(new Event('input'));
+          inputEl.focus();
+          attached = true;
+        }
+      }
+      if (!attached) {
+        vscode.postMessage({ type: 'notify', message: 'Clipboard is empty or unreadable.' });
+      }
+    } catch {
+      vscode.postMessage({
+        type: 'notify',
+        message: 'Clipboard access was blocked — allow clipboard permission for this site and retry.',
+      });
+    }
+  }
 
   function hideMenu() {
     attachMenu.hidden = true;
@@ -761,6 +804,10 @@
   serverBtn.addEventListener('click', () => {
     hideMenu();
     vscode.postMessage({ type: 'pickAttachment' });
+  });
+  pasteBtn.addEventListener('click', () => {
+    hideMenu();
+    void pasteFromClipboard();
   });
   document.addEventListener('click', (e) => {
     if (!attachMenu.hidden && !attachMenu.contains(e.target) && e.target !== attachBtn) hideMenu();

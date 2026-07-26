@@ -321,20 +321,23 @@ export class ChatPanelManager {
   }
 
   private html(webview: vscode.Webview, sessionId: string): string {
-    const mediaRoot = vscode.Uri.joinPath(this.context.extensionUri, 'media');
-    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'chat.js'));
-    const markedUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'vendor', 'marked.js'));
-    const purifyUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'vendor', 'purify.min.js'));
-    const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'chat.css'));
+    // All CSS/JS is inlined: external webview resources go through
+    // code-server's client-side service worker, which proved flaky on mobile
+    // (blank, unstyled panels when it goes stale). Inline content cannot fail
+    // to load. Verified: none of these files contain "</script>".
+    const media = (...parts: string[]): string =>
+      fs.readFileSync(path.join(this.context.extensionPath, 'media', ...parts), 'utf8');
+    const inlineCss = media('chat.css');
+    const inlineJs = [media('vendor', 'marked.js'), media('vendor', 'purify.min.js'), media('chat.js')];
     const nonce = Math.random().toString(36).slice(2);
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+        content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link href="${styleUri}" rel="stylesheet">
+  <style nonce="${nonce}">${inlineCss}</style>
   <title>Claude</title>
 </head>
 <body data-session-id="${sessionId}">
@@ -371,9 +374,7 @@ export class ChatPanelManager {
       </div>
     </div>
   </footer>
-  <script nonce="${nonce}" src="${markedUri}"></script>
-  <script nonce="${nonce}" src="${purifyUri}"></script>
-  <script nonce="${nonce}" src="${scriptUri}"></script>
+  ${inlineJs.map((code) => `<script nonce="${nonce}">${code}</script>`).join('\n  ')}
 </body>
 </html>`;
   }

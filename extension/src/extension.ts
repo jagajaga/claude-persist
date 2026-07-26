@@ -5,6 +5,7 @@ import type { SessionInfo } from '@claude-persist/shared';
 import { DaemonClient } from './daemonClient';
 import { ChatPanelManager, VIEW_TYPE } from './chatPanel';
 import { SessionsProvider } from './sessionsView';
+import { checkForUpdate } from './update';
 
 let client: DaemonClient | null = null;
 let panels: ChatPanelManager;
@@ -257,9 +258,18 @@ export function activate(context: vscode.ExtensionContext): void {
     },
   });
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand('claudePersist.checkForUpdate', () =>
+      checkForUpdate(context, true),
+    ),
+  );
+
   // Connect eagerly so restored panels attach right after reload; don't spawn
   // errors at the user on startup if the daemon isn't built yet.
   void ensureClient(context).catch(() => undefined);
+
+  // Sideloaded VSIX installs don't auto-update; check GitHub releases quietly.
+  void checkForUpdate(context).catch(() => undefined);
 }
 
 export function deactivate(): void {

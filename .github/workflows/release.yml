@@ -1,0 +1,38 @@
+name: Release
+
+# Build the self-contained .vsix and attach it to the GitHub release
+# whenever a v* tag is pushed.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build and package
+        run: bash scripts/package.sh
+
+      - name: Locate vsix
+        id: vsix
+        run: echo "file=$(ls claude-persist-*.vsix)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release with vsix
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          files: ${{ steps.vsix.outputs.file }}
+          generate_release_notes: true

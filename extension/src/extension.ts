@@ -293,6 +293,21 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
   );
 
+  // Re-push the model dropdown when the user edits extraModels.
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('claudePersist.extraModels')) panels.refreshModels();
+    }),
+  );
+
+  // Long-lived code-server windows rarely reload; re-check for updates
+  // quietly every 6 hours in addition to the activation check.
+  const updateTimer = setInterval(
+    () => void checkForUpdate(context).catch(() => undefined),
+    6 * 60 * 60 * 1000,
+  );
+  context.subscriptions.push({ dispose: () => clearInterval(updateTimer) });
+
   // Connect eagerly so restored panels attach right after reload; don't spawn
   // errors at the user on startup if the daemon isn't built yet.
   void ensureClient(context).catch(() => undefined);

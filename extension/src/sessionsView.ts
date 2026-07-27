@@ -44,6 +44,8 @@ export class SessionsProvider implements vscode.TreeDataProvider<TreeNode> {
     const session = this.snapshot.find((s) => s.id === sessionId);
     const seen: SeenMap = { ...this.seen() };
     const wasUnread = session ? isUnread(session, seen) : false;
+    // Already saw everything and no dot to clear - skip the redundant write.
+    if (!wasUnread && session && (seen[sessionId] ?? 0) >= session.lastActivityAt) return;
     seen[sessionId] = Math.max(session?.lastActivityAt ?? 0, Date.now());
     void this.state.update(SEEN_KEY, seen);
     if (wasUnread) this.refresh();
@@ -60,11 +62,15 @@ export class SessionsProvider implements vscode.TreeDataProvider<TreeNode> {
   async getChildren(node?: TreeNode): Promise<TreeNode[]> {
     if (node) return isWorkspaceGroup(node) ? node.sessions : [];
     const client = this.client();
-    if (!client?.connected) return [];
+    if (!client?.connected) {
+      this.decorations.update([]);
+      return [];
+    }
     let sessions: SessionInfo[];
     try {
       sessions = await client.listSessions();
     } catch {
+      this.decorations.update([]);
       return [];
     }
     this.snapshot = sessions;

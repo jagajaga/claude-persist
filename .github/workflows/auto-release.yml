@@ -1,0 +1,68 @@
+name: Auto Release
+
+# Every push to main automatically bumps the extension patch version, tags
+# vX.Y.Z, builds the self-contained .vsix, and publishes a GitHub release.
+#
+# Docs-only and CI-only pushes are skipped. The version-bump commit and tag
+# are pushed with GITHUB_TOKEN, which never re-triggers workflows (GitHub's
+# recursion guard) — that is also why this workflow builds and publishes the
+# release itself instead of relying on release.yml (a GITHUB_TOKEN tag push
+# would not fire it). release.yml still handles manually pushed v* tags.
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '.github/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Bump patch version, commit, and tag
+        id: bump
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          OLD=$(node -p "require('./extension/package.json').version")
+          NEW=$(cd extension && npm version patch --no-git-tag-version | tr -d v)
+          git add extension/package.json
+          git commit -m "chore(extension): $OLD -> $NEW"
+          git tag -a "v$NEW" -m "v$NEW"
+          git push origin main "v$NEW"
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build and package
+        run: bash scripts/package.sh
+
+      - name: Locate vsix
+        id: vsix
+        run: echo "file=$(ls claude-persist-*.vsix)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release with vsix
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.bump.outputs.version }}
+          name: v${{ steps.bump.outputs.version }}
+          files: ${{ steps.vsix.outputs.file }}
+          generate_release_notes: true

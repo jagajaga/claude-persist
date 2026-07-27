@@ -471,7 +471,7 @@
               chip.appendChild(fileLink(a.label));
               row.appendChild(chip);
             } else {
-              row.appendChild(el('span', 'chip', `🖼 ${a.label}`));
+              row.appendChild(el('span', 'chip', `▣ ${a.label}`));
             }
           }
           box.appendChild(row);
@@ -545,7 +545,7 @@
           endStreaming();
           setRunning(false);
           if (event.status === 'error') {
-            threadEl.appendChild(el('div', 'meta error', `⚠ ${event.detail || 'error'}`));
+            threadEl.appendChild(el('div', 'meta error', `⚠︎ ${event.detail || 'error'}`));
           }
         }
         break;
@@ -637,7 +637,7 @@
     chipsEl.replaceChildren();
     items.forEach((item, index) => {
       const chip = el('span', 'chip');
-      chip.appendChild(el('span', null, `${item.kind === 'image' ? '🖼 ' : '📄 '}${item.label}`));
+      chip.appendChild(el('span', null, `${item.kind === 'image' ? '▣ ' : '▤ '}${item.label}`));
       const remove = el('button', 'chip-x', '×');
       remove.addEventListener('click', () =>
         vscode.postMessage({ type: 'removeAttachment', index }));

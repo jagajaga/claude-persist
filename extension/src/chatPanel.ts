@@ -73,7 +73,7 @@ export class ChatPanelManager {
     // even when the tab is not focused.
     if (event.event.type === 'status') {
       entry.panel.title =
-        (event.event.status === 'running' ? '⏳ ' : '') + entry.baseTitle;
+        (event.event.status === 'running' ? '⧗ ' : '') + entry.baseTitle;
       if (entry.panel.visible) this.onViewed?.(sessionId);
     }
     this.post(entry, { type: 'event', event });
@@ -302,9 +302,9 @@ export class ChatPanelManager {
   setTitle(sessionId: string, title: string): void {
     const entry = this.panels.get(sessionId);
     if (!entry) return;
-    const running = entry.panel.title.startsWith('⏳');
+    const running = entry.panel.title.startsWith('⧗');
     entry.baseTitle = title;
-    entry.panel.title = (running ? '⏳ ' : '') + title;
+    entry.panel.title = (running ? '⧗ ' : '') + title;
   }
 
   /** Re-attach every open panel — used after the daemon connection is (re)established. */
@@ -330,7 +330,7 @@ export class ChatPanelManager {
     const result = await client.attach(entry.sessionId, entry.lastSeq);
     entry.baseTitle = result.info.title;
     entry.panel.title =
-      (result.info.status === 'running' ? '⏳ ' : '') + result.info.title;
+      (result.info.status === 'running' ? '⧗ ' : '') + result.info.title;
     entry.cwd = result.info.cwd;
     if (result.events.length > 0) {
       entry.lastSeq = result.events[result.events.length - 1].seq + 1;

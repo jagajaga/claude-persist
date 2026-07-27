@@ -236,7 +236,7 @@ Expected: PASS — `# pass 9`, `# fail 0`
 
 ```bash
 git add extension/src/sessionsModel.ts extension/src/sessionsModel.test.ts
-git commit -m "feat(extension): workspace-grouping session model with unread state"
+git commit -m "feat(extension): add workspace-grouping session model with unread state"
 ```
 
 ---
@@ -312,7 +312,7 @@ Expected: exit 0, no errors
 
 ```bash
 git add extension/src/unreadDecorations.ts
-git commit -m "feat(extension): unread red-dot decoration provider"
+git commit -m "feat(extension): add unread red-dot decoration provider"
 ```
 
 ---

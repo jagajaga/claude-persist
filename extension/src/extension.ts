@@ -107,7 +107,12 @@ async function pickSession(c: DaemonClient): Promise<SessionInfo | undefined> {
 
 export function activate(context: vscode.ExtensionContext): void {
   sessionsProvider = new SessionsProvider(() => client, context.globalState);
-  panels = new ChatPanelManager(context, () => client, () => ensureClient(context));
+  panels = new ChatPanelManager(
+    context,
+    () => client,
+    () => ensureClient(context),
+    (sessionId) => sessionsProvider.markSeen(sessionId),
+  );
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('claudePersist.sessions', sessionsProvider),
     vscode.window.registerFileDecorationProvider(sessionsProvider.decorations),

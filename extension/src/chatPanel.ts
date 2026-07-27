@@ -49,6 +49,8 @@ export class ChatPanelManager {
     private readonly client: () => DaemonClient | null,
     /** Connects (or reconnects) to the daemon; used when client() is null. */
     private readonly ensure?: () => Promise<DaemonClient>,
+    /** Called whenever the user is looking at a session's chat tab. */
+    private readonly onViewed?: (sessionId: string) => void,
   ) {}
 
   /** Current client, or connect on demand — never silently null for actions. */
@@ -72,6 +74,7 @@ export class ChatPanelManager {
     if (event.event.type === 'status') {
       entry.panel.title =
         (event.event.status === 'running' ? '⏳ ' : '') + entry.baseTitle;
+      if (entry.panel.visible) this.onViewed?.(sessionId);
     }
     this.post(entry, { type: 'event', event });
   }
@@ -116,6 +119,10 @@ export class ChatPanelManager {
       uploads: new Map(),
     };
     this.panels.set(sessionId, entry);
+    panel.onDidChangeViewState((e) => {
+      if (e.webviewPanel.visible) this.onViewed?.(sessionId);
+    });
+    if (panel.visible) this.onViewed?.(sessionId);
     panel.webview.html = this.html(panel.webview, sessionId);
 
     panel.webview.onDidReceiveMessage(async (msg: Record<string, unknown>) => {

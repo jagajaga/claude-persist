@@ -32,6 +32,8 @@ interface PanelEntry {
   cwd?: string;
   baseTitle: string;
   pendingAttachments: Attachment[];
+  /** In-flight chunked uploads from the browser, keyed by uploadId. */
+  uploads: Map<string, { name: string; mediaType: string; total: number; chunks: string[] }>;
 }
 
 /**
@@ -111,6 +113,7 @@ export class ChatPanelManager {
       queue: [],
       baseTitle: title ?? panel.title,
       pendingAttachments: [],
+      uploads: new Map(),
     };
     this.panels.set(sessionId, entry);
     panel.webview.html = this.html(panel.webview, sessionId);
@@ -124,19 +127,42 @@ export class ChatPanelManager {
         void vscode.window.showWarningMessage(`Claude Persist: ${String(msg.message)}`);
         return;
       }
-      // Upload from the user's device (browser): images become vision blocks,
-      // anything else is written server-side and attached as a path.
-      if (msg.type === 'uploadAttachment') {
-        const name = String(msg.name || 'file').replace(/[^\w.\-]+/g, '_').slice(-80) || 'file';
-        const mediaType = String(msg.mediaType || 'application/octet-stream');
-        const data = String(msg.data || '');
+      // Chunked upload from the user's device (browser). Chunks are acked
+      // individually so the webview can show real delivery progress on slow
+      // connections. Images become vision blocks, anything else is written
+      // server-side and attached as a path.
+      if (msg.type === 'uploadBegin') {
+        entry.uploads.set(String(msg.uploadId), {
+          name: String(msg.name || 'file').replace(/[^\w.\-]+/g, '_').slice(-80) || 'file',
+          mediaType: String(msg.mediaType || 'application/octet-stream'),
+          total: Math.max(1, Number(msg.chunks) || 1),
+          chunks: [],
+        });
+        return;
+      }
+      if (msg.type === 'uploadChunk') {
+        const uploadId = String(msg.uploadId);
+        const up = entry.uploads.get(uploadId);
+        if (!up) return;
+        const index = Number(msg.index);
+        up.chunks[index] = String(msg.data || '');
+        const received = up.chunks.filter((c) => c !== undefined).length;
+        this.post(entry, { type: 'uploadAck', uploadId, received, total: up.total });
+        if (received < up.total) return;
+        entry.uploads.delete(uploadId);
+        const data = up.chunks.join('');
         const bytes = Buffer.from(data, 'base64');
-        if (IMAGE_MIMES.has(mediaType) && bytes.byteLength <= MAX_IMAGE_BYTES) {
-          entry.pendingAttachments.push({ kind: 'image', name, mediaType, data });
+        if (IMAGE_MIMES.has(up.mediaType) && bytes.byteLength <= MAX_IMAGE_BYTES) {
+          entry.pendingAttachments.push({
+            kind: 'image',
+            name: up.name,
+            mediaType: up.mediaType,
+            data,
+          });
         } else {
           const dir = path.join(uploadsDir, sessionId);
           fs.mkdirSync(dir, { recursive: true });
-          const filePath = path.join(dir, `${Date.now()}-${name}`);
+          const filePath = path.join(dir, `${Date.now()}-${up.name}`);
           fs.writeFileSync(filePath, bytes);
           entry.pendingAttachments.push({ kind: 'file', path: filePath });
         }

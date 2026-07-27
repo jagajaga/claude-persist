@@ -85,6 +85,8 @@ export class DaemonSession {
   >();
   private callbacks: SessionCallbacks;
   private logStream: fs.WriteStream | null = null;
+  /** Usage of the most recent assistant API call — the true context size. */
+  private lastCallUsage: Record<string, unknown> | null = null;
 
   constructor(meta: SessionMeta, callbacks: SessionCallbacks) {
     this.meta = meta;
@@ -342,7 +344,10 @@ export class DaemonSession {
         break;
       }
       case 'assistant': {
-        const message = msg.message as { content?: Array<Record<string, unknown>> } | undefined;
+        const message = msg.message as
+          | { content?: Array<Record<string, unknown>>; usage?: Record<string, unknown> }
+          | undefined;
+        if (message?.usage) this.lastCallUsage = message.usage;
         for (const block of message?.content ?? []) {
           if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
             this.appendEvent({ type: 'assistant_text', text: block.text });
@@ -390,11 +395,16 @@ export class DaemonSession {
           typeof msg.result === 'string' ? msg.result : `Turn finished (${String(msg.subtype ?? 'done')})`;
         const usage = msg.usage as Record<string, unknown> | undefined;
         const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
-        const contextTokens = usage
-          ? num(usage.input_tokens) +
-            num(usage.cache_read_input_tokens) +
-            num(usage.cache_creation_input_tokens) +
-            num(usage.output_tokens)
+        // Context size must come from the FINAL assistant call's usage:
+        // result.usage sums across every API call in the turn, so cached
+        // prompt tokens get re-counted per tool-use step and wildly
+        // overestimate context on long turns.
+        const ctxUsage = this.lastCallUsage ?? usage;
+        const contextTokens = ctxUsage
+          ? num(ctxUsage.input_tokens) +
+            num(ctxUsage.cache_read_input_tokens) +
+            num(ctxUsage.cache_creation_input_tokens) +
+            num(ctxUsage.output_tokens)
           : undefined;
         // This turn's own consumption: fresh (non-cache-read) input + output.
         const turnTokens = usage

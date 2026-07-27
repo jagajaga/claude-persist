@@ -620,7 +620,6 @@
 
   function renderChips(items) {
     chipsEl.replaceChildren();
-    chipsEl.hidden = items.length === 0;
     items.forEach((item, index) => {
       const chip = el('span', 'chip');
       chip.appendChild(el('span', null, `${item.kind === 'image' ? '🖼 ' : '📄 '}${item.label}`));
@@ -630,6 +629,9 @@
       chip.appendChild(remove);
       chipsEl.appendChild(chip);
     });
+    // Keep in-flight upload chips visible alongside confirmed attachments.
+    for (const up of pendingUploads.values()) chipsEl.appendChild(up.chip);
+    chipsEl.hidden = chipsEl.childElementCount === 0;
   }
 
   window.addEventListener('message', (e) => {
@@ -671,6 +673,21 @@
       case 'attachments':
         renderChips(msg.items ?? []);
         break;
+      case 'uploadAck': {
+        const up = pendingUploads.get(msg.uploadId);
+        if (!up) break;
+        const pct = Math.round((msg.received / msg.total) * 100);
+        up.pctEl.textContent = `${pct}%`;
+        if (msg.received >= msg.total) {
+          // Complete: the confirmed chip arrives via the next 'attachments'.
+          pendingUploads.delete(msg.uploadId);
+          up.chip.remove();
+        } else if (up.next < up.chunks.length) {
+          const index = up.next++;
+          vscode.postMessage({ type: 'uploadChunk', uploadId: msg.uploadId, index, data: up.chunks[index] });
+        }
+        break;
+      }
       case 'models':
         modelInfos = msg.models ?? [];
         rebuildModelOptions();
@@ -770,6 +787,22 @@
     attachMenu.hidden = true;
   }
 
+  // Chunked upload with per-chunk acks: on slow connections the transfer to
+  // the server takes real time, so chips show actual delivery progress.
+  const UPLOAD_CHUNK = 176 * 1024; // base64 chars (~128KB binary) per message
+  const pendingUploads = new Map(); // uploadId -> {name, chunks, chip, pctEl}
+
+  function makeUploadChip(uploadId, name) {
+    const chip = el('span', 'chip uploading');
+    chip.appendChild(el('span', 'spinner'));
+    chip.appendChild(el('span', null, name));
+    const pctEl = el('span', 'chip-pct', '0%');
+    chip.appendChild(pctEl);
+    chipsEl.hidden = false;
+    chipsEl.appendChild(chip);
+    return { chip, pctEl };
+  }
+
   function sendFiles(files) {
     for (const file of files) {
       if (file.size > MAX_UPLOAD) {
@@ -782,12 +815,23 @@
       const reader = new FileReader();
       reader.onload = () => {
         const base64 = String(reader.result).split(',')[1] || '';
+        const chunks = [];
+        for (let i = 0; i < base64.length; i += UPLOAD_CHUNK) {
+          chunks.push(base64.slice(i, i + UPLOAD_CHUNK));
+        }
+        if (chunks.length === 0) chunks.push('');
+        const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const ui = makeUploadChip(uploadId, file.name);
+        pendingUploads.set(uploadId, { name: file.name, chunks, next: 1, ...ui });
         vscode.postMessage({
-          type: 'uploadAttachment',
+          type: 'uploadBegin',
+          uploadId,
           name: file.name,
           mediaType: file.type || 'application/octet-stream',
-          data: base64,
+          chunks: chunks.length,
         });
+        // First chunk goes immediately; the rest flow on acks.
+        vscode.postMessage({ type: 'uploadChunk', uploadId, index: 0, data: chunks[0] });
       };
       reader.readAsDataURL(file);
     }

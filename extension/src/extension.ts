@@ -106,10 +106,11 @@ async function pickSession(c: DaemonClient): Promise<SessionInfo | undefined> {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  sessionsProvider = new SessionsProvider(() => client, context.globalState);
   panels = new ChatPanelManager(context, () => client, () => ensureClient(context));
-  sessionsProvider = new SessionsProvider(() => client);
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('claudePersist.sessions', sessionsProvider),
+    vscode.window.registerFileDecorationProvider(sessionsProvider.decorations),
   );
 
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);

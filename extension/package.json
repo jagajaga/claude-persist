@@ -138,6 +138,14 @@
           "type": "string",
           "default": "",
           "description": "Absolute path to the daemon entry point (daemon/dist/main.js). Leave empty to auto-detect the monorepo layout next to the extension."
+        },
+        "claudePersist.extraModels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra model ids merged into the model dropdown (e.g. claude-opus-5) — for models the SDK's probed list doesn't include yet. Entries the SDK already lists are ignored."
         }
       }
     }

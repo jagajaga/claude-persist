@@ -9,6 +9,7 @@ import type {
   SessionInfo,
 } from '@claude-persist/shared';
 import type { DaemonClient } from './daemonClient';
+import { mergeExtraModels } from './models';
 
 export const VIEW_TYPE = 'claudePersist.chat';
 
@@ -85,6 +86,27 @@ export class ChatPanelManager {
   }
 
   handleModels(models: ModelDescriptor[]): void {
+    this.lastModels = models;
+    const merged = this.mergedModels();
+    for (const entry of this.panels.values()) {
+      this.post(entry, { type: 'models', models: merged });
+    }
+  }
+
+  /** Last SDK-probed model list, before extraModels merging. */
+  private lastModels: ModelDescriptor[] = [];
+
+  private mergedModels(): ModelDescriptor[] {
+    const extras = vscode.workspace
+      .getConfiguration('claudePersist')
+      .get<string[]>('extraModels', []);
+    return mergeExtraModels(this.lastModels, extras);
+  }
+
+  /** Re-push the model list to open panels (after extraModels changes). */
+  refreshModels(): void {
+    if (this.lastModels.length === 0) return;
+    const models = this.mergedModels();
     for (const entry of this.panels.values()) {
       this.post(entry, { type: 'models', models });
     }
@@ -344,7 +366,10 @@ export class ChatPanelManager {
     // Model list is account-wide; fetch lazily and push to this panel.
     void client
       .listModels()
-      .then((models) => this.post(entry, { type: 'models', models }))
+      .then((models) => {
+        this.lastModels = models;
+        this.post(entry, { type: 'models', models: this.mergedModels() });
+      })
       .catch(() => undefined);
   }
 

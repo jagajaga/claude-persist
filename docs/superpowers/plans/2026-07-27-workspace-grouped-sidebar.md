@@ -251,7 +251,7 @@ git commit -m "feat(extension): add workspace-grouping session model with unread
 - Produces (used by Task 3):
   - `DECORATION_SCHEME = 'claude-persist'`
   - `sessionUri(id: string): vscode.Uri` → `claude-persist:/session/<id>`
-  - `workspaceUri(cwd: string): vscode.Uri` → `claude-persist:/workspace/<encodeURIComponent(cwd)>`
+  - `workspaceUri(cwd: string): vscode.Uri` → `claude-persist:` URI with path `/workspace/<cwd>` (Uri encodes on serialization; always construct via this function, never by string concatenation)
   - `class UnreadDecorationProvider implements vscode.FileDecorationProvider` with `update(uris: vscode.Uri[]): void`
 
 No unit test — this class is a thin vscode API adapter with no logic beyond a Set lookup; the compile step and manual verification (Task 6) cover it.
@@ -268,11 +268,10 @@ export const DECORATION_SCHEME = 'claude-persist';
 export const sessionUri = (id: string): vscode.Uri =>
   vscode.Uri.from({ scheme: DECORATION_SCHEME, path: `/session/${id}` });
 
+// Raw cwd as path — vscode.Uri percent-encodes on serialization;
+// pre-encoding would double-encode.
 export const workspaceUri = (cwd: string): vscode.Uri =>
-  vscode.Uri.from({
-    scheme: DECORATION_SCHEME,
-    path: `/workspace/${encodeURIComponent(cwd)}`,
-  });
+  vscode.Uri.from({ scheme: DECORATION_SCHEME, path: `/workspace/${cwd}` });
 
 /**
  * Paints the red unread dot on sidebar items via their resourceUri.

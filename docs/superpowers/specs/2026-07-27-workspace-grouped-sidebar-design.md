@@ -44,8 +44,10 @@ the user wasn't looking.
   refresh. (Status events only, so streaming doesn't refresh the tree per token.)
 - **Rendering:** a `vscode.FileDecorationProvider` registered for a custom
   `claude-persist:` URI scheme. Session items get
-  `resourceUri = claude-persist:/session/<id>`; group items
-  `claude-persist:/workspace/<encoded cwd>`. Unread sessions receive badge `●`
+  `resourceUri = claude-persist:/session/<id>`; group items a `claude-persist:`
+  URI with path `/workspace/<cwd>` (encoding is left to `vscode.Uri`; URIs are
+  always built by shared helper functions, never by string concatenation).
+  Unread sessions receive badge `●`
   colored `ThemeColor('charts.red')`. A group is decorated with the same dot when any
   of its sessions is unread, so collapsed (non-current) workspaces still surface
   unread activity.

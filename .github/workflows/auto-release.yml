@@ -42,7 +42,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           OLD=$(node -p "require('./extension/package.json').version")
-          NEW=$(cd extension && npm version patch --no-git-tag-version | tr -d v)
+          # npm's stdout is multi-line in workspaces — read the result from
+          # the file instead of parsing it.
+          (cd extension && npm version patch --no-git-tag-version >/dev/null)
+          NEW=$(node -p "require('./extension/package.json').version")
           git add extension/package.json
           git commit -m "chore(extension): $OLD -> $NEW"
           git tag -a "v$NEW" -m "v$NEW"

@@ -115,6 +115,21 @@
     lastUserEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
   });
 
+  /**
+   * Voice/AI keyboards on mobile sometimes insert literal "\n" sequences
+   * instead of newlines. Unescape for display ONLY when the message looks
+   * dictated (no real newlines, several literal \n) — a message genuinely
+   * discussing "\n" (this is a coding tool) stays untouched, and the stored
+   * text is never modified.
+   */
+  function displayUserText(text) {
+    const t = String(text ?? '');
+    if (!t.includes('\n') && (t.match(/\\n/g) || []).length >= 2) {
+      return t.replace(/\\n/g, '\n');
+    }
+    return t;
+  }
+
   function pretty(value, max) {
     let text;
     if (typeof value === 'string') text = value;
@@ -447,7 +462,7 @@
       case 'user_message': {
         endStreaming();
         const box = el('div', 'user-msg');
-        box.appendChild(el('div', null, event.text));
+        box.appendChild(el('div', null, displayUserText(event.text)));
         if (Array.isArray(event.attachments) && event.attachments.length) {
           const row = el('div', 'user-chips');
           for (const a of event.attachments) {
@@ -462,7 +477,7 @@
           box.appendChild(row);
         }
         threadEl.appendChild(box);
-        trackUserMessage(box, event.text);
+        trackUserMessage(box, displayUserText(event.text));
         break;
       }
       case 'assistant_text': {

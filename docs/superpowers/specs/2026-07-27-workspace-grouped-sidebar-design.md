@@ -32,14 +32,16 @@ the user wasn't looking.
 ## Unread dot
 
 - **Definition ("completed turns only"):** a session is unread when
-  `status === 'idle'` and `lastActivityAt > seenActivityAt`. A running session never
+  `status !== 'running'` and `lastActivityAt > seenActivityAt` (an errored turn
+  counts as completed). A running session never
   shows a dot; the dot appears when a turn finishes that the user hasn't viewed,
   including turns that completed while the window was closed.
 - **State:** per-session `seenActivityAt` timestamps stored in `context.globalState`
   (survive window reloads). Entries for deleted sessions are pruned on refresh.
-- **Clearing:** when a session's chat tab becomes visible/focused — and on each event
-  received while visible — `seenActivityAt` is bumped to the session's current
-  `lastActivityAt`; the tree and decorations refresh.
+- **Clearing:** when a session's chat tab becomes visible/focused — and on
+  turn-boundary (status) events received while visible — `seenActivityAt` is
+  bumped past the session's current `lastActivityAt`; the tree and decorations
+  refresh. (Status events only, so streaming doesn't refresh the tree per token.)
 - **Rendering:** a `vscode.FileDecorationProvider` registered for a custom
   `claude-persist:` URI scheme. Session items get
   `resourceUri = claude-persist:/session/<id>`; group items

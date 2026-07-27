@@ -87,6 +87,24 @@ async function pickCwd(): Promise<string | undefined> {
   return picked?.[0]?.fsPath;
 }
 
+/**
+ * Apply claudePersist.defaultModel to a freshly created/imported session, so
+ * new chats start on the model you want instead of the account default.
+ */
+async function applyDefaultModel(c: DaemonClient, info: SessionInfo): Promise<SessionInfo> {
+  const model = vscode.workspace
+    .getConfiguration('claudePersist')
+    .get<string>('defaultModel', '')
+    .trim();
+  if (!model) return info;
+  try {
+    await c.setSessionOptions(info.id, { model });
+    return { ...info, model };
+  } catch {
+    return info; // non-fatal: the session still works on the account default
+  }
+}
+
 async function pickSession(c: DaemonClient): Promise<SessionInfo | undefined> {
   const sessions = await c.listSessions();
   if (sessions.length === 0) {
@@ -134,7 +152,7 @@ export function activate(context: vscode.ExtensionContext): void {
           title: 'Session title',
           value: path.basename(cwd),
         });
-        const info = await c.createSession(cwd, title || undefined);
+        const info = await applyDefaultModel(c, await c.createSession(cwd, title || undefined));
         await panels.openSession(info);
       } catch (err) {
         void vscode.window.showErrorMessage(
@@ -216,7 +234,7 @@ export function activate(context: vscode.ExtensionContext): void {
           { title: 'Import Claude Code session', matchOnDetail: true },
         );
         if (!picked) return;
-        const info = await c.importClaudeSession(picked.candidate.file);
+        const info = await applyDefaultModel(c, await c.importClaudeSession(picked.candidate.file));
         await panels.openSession(info);
       } catch (err) {
         void vscode.window.showErrorMessage(

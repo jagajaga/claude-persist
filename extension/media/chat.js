@@ -179,11 +179,39 @@
 
   // ---------- streaming / status --------------------------------------------
 
+  // Live delta text is a PREVIEW: raw textContent, no markdown. The complete
+  // block always arrives afterwards as an 'assistant_text' event, which is
+  // what gets markdown-rendered. So a preview must never be left behind as
+  // permanent DOM — releasing the reference without clearing it is what used
+  // to strand raw '##'/'**' fragments, split mid-word at every tool call.
+  let previewEls = [];
+
   function endStreaming() {
     if (streamingEl) {
       streamingEl.classList.remove('streaming');
       streamingEl = null;
     }
+  }
+
+  /** Drop preview fragments superseded by an authoritative assistant_text. */
+  function dropPreviews() {
+    for (const node of previewEls) node.remove();
+    previewEls = [];
+    streamingEl = null;
+  }
+
+  /**
+   * Turn ended without an authoritative assistant_text (interrupt, error).
+   * Render what streamed rather than discarding the user's text.
+   */
+  function settlePreviews() {
+    for (const node of previewEls) {
+      const text = node.textContent;
+      if (text && text.trim()) node.replaceChildren(renderMarkdown(text));
+      else node.remove();
+    }
+    previewEls = [];
+    streamingEl = null;
   }
 
   let workingRow = null;
@@ -481,15 +509,12 @@
         break;
       }
       case 'assistant_text': {
-        const rendered = renderMarkdown(event.text);
-        if (streamingEl) {
-          streamingEl.replaceChildren(rendered);
-          endStreaming();
-        } else {
-          const wrap = el('div', 'assistant');
-          wrap.appendChild(rendered);
-          threadEl.appendChild(wrap);
-        }
+        // Authoritative text for this block — supersedes every preview
+        // fragment, including ones stranded above tool cards.
+        dropPreviews();
+        const wrap = el('div', 'assistant');
+        wrap.appendChild(renderMarkdown(event.text));
+        threadEl.appendChild(wrap);
         break;
       }
       case 'tool_use':
@@ -542,7 +567,7 @@
       case 'status': {
         if (event.status === 'running') setRunning(true);
         else {
-          endStreaming();
+          settlePreviews();
           setRunning(false);
           if (event.status === 'error') {
             threadEl.appendChild(el('div', 'meta error', `⚠︎ ${event.detail || 'error'}`));
@@ -551,7 +576,7 @@
         break;
       }
       case 'result': {
-        endStreaming();
+        settlePreviews();
         const bits = [];
         if (typeof event.durationMs === 'number') bits.push(`${(event.durationMs / 1000).toFixed(1)}s`);
         if (typeof event.turnTokens === 'number') {
@@ -678,6 +703,7 @@
         if (!streamingEl) {
           streamingEl = el('div', 'assistant streaming', '');
           threadEl.appendChild(streamingEl);
+          previewEls.push(streamingEl);
           setRunning(true);
         }
         streamingEl.textContent += msg.text;

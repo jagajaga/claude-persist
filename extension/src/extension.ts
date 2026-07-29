@@ -6,6 +6,7 @@ import { DaemonClient } from './daemonClient';
 import { ChatPanelManager, VIEW_TYPE } from './chatPanel';
 import { SessionsProvider } from './sessionsView';
 import { checkForUpdate } from './update';
+import { sessionTitleFromInput } from './sessionTitle';
 
 let client: DaemonClient | null = null;
 let panels: ChatPanelManager;
@@ -148,11 +149,21 @@ export function activate(context: vscode.ExtensionContext): void {
         const c = await ensureClient(context);
         const cwd = await pickCwd();
         if (!cwd) return;
-        const title = await vscode.window.showInputBox({
+        const base = path.basename(cwd);
+        const seed = `${base}-`;
+        const raw = await vscode.window.showInputBox({
           title: 'Session title',
-          value: path.basename(cwd),
+          value: seed,
+          // Caret after the dash, nothing selected — so typing appends.
+          valueSelection: [seed.length, seed.length],
         });
-        const info = await applyDefaultModel(c, await c.createSession(cwd, title || undefined));
+        // With a prefilled value, dismissing the box means "cancel", not
+        // "use the default name".
+        if (raw === undefined) return;
+        const info = await applyDefaultModel(
+          c,
+          await c.createSession(cwd, sessionTitleFromInput(raw, base)),
+        );
         await panels.openSession(info);
       } catch (err) {
         void vscode.window.showErrorMessage(

@@ -7,20 +7,37 @@
 // the node:test suite. The webview has no test harness, so the only way this
 // logic gets tested is by being reachable from Node.
 (function (root) {
-  var FENCE_RE = /^\s{0,3}(```|~~~)/;
+  var FENCE_RE = /^(\s{0,3})(`{3,}|~{3,})/;
 
-  /** Start offsets of every line that opens or closes a fenced code block. */
-  function fenceLineStarts(text) {
-    var starts = [];
+  /**
+   * Offset where the currently-unclosed fence begins, or -1 if none is open.
+   * A fence only closes on the same marker character, at least as long as the
+   * opener, with nothing after it — a '~~~' inside a '```' block is content.
+   */
+  function openFenceStart(text) {
+    var open = null;
     var pos = 0;
     for (;;) {
       var nl = text.indexOf('\n', pos);
       var end = nl === -1 ? text.length : nl;
-      if (FENCE_RE.test(text.slice(pos, end))) starts.push(pos);
+      var line = text.slice(pos, end);
+      var m = FENCE_RE.exec(line);
+      if (m) {
+        var marker = m[2];
+        if (!open) {
+          open = { start: pos, char: marker.charAt(0), len: marker.length };
+        } else if (
+          marker.charAt(0) === open.char &&
+          marker.length >= open.len &&
+          !line.slice(m[0].length).trim()
+        ) {
+          open = null;
+        }
+      }
       if (nl === -1) break;
       pos = nl + 1;
     }
-    return starts;
+    return open ? open.start : -1;
   }
 
   function splitStreamingMarkdown(text) {
@@ -32,8 +49,8 @@
     var boundary = idx + 2;
     // ...unless the boundary sits inside an unclosed fence, where a blank line
     // is just code. Back up to where that fence opened.
-    var starts = fenceLineStarts(src.slice(0, boundary));
-    if (starts.length % 2 === 1) boundary = starts[starts.length - 1];
+    var fenceStart = openFenceStart(src.slice(0, boundary));
+    if (fenceStart >= 0) boundary = fenceStart;
     if (boundary <= 0) return { stable: '', tail: src };
     return { stable: src.slice(0, boundary), tail: src.slice(boundary) };
   }

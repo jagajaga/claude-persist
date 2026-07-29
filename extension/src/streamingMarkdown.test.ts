@@ -64,6 +64,28 @@ test('empty and nullish inputs are safe', () => {
   );
 });
 
+test('a different fence character does not close an open fence', () => {
+  const input = '```js\ncode\n~~~\nmore\n\ntail';
+  assert.deepEqual(splitStreamingMarkdown(input), { stable: '', tail: input });
+});
+
+test('a closing fence must be at least as long as the opener', () => {
+  const input = '````\ncode\n```\nstill code\n\nmore';
+  assert.deepEqual(splitStreamingMarkdown(input), { stable: '', tail: input });
+});
+
+test('a longer closing fence does close the block', () => {
+  assert.deepEqual(splitStreamingMarkdown('```\ncode\n````\n\nafter'), {
+    stable: '```\ncode\n````\n\n',
+    tail: 'after',
+  });
+});
+
+test('a fence line with a trailing info string does not close a block', () => {
+  const input = '```\ncode\n``` not a closer\n\nmore';
+  assert.deepEqual(splitStreamingMarkdown(input), { stable: '', tail: input });
+});
+
 test('stable + tail always reconstructs the input exactly', () => {
   const cases = [
     '',

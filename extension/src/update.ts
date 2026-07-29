@@ -3,17 +3,19 @@ import * as https from 'https';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { isNewerVersion, parseRelease, type ReleaseInfo } from '@claude-persist/shared';
 
 const REPO = 'jagajaga/claude-persist';
 const SKIP_KEY = 'claudePersist.skipVersion';
 
-interface Release {
-  tag_name: string;
-  html_url: string;
-  assets: Array<{ name: string; browser_download_url: string }>;
-}
+/**
+ * Tag currently being offered. The daemon re-pushes the latest release on every
+ * reconnect, and the periodic check still runs — without this, an unanswered
+ * notification would stack a duplicate every time.
+ */
+let offering: string | null = null;
 
-function getJson(url: string): Promise<Release> {
+function getJson(url: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
     https
       .get(
@@ -28,7 +30,7 @@ function getJson(url: string): Promise<Release> {
           res.on('data', (c) => (body += c));
           res.on('end', () => {
             try {
-              resolve(JSON.parse(body) as Release);
+              resolve(JSON.parse(body));
             } catch (e) {
               reject(e);
             }
@@ -60,63 +62,98 @@ function download(url: string, dest: string): Promise<void> {
   });
 }
 
-/** Compare "a.b.c" semver-ish strings; returns true if `remote` > `local`. */
-function isNewer(remote: string, local: string): boolean {
-  const r = remote.replace(/^v/, '').split('.').map(Number);
-  const l = local.replace(/^v/, '').split('.').map(Number);
-  for (let i = 0; i < 3; i++) {
-    if ((r[i] || 0) > (l[i] || 0)) return true;
-    if ((r[i] || 0) < (l[i] || 0)) return false;
-  }
-  return false;
+/**
+ * Offer a release the daemon just told us about. This is the fast path: the
+ * daemon polls GitHub once for every window and pushes, so the prompt appears
+ * within a minute of publication without the window having to reload.
+ */
+export async function notifyRelease(
+  context: vscode.ExtensionContext,
+  release: ReleaseInfo,
+): Promise<void> {
+  const current = context.extension.packageJSON.version as string;
+  if (!isNewerVersion(release.tagName, current)) return;
+  if (context.globalState.get<string>(SKIP_KEY) === release.tagName) return;
+  await offerUpdate(context, release, current);
 }
 
 /**
- * Sideloaded VSIX installs don't auto-update, so on startup we check the
- * latest GitHub release and offer a one-click update (download + install).
+ * Sideloaded VSIX installs don't auto-update. This is the fallback path — used
+ * at activation, on the manual command, and on a slow timer — for when the
+ * daemon is unreachable or is running a build that predates release pushes.
  */
-export async function checkForUpdate(context: vscode.ExtensionContext, interactive = false): Promise<void> {
+export async function checkForUpdate(
+  context: vscode.ExtensionContext,
+  interactive = false,
+): Promise<void> {
   const current = context.extension.packageJSON.version as string;
-  let release: Release;
+  let release: ReleaseInfo | null;
   try {
-    release = await getJson(`https://api.github.com/repos/${REPO}/releases/latest`);
+    release = parseRelease(await getJson(`https://api.github.com/repos/${REPO}/releases/latest`));
   } catch {
-    if (interactive) void vscode.window.showWarningMessage('Claude Persist: could not check for updates.');
+    release = null;
+  }
+  if (!release) {
+    if (interactive) {
+      void vscode.window.showWarningMessage('Claude Persist: could not check for updates.');
+    }
     return;
   }
-  const latest = release.tag_name;
-  if (!isNewer(latest, current)) {
-    if (interactive) void vscode.window.showInformationMessage(`Claude Persist is up to date (${current}).`);
+  if (!isNewerVersion(release.tagName, current)) {
+    if (interactive) {
+      void vscode.window.showInformationMessage(`Claude Persist is up to date (${current}).`);
+    }
     return;
   }
-  if (!interactive && context.globalState.get<string>(SKIP_KEY) === latest) return;
+  // An explicit "check for updates" re-offers a version you previously skipped;
+  // a background check honours the skip.
+  if (!interactive && context.globalState.get<string>(SKIP_KEY) === release.tagName) return;
+  await offerUpdate(context, release, current);
+}
 
-  const asset = release.assets.find((a) => a.name.endsWith('.vsix'));
-  const actions = asset ? ['Update now', 'View release', 'Skip'] : ['View release', 'Skip'];
-  const choice = await vscode.window.showInformationMessage(
-    `Claude Persist ${latest} is available (you have ${current}).`,
-    ...actions,
-  );
-  if (choice === 'View release') {
-    void vscode.env.openExternal(vscode.Uri.parse(release.html_url));
-  } else if (choice === 'Skip') {
-    await context.globalState.update(SKIP_KEY, latest);
-  } else if (choice === 'Update now' && asset) {
-    await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: `Downloading Claude Persist ${latest}…` },
-      async () => {
-        const tmp = path.join(os.tmpdir(), asset.name);
-        await download(asset.browser_download_url, tmp);
-        await vscode.commands.executeCommand(
-          'workbench.extensions.installExtension',
-          vscode.Uri.file(tmp),
-        );
-      },
+async function offerUpdate(
+  context: vscode.ExtensionContext,
+  release: ReleaseInfo,
+  current: string,
+): Promise<void> {
+  if (offering === release.tagName) return; // a prompt for this tag is already up
+  offering = release.tagName;
+  try {
+    const actions = release.vsixUrl
+      ? ['Update now', 'View release', 'Skip']
+      : ['View release', 'Skip'];
+    const choice = await vscode.window.showInformationMessage(
+      `Claude Persist ${release.tagName} is available (you have ${current}).`,
+      ...actions,
     );
-    const reload = await vscode.window.showInformationMessage(
-      `Claude Persist ${latest} installed. Reload to activate.`,
-      'Reload window',
-    );
-    if (reload) void vscode.commands.executeCommand('workbench.action.reloadWindow');
+    if (choice === 'View release') {
+      if (release.htmlUrl) void vscode.env.openExternal(vscode.Uri.parse(release.htmlUrl));
+    } else if (choice === 'Skip') {
+      await context.globalState.update(SKIP_KEY, release.tagName);
+    } else if (choice === 'Update now' && release.vsixUrl) {
+      const url = release.vsixUrl;
+      const name = release.vsixName ?? 'claude-persist.vsix';
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Downloading Claude Persist ${release.tagName}…`,
+        },
+        async () => {
+          const tmp = path.join(os.tmpdir(), name);
+          await download(url, tmp);
+          await vscode.commands.executeCommand(
+            'workbench.extensions.installExtension',
+            vscode.Uri.file(tmp),
+          );
+        },
+      );
+      const reload = await vscode.window.showInformationMessage(
+        `Claude Persist ${release.tagName} installed. Reload to activate.`,
+        'Reload window',
+      );
+      if (reload) void vscode.commands.executeCommand('workbench.action.reloadWindow');
+    }
+  } finally {
+    offering = null;
   }
 }

@@ -14,6 +14,7 @@ import { ensureDirs, socketPath, sessionLogPath, logPath } from './paths.js';
 import { Registry } from './registry.js';
 import { DaemonSession } from './session.js';
 import { importClaudeSession, listClaudeSessions } from './importer.js';
+import { ReleaseWatcher } from './releaseWatcher.js';
 
 ensureDirs();
 const log = fs.createWriteStream(logPath, { flags: 'a' });
@@ -41,6 +42,13 @@ function broadcast(sessionId: string, message: ServerMessage): void {
 function broadcastAll(message: ServerMessage): void {
   for (const client of clients) client.send(message);
 }
+
+// One poll serves every window, so update latency doesn't depend on a window
+// reloading and the request rate doesn't scale with how many are open.
+const releases = new ReleaseWatcher(
+  () => clients.size > 0,
+  (release) => broadcastAll({ kind: 'release', release }),
+);
 
 // ---------- model list (learned from the SDK, never hardcoded) --------------
 
@@ -146,6 +154,13 @@ function sessionInfo(id: string): SessionInfo {
 function handleRequest(client: Client, req: Request): unknown | Promise<unknown> {
   switch (req.op) {
     case 'hello':
+      // Tell a freshly connected window what the newest release is, so it
+      // learns immediately instead of waiting for the next poll to find a
+      // change it already missed.
+      if (releases.current) {
+        const release = releases.current;
+        setImmediate(() => client.send({ kind: 'release', release }));
+      }
       return { protocolVersion: PROTOCOL_VERSION, pid: process.pid };
     case 'listSessions':
       return registry.list().map((meta) => sessionInfo(meta.id));
@@ -299,9 +314,11 @@ function start(): void {
     server.listen(socketPath, () => {
       fs.chmodSync(socketPath, 0o600);
       logLine(`daemon listening on ${socketPath} (pid ${process.pid})`);
+      releases.start();
     });
     const shutdown = (): void => {
       logLine('daemon shutting down');
+      releases.stop();
       for (const session of sessions.values()) session.dispose();
       server.close();
       try {

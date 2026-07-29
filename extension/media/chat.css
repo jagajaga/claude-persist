@@ -49,7 +49,9 @@ body { display: flex; flex-direction: column; }
 }
 /* Raw text keeps its line breaks, so nothing jumps when it later renders. */
 .assistant .tail { white-space: pre-wrap; }
-.assistant .stable:empty, .assistant .tail:empty { display: none; }
+/* An empty tail must stay in flow: it carries the caret, and the buffer is
+   momentarily all-stable whenever a chunk ends on a blank line. */
+.assistant .stable:empty { display: none; }
 @keyframes blink { 50% { opacity: 0; } }
 
 .md p { margin: 0 0 10px; }

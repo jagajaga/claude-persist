@@ -10,8 +10,13 @@ const LATEST_URL = 'https://api.github.com/repos/jagajaga/claude-persist/release
  */
 const POLL_MS = 120_000;
 const REQUEST_TIMEOUT_MS = 15_000;
-/** Floor between connect-triggered polls, so reconnect storms cost one request. */
-const REFRESH_THROTTLE_MS = 30_000;
+/**
+ * Floor between connect-triggered polls, so reconnect storms cost one request.
+ * Shared with the interval, so this — not POLL_MS — sets the true ceiling:
+ * 60s means at most 60 requests/hour even if a crash-looping daemon reconnects
+ * continuously.
+ */
+const REFRESH_THROTTLE_MS = 60_000;
 const MAX_REDIRECTS = 3;
 
 function fetchJson(url: string, redirects = 0): Promise<unknown> {
@@ -56,9 +61,11 @@ function fetchJson(url: string, redirects = 0): Promise<unknown> {
  * error body, a rate-limit response, a release with no tag — so a bad reply is
  * indistinguishable from "no news".
  *
- * Deliberately not shared with the extension's copy in extension/src/release.ts:
- * shared is ESM and the extension host is CommonJS, so a runtime import across
- * that boundary emits a require() that cannot resolve in the packaged VSIX.
+ * Duplicated in extension/src/release.ts, deliberately. The daemon could import
+ * this from shared — it is ESM and shared ships beside it — but the extension
+ * host cannot: it is CommonJS, and a require() of shared does not resolve in
+ * the packaged VSIX. Keeping shared type-only is what makes that hazard
+ * impossible to reintroduce, and the cost is this one duplicated function.
  */
 function parseRelease(raw: unknown): ReleaseInfo | null {
   if (!raw || typeof raw !== 'object') return null;

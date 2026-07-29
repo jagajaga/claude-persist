@@ -16,7 +16,9 @@ import * as path from 'path';
 test('no compiled extension-host file requires a bare package at runtime', () => {
   const dist = path.join(__dirname); // this test runs from dist/
   const offenders: string[] = [];
-  for (const file of fs.readdirSync(dist)) {
+  // Recursive: a future src/<subdir>/foo.ts lands in dist/<subdir>/ and must
+  // not slip past this check.
+  for (const file of fs.readdirSync(dist, { recursive: true }) as string[]) {
     if (!file.endsWith('.js')) continue;
     const source = fs.readFileSync(path.join(dist, file), 'utf8');
     for (const match of source.matchAll(/require\(["']([^"']+)["']\)/g)) {
@@ -26,12 +28,13 @@ test('no compiled extension-host file requires a bare package at runtime', () =>
       if (specifier.startsWith('.') || specifier === 'vscode') continue;
       if (specifier.startsWith('node:')) continue;
       try {
-        if (require.resolve(specifier) === specifier) continue; // core module
+        // Core modules resolve to their own bare name; anything else resolves
+        // to a path, which means it came from node_modules — and node_modules
+        // is exactly what the VSIX does not ship.
+        if (require.resolve(specifier) === specifier) continue;
       } catch {
-        // not resolvable as a core module — fall through and report it
+        // Not resolvable at all: still a runtime failure waiting to happen.
       }
-      const isBuiltin = !specifier.includes('/') && !require.resolve.paths(specifier)?.length;
-      if (isBuiltin) continue;
       offenders.push(`${file} -> ${specifier}`);
     }
   }

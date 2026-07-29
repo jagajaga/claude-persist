@@ -314,6 +314,8 @@ button.secondary {
   #thread { padding: 12px 12px 6px; }
   #composer { padding-left: 12px; padding-right: 12px; }
   .pill span { display: none; }         /* icon-only bypass toggle on phones */
+  /* The model pill has no icon to fall back on — keep its label. */
+  #model-pill span { display: inline; }
   .pill { padding: 6px 9px; }
   /* Composer controls wrap instead of overflowing off-screen. */
   #composer-row { flex-wrap: wrap; row-gap: 8px; }

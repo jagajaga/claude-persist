@@ -1025,6 +1025,7 @@
   sendBtn.addEventListener('click', send);
   attachBtn.addEventListener('click', (e) => {
     e.stopPropagation();
+    modelMenu.hidden = true; // one popover at a time — both share a position
     attachMenu.hidden = !attachMenu.hidden;
   });
   ringBtn.addEventListener('click', () => {
@@ -1032,6 +1033,7 @@
   });
   modelPill.addEventListener('click', (e) => {
     e.stopPropagation();
+    hideMenu(); // one popover at a time — both share a position
     if (modelMenu.hidden) renderModelMenu();
     modelMenu.hidden = !modelMenu.hidden;
   });

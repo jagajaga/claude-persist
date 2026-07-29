@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+  heldWorktrees,
   parseHead,
   parseGitFile,
   formatBranch,
@@ -123,7 +124,46 @@ test('findGitDir: returns null outside a repo', () => {
 
 test('readBranch: missing HEAD file is unknown, not a throw', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-git-'));
-  const info = { gitDir: root, headFile: path.join(root, 'HEAD'), isWorktree: false, root };
+  const info = { gitDir: root, headFile: path.join(root, 'HEAD'), isWorktree: false, root, commonDir: root };
   assert.deepEqual(readBranch(info), { kind: 'unknown' });
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('heldWorktrees: only locked agent worktrees count', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-held-'));
+  const reg = path.join(repo, '.git', 'worktrees');
+  const add = (name: string, target: string, locked: boolean): void => {
+    const d = path.join(reg, name);
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'gitdir'), `${target}\n`);
+    if (locked) fs.writeFileSync(path.join(d, 'locked'), '');
+  };
+  const agent = path.join(repo, '.claude', 'worktrees');
+  add('held', path.join(agent, 'held', '.git'), true);
+  add('idle', path.join(agent, 'idle', '.git'), false); // agent, but not locked
+  add('mine', path.join(repo, '..', 'mine', '.git'), true); // locked, but not an agent worktree
+
+  const info = {
+    gitDir: path.join(repo, '.git'),
+    headFile: path.join(repo, '.git', 'HEAD'),
+    isWorktree: false,
+    root: repo,
+    commonDir: path.join(repo, '.git'),
+  };
+  assert.deepEqual(heldWorktrees(info), ['held']);
+  fs.rmSync(repo, { recursive: true, force: true });
+});
+
+test('heldWorktrees: a repository with no linked worktrees is empty', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-held-'));
+  fs.mkdirSync(path.join(repo, '.git'));
+  const info = {
+    gitDir: path.join(repo, '.git'),
+    headFile: path.join(repo, '.git', 'HEAD'),
+    isWorktree: false,
+    root: repo,
+    commonDir: path.join(repo, '.git'),
+  };
+  assert.deepEqual(heldWorktrees(info), []);
+  fs.rmSync(repo, { recursive: true, force: true });
 });

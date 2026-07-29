@@ -10,7 +10,7 @@ import type {
 } from '@claude-persist/shared';
 import type { DaemonClient } from './daemonClient';
 import { mergeExtraModels } from './models';
-import { findGitDir, formatBranchLabel, readBranch } from './gitBranch';
+import { findGitDir, formatBranchLabel, heldWorktrees, readBranch } from './gitBranch';
 
 export const VIEW_TYPE = 'claudePersist.chat';
 
@@ -42,8 +42,8 @@ interface PanelEntry {
    * resolution stays anchored to cwd.
    */
   effectiveCwd?: string;
-  /** Worktrees this session's subagents currently hold. */
-  worktrees?: number;
+  /** Watches the worktree registry, so held worktrees update live. */
+  registryWatcher?: fs.FSWatcher;
   baseTitle: string;
   pendingAttachments: Attachment[];
   /** In-flight chunked uploads from the browser, keyed by uploadId. */
@@ -98,17 +98,14 @@ export class ChatPanelManager {
     if (entry) this.post(entry, { type: 'delta', text });
   }
 
-  /** The conversation moved, or its subagents took/released worktrees. */
-  handleWorkspace(sessionId: string, cwd: string, worktrees: number): void {
+  /** The conversation moved directory (it entered or left a worktree). */
+  handleWorkspace(sessionId: string, cwd: string): void {
     const entry = this.panels.get(sessionId);
     if (!entry) return;
     // effectiveCwd is undefined while the conversation is still in its own
     // cwd, so compare against the resolved directory, not the raw field.
     const moved = (entry.effectiveCwd ?? entry.cwd) !== cwd;
     entry.effectiveCwd = cwd === entry.cwd ? undefined : cwd;
-    entry.worktrees = worktrees;
-    // Only re-establish the fs watch when the directory itself changed;
-    // a worktree count change doesn't move HEAD.
     if (moved) this.watchBranch(entry);
     this.updateBranch(entry);
   }
@@ -343,7 +340,9 @@ export class ChatPanelManager {
     });
 
     panel.onDidDispose(() => {
-      this.panels.get(sessionId)?.branchWatcher?.close();
+      const dying = this.panels.get(sessionId);
+      dying?.branchWatcher?.close();
+      dying?.registryWatcher?.close();
       this.panels.delete(sessionId);
       void this.client()?.detach(sessionId).catch(() => undefined);
     });
@@ -384,7 +383,6 @@ export class ChatPanelManager {
       (result.info.status === 'running' ? '⧗ ' : '') + result.info.title;
     entry.cwd = result.info.cwd;
     entry.effectiveCwd = result.info.effectiveCwd;
-    entry.worktrees = result.info.activeWorktrees ?? 0;
     // A reattach means the webview was re-created and lost its chip; force a
     // fresh post by clearing the dedupe key.
     entry.branchKey = undefined;
@@ -420,11 +418,13 @@ export class ChatPanelManager {
       : null;
     // fs.watch fires several times per write; posting unconditionally spams
     // the channel and re-renders the composer for nothing.
-    const worktrees = entry.worktrees ?? 0;
-    const key = `${name ?? ''}|${worktree}|${worktrees}`;
+    // Read from git's registry, not from remembered hook events: worktrees
+    // created before this daemon started are just as real as ones created after.
+    const held = info ? heldWorktrees(info) : [];
+    const key = `${name ?? ''}|${worktree}|${held.join(',')}`;
     if (entry.branchKey === key) return;
     entry.branchKey = key;
-    this.post(entry, { type: 'branch', name, worktree, worktrees, path: cwd });
+    this.post(entry, { type: 'branch', name, worktree, held, path: cwd });
   }
 
   /**
@@ -434,11 +434,20 @@ export class ChatPanelManager {
   private watchBranch(entry: PanelEntry): void {
     entry.branchWatcher?.close();
     entry.branchWatcher = undefined;
+    entry.registryWatcher?.close();
+    entry.registryWatcher = undefined;
     const cwd = entry.effectiveCwd ?? entry.cwd;
     if (!cwd) return;
     const info = findGitDir(cwd);
     if (!info) return;
     try {
+      // The registry directory appears and disappears as worktrees come and go,
+      // so watch the git dir itself rather than a path that may not exist yet.
+      const registry = fs.watch(info.commonDir, () => {
+        if (this.panels.get(entry.sessionId) === entry) this.updateBranch(entry);
+      });
+      registry.on('error', () => undefined);
+      entry.registryWatcher = registry;
       const watcher = fs.watch(info.headFile, (eventType) => {
         if (this.panels.get(entry.sessionId) !== entry) return; // panel is gone
         this.updateBranch(entry);

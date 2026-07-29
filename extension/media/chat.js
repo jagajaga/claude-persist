@@ -753,22 +753,24 @@
 
   // Where this conversation is working — not the window's repo, and not
   // necessarily the directory the session started in.
-  function renderBranch(name, worktree, dir, worktrees) {
+  function renderBranch(name, worktree, dir, held) {
     if (!name) {
       branchChip.hidden = true;
       return;
     }
     // Distinct glyph for a worktree: a line splitting off the main one. The
     // name already carries which worktree, so no extra marker is needed.
-    const count = Number(worktrees) || 0;
-    // Subagents working in their own worktrees, which the conversation itself
-    // is not in — shown as a count rather than picking one arbitrarily.
-    const agents = count > 0 ? ` ⋔${count}` : '';
-    branchChip.textContent = `${worktree ? '⋔' : '⎇'} ${name}${agents}`;
+    const agents = Array.isArray(held) ? held : [];
+    // One held worktree is the interesting case — that is where the work is
+    // happening, so name it. Several, and a count is all that fits.
+    const suffix = agents.length === 1
+      ? ` ⋔${agents[0]}`
+      : agents.length > 1 ? ` ⋔${agents.length}` : '';
+    branchChip.textContent = `${worktree ? '⋔' : '⎇'} ${name}${suffix}`;
     branchChip.classList.toggle('wt', !!worktree);
     const where = worktree ? `${dir} (worktree)` : dir;
-    branchChip.title = count > 0
-      ? `${where}\n${count} subagent worktree${count === 1 ? '' : 's'} active`
+    branchChip.title = agents.length
+      ? `${where}\nagent worktrees: ${agents.join(', ')}`
       : where;
     branchChip.hidden = false;
   }
@@ -851,7 +853,7 @@
         if (!modelMenu.hidden) renderModelMenu();
         break;
       case 'branch':
-        renderBranch(msg.name, msg.worktree, msg.path, msg.worktrees);
+        renderBranch(msg.name, msg.worktree, msg.path, msg.held);
         break;
     }
   });

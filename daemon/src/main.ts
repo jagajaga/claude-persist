@@ -113,8 +113,8 @@ const callbacks = {
   onMetaChanged(): void {
     registry.save();
   },
-  onWorkspace(sessionId: string, cwd: string, worktrees: number): void {
-    broadcast(sessionId, { kind: 'workspace', sessionId, cwd, worktrees });
+  onWorkspace(sessionId: string, cwd: string): void {
+    broadcast(sessionId, { kind: 'workspace', sessionId, cwd });
   },
 };
 
@@ -146,7 +146,6 @@ function sessionInfo(id: string): SessionInfo {
     // Only when it has actually moved, so a client can tell "never left" from
     // "moved back".
     ...(live && live.workingDir !== meta.cwd ? { effectiveCwd: live.workingDir } : {}),
-    ...(live?.worktreeCount ? { activeWorktrees: live.worktreeCount } : {}),
   };
 }
 

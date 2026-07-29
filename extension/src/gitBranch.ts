@@ -18,6 +18,8 @@ export interface GitInfo {
   isWorktree: boolean;
   /** Directory holding the `.git` entry — the checkout's own root. */
   root: string;
+  /** The repository's main git dir; linked worktrees are registered under it. */
+  commonDir: string;
 }
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
@@ -68,6 +70,7 @@ export function findGitDir(startDir: string): GitInfo | null {
         headFile: path.join(candidate, 'HEAD'),
         isWorktree: false,
         root: dir,
+        commonDir: candidate,
       };
     }
     if (stat?.isFile()) {
@@ -79,7 +82,22 @@ export function findGitDir(startDir: string): GitInfo | null {
       }
       if (!target) return null;
       const gitDir = path.isAbsolute(target) ? target : path.resolve(dir, target);
-      return { gitDir, headFile: path.join(gitDir, 'HEAD'), isWorktree: true, root: dir };
+      // A linked worktree's git dir sits under <main>/.git/worktrees/<name>;
+      // `commondir` points back at the repository everything is registered in.
+      let commonDir = gitDir;
+      try {
+        const rel = fs.readFileSync(path.join(gitDir, 'commondir'), 'utf8').trim();
+        if (rel) commonDir = path.resolve(gitDir, rel);
+      } catch {
+        // Not readable — treat this worktree's own dir as the registry root.
+      }
+      return {
+        gitDir,
+        headFile: path.join(gitDir, 'HEAD'),
+        isWorktree: true,
+        root: dir,
+        commonDir,
+      };
     }
     const parent = path.dirname(dir);
     if (parent === dir) return null;
@@ -98,6 +116,40 @@ export function formatBranchLabel(head: HeadState, worktreeName: string | null):
   if (!branch) return null;
   if (!worktreeName || worktreeName === branch) return branch;
   return `${branch} ·${worktreeName}`;
+}
+
+/** Where Claude Code puts the worktrees it manages for subagents. */
+const AGENT_WORKTREE_SEGMENT = `${path.sep}.claude${path.sep}worktrees${path.sep}`;
+
+/**
+ * Names of agent worktrees the repository currently *holds* — registered under
+ * .claude/worktrees and locked, which is how Claude Code marks one as in use.
+ *
+ * Read from git's own registry rather than from SDK hook events: the registry
+ * is true regardless of which process created the worktree or when, so this
+ * survives a daemon restart. Hook-based counting did not.
+ */
+export function heldWorktrees(info: GitInfo): string[] {
+  const dir = path.join(info.commonDir, 'worktrees');
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return []; // no linked worktrees, or no repository
+  }
+  const held: string[] = [];
+  for (const name of names) {
+    // `locked` marks a worktree as actively held; an idle leftover has none.
+    if (!fs.existsSync(path.join(dir, name, 'locked'))) continue;
+    let target: string;
+    try {
+      target = fs.readFileSync(path.join(dir, name, 'gitdir'), 'utf8').trim();
+    } catch {
+      continue;
+    }
+    if (target.includes(AGENT_WORKTREE_SEGMENT)) held.push(name);
+  }
+  return held.sort();
 }
 
 export function readBranch(info: GitInfo): HeadState {

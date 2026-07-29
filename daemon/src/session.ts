@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
@@ -56,7 +55,7 @@ export interface SessionCallbacks {
   /** Raw ModelInfo[] from the SDK init handshake. */
   onModels(models: unknown[]): void;
   /** The conversation moved directory, or its subagents took/released worktrees. */
-  onWorkspace(sessionId: string, cwd: string, worktrees: number): void;
+  onWorkspace(sessionId: string, cwd: string): void;
 }
 
 /** Truncate long tool payloads before persisting/rendering. */
@@ -96,8 +95,6 @@ export class DaemonSession {
    * since those run in a subshell and don't move the session at all.
    */
   private effectiveCwd: string;
-  /** Worktree names subagents currently hold, by WorktreeCreate/Remove. */
-  private worktrees = new Set<string>();
 
   constructor(meta: SessionMeta, callbacks: SessionCallbacks) {
     this.meta = meta;
@@ -111,12 +108,8 @@ export class DaemonSession {
     return this.effectiveCwd;
   }
 
-  get worktreeCount(): number {
-    return this.worktrees.size;
-  }
-
   private announceWorkspace(): void {
-    this.callbacks.onWorkspace(this.meta.id, this.effectiveCwd, this.worktrees.size);
+    this.callbacks.onWorkspace(this.meta.id, this.effectiveCwd);
   }
 
   get eventCount(): number {
@@ -323,30 +316,10 @@ export class DaemonSession {
           }
           break;
         }
-        case 'WorktreeCreate': {
-          if (typeof hook.name === 'string' && hook.name) {
-            this.worktrees.add(hook.name);
-            this.announceWorkspace();
-          }
-          break;
-        }
-        case 'WorktreeRemove': {
-          // Create reports a name, Remove reports a path; the directory's
-          // basename is the name that was registered.
-          if (typeof hook.worktree_path === 'string' && hook.worktree_path) {
-            this.worktrees.delete(path.basename(hook.worktree_path));
-            this.announceWorkspace();
-          }
-          break;
-        }
       }
       return {};
     };
-    return {
-      CwdChanged: [{ hooks: [observe] }],
-      WorktreeCreate: [{ hooks: [observe] }],
-      WorktreeRemove: [{ hooks: [observe] }],
-    };
+    return { CwdChanged: [{ hooks: [observe] }] };
   }
 
   private canUseTool = async (

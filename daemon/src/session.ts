@@ -347,7 +347,12 @@ export class DaemonSession {
         const message = msg.message as
           | { content?: Array<Record<string, unknown>>; usage?: Record<string, unknown> }
           | undefined;
-        if (message?.usage) this.lastCallUsage = message.usage;
+        // Subagent (Agent tool) messages carry parent_tool_use_id and report
+        // the SUBAGENT's context, not this conversation's — counting them would
+        // make the context ring show someone else's window.
+        if (message?.usage && msg.parent_tool_use_id == null) {
+          this.lastCallUsage = message.usage;
+        }
         for (const block of message?.content ?? []) {
           if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
             this.appendEvent({ type: 'assistant_text', text: block.text });

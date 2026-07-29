@@ -134,10 +134,15 @@ Split the accumulated buffer in two at the last point where markdown structure
 is unambiguously complete, render that prefix, and leave the rest raw.
 
 - The boundary is the last blank line (`\n\n`) in the buffer.
-- Unless that boundary is inside an open fenced code block. A fence is open when
-  the count of lines matching `^\s*(```|~~~)` before the boundary is odd. In
-  that case the boundary moves back to the start of the line that opened the
-  fence, so a half-written fence stays raw rather than rendering as prose.
+- Unless that boundary is inside an open fenced code block, in which case it
+  moves back to the start of the line that opened the fence, so a half-written
+  fence stays raw rather than rendering as prose.
+- Fence tracking follows CommonMark closely enough to be right about the cases
+  assistants actually produce: a fence closes only on the *same* marker
+  character, at least as long as the opener, with nothing after it. Counting
+  fence-looking lines by parity is not enough — a `~~~` line inside a ` ``` `
+  block is content, and treating it as a closer renders a half-written code
+  block as prose.
 - No blank line, or the whole buffer is one open fence → the prefix is empty and
   everything stays raw. Behaviour is then exactly today's.
 
@@ -179,9 +184,10 @@ A preview node becomes two children instead of one text node:
 </div>
 ```
 
-- `chat.js` keeps the raw buffer on the element as `node.dataset.raw` — the
-  single source of truth. `textContent` is no longer usable for that once part
-  of the node is rendered HTML.
+- `chat.js` keeps the raw buffer in a `WeakMap` keyed by the preview element —
+  the single source of truth. `textContent` is no longer usable for that once
+  part of the node is rendered HTML, and a growing multi-KB string does not
+  belong in a DOM attribute.
 - Re-render is coalesced with `requestAnimationFrame`: a burst of deltas costs
   one `marked.parse`, which matters on phones.
 - `.tail` is `white-space: pre-wrap` so raw text keeps its line breaks and does
@@ -236,6 +242,10 @@ If trimming leaves an empty string, fall back to `basename(cwd)`.
 
 The trim rule is a pure function, `sessionTitleFromInput(raw, fallback)`, in
 `extension/src/sessionTitle.ts`, unit-tested.
+
+Dismissing the box (Escape) currently still creates a session, because the
+`undefined` return collapses into the "no title" branch. With a prefilled value
+that is clearly wrong: cancelling now aborts creation.
 
 Only `newSession` is touched. Import keeps its own naming.
 

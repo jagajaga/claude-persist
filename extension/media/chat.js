@@ -688,9 +688,13 @@
   }
 
   function renderPill() {
-    const parts = [modelLabel(currentModel)];
-    if (currentEffort) parts.push(currentEffort);
-    modelPillLabel.textContent = parts.join(' · ');
+    modelPillLabel.replaceChildren();
+    modelPillLabel.appendChild(el('span', 'pill-model', modelLabel(currentModel)));
+    // Separate span so narrow viewports can drop the effort and keep the model
+    // name whole, rather than ellipsizing mid-token.
+    if (currentEffort) {
+      modelPillLabel.appendChild(el('span', 'pill-effort', ` · ${currentEffort}`));
+    }
     modelPill.title = `Model: ${modelLabel(currentModel)} — Effort: ${currentEffort || 'default'}`;
   }
 

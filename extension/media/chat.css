@@ -316,6 +316,8 @@ button.secondary {
   .pill span { display: none; }         /* icon-only bypass toggle on phones */
   /* The model pill has no icon to fall back on — keep its label. */
   #model-pill span { display: inline; }
+  #model-pill .pill-effort { display: none; }
+  .branch-chip { max-width: 7em; }
   .pill { padding: 6px 9px; }
   /* Composer controls wrap instead of overflowing off-screen. */
   #composer-row { flex-wrap: wrap; row-gap: 8px; }
@@ -411,8 +413,7 @@ button.secondary {
 /* ---------- branch chip ----------------------------------------------------- */
 
 .branch-chip {
-  display: inline-flex;
-  align-items: center;
+  display: inline-block;
   font-size: 0.85em;
   font-variant-numeric: tabular-nums;
   color: var(--vscode-descriptionForeground);

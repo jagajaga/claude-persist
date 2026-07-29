@@ -162,7 +162,7 @@ export function activate(context: vscode.ExtensionContext): void {
         if (raw === undefined) return;
         const info = await applyDefaultModel(
           c,
-          await c.createSession(cwd, sessionTitleFromInput(raw, base)),
+          await c.createSession(cwd, sessionTitleFromInput(raw, base) || undefined),
         );
         await panels.openSession(info);
       } catch (err) {

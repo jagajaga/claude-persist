@@ -106,16 +106,31 @@ export function findGitDir(startDir: string): GitInfo | null {
   return null;
 }
 
+/** What the composer chip shows, and which glyph it earns. */
+export interface ChipState {
+  text: string;
+  /** True when this is worktree identity rather than a plain branch. */
+  worktree: boolean;
+}
+
 /**
- * Chip label. A worktree's own directory name is appended, because knowing you
- * are in a worktree is only half the answer — you need to know *which* one. It
- * is dropped when it merely repeats the branch, which is the usual case.
+ * Decide the chip.
+ *
+ * A worktree wins outright: when one is in play its name *is* the answer to
+ * "where is this working", and pairing it with a branch only crowds a chip
+ * that has to survive a phone-width composer.
  */
-export function formatBranchLabel(head: HeadState, worktreeName: string | null): string | null {
-  const branch = formatBranch(head);
-  if (!branch) return null;
-  if (!worktreeName || worktreeName === branch) return branch;
-  return `${branch} ·${worktreeName}`;
+export function chipLabel(
+  branch: string | null,
+  worktreeName: string | null,
+  held: string[],
+): ChipState | null {
+  if (worktreeName) return { text: worktreeName, worktree: true };
+  if (held.length === 1) return { text: held[0], worktree: true };
+  // Several at once: no single name is the answer, so report how many.
+  if (held.length > 1) return { text: String(held.length), worktree: true };
+  if (branch) return { text: branch, worktree: false };
+  return null;
 }
 
 /** Where Claude Code puts the worktrees it manages for subagents. */

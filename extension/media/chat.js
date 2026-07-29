@@ -758,20 +758,15 @@
       branchChip.hidden = true;
       return;
     }
-    // Distinct glyph for a worktree: a line splitting off the main one. The
-    // name already carries which worktree, so no extra marker is needed.
-    const agents = Array.isArray(held) ? held : [];
-    // One held worktree is the interesting case — that is where the work is
-    // happening, so name it. Several, and a count is all that fits.
-    const suffix = agents.length === 1
-      ? ` ⋔${agents[0]}`
-      : agents.length > 1 ? ` ⋔${agents.length}` : '';
-    branchChip.textContent = `${worktree ? '⋔' : '⎇'} ${name}${suffix}`;
+    // The host already decided what this chip says: a worktree name when one is
+    // in play, otherwise the branch. Distinct glyph for a worktree — a line
+    // splitting off the main one.
+    branchChip.textContent = `${worktree ? '⋔' : '⎇'} ${name}`;
     branchChip.classList.toggle('wt', !!worktree);
-    const where = worktree ? `${dir} (worktree)` : dir;
+    const agents = Array.isArray(held) ? held : [];
     branchChip.title = agents.length
-      ? `${where}\nagent worktrees: ${agents.join(', ')}`
-      : where;
+      ? `${dir}\nagent worktrees: ${agents.join(', ')}`
+      : dir;
     branchChip.hidden = false;
   }
 

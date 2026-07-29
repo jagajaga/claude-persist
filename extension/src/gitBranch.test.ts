@@ -8,38 +8,36 @@ import {
   parseHead,
   parseGitFile,
   formatBranch,
-  formatBranchLabel,
+  chipLabel,
   findGitDir,
   readBranch,
 } from './gitBranch';
 
-test('formatBranchLabel: plain checkout shows the branch alone', () => {
-  assert.equal(formatBranchLabel({ kind: 'branch', name: 'main' }, null), 'main');
+test('chipLabel: a plain checkout shows its branch', () => {
+  assert.deepEqual(chipLabel('main', null, []), { text: 'main', worktree: false });
 });
 
-test('formatBranchLabel: a worktree appends its own name', () => {
-  assert.equal(
-    formatBranchLabel({ kind: 'branch', name: 'hotfix' }, 'feature-x'),
-    'hotfix ·feature-x',
-  );
+test('chipLabel: inside a worktree, only the worktree name shows', () => {
+  assert.deepEqual(chipLabel('hotfix', 'feature-x', []), { text: 'feature-x', worktree: true });
 });
 
-test('formatBranchLabel: a worktree named after its branch says it once', () => {
-  assert.equal(formatBranchLabel({ kind: 'branch', name: 'feature-x' }, 'feature-x'), 'feature-x');
+test('chipLabel: one held worktree replaces the branch', () => {
+  assert.deepEqual(chipLabel('main', null, ['agent-budget-liveness']), {
+    text: 'agent-budget-liveness',
+    worktree: true,
+  });
 });
 
-test('formatBranchLabel: detached head in a worktree keeps both parts', () => {
-  assert.equal(
-    formatBranchLabel(
-      { kind: 'detached', sha: '0123456789abcdef0123456789abcdef01234567' },
-      'feature-x',
-    ),
-    '01234567 ·feature-x',
-  );
+test('chipLabel: several held worktrees collapse to a count', () => {
+  assert.deepEqual(chipLabel('main', null, ['a', 'b', 'c']), { text: '3', worktree: true });
 });
 
-test('formatBranchLabel: nothing to show stays null even inside a worktree', () => {
-  assert.equal(formatBranchLabel({ kind: 'unknown' }, 'feature-x'), null);
+test('chipLabel: being in a worktree outranks held ones', () => {
+  assert.deepEqual(chipLabel('hotfix', 'mine', ['other']), { text: 'mine', worktree: true });
+});
+
+test('chipLabel: nothing to show is null', () => {
+  assert.equal(chipLabel(null, null, []), null);
 });
 
 test('parseHead: symbolic ref to a branch', () => {

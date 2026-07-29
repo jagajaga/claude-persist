@@ -10,7 +10,7 @@ import type {
 } from '@claude-persist/shared';
 import type { DaemonClient } from './daemonClient';
 import { mergeExtraModels } from './models';
-import { findGitDir, formatBranchLabel, heldWorktrees, readBranch } from './gitBranch';
+import { chipLabel, findGitDir, formatBranch, heldWorktrees, readBranch } from './gitBranch';
 
 export const VIEW_TYPE = 'claudePersist.chat';
 
@@ -412,19 +412,28 @@ export class ChatPanelManager {
     const cwd = entry.effectiveCwd ?? entry.cwd;
     if (!cwd) return;
     const info = findGitDir(cwd);
-    const worktree = info?.isWorktree ?? false;
-    const name = info
-      ? formatBranchLabel(readBranch(info), worktree ? path.basename(info.root) : null)
-      : null;
-    // fs.watch fires several times per write; posting unconditionally spams
-    // the channel and re-renders the composer for nothing.
     // Read from git's registry, not from remembered hook events: worktrees
     // created before this daemon started are just as real as ones created after.
     const held = info ? heldWorktrees(info) : [];
-    const key = `${name ?? ''}|${worktree}|${held.join(',')}`;
+    const chip = info
+      ? chipLabel(
+          formatBranch(readBranch(info)),
+          info.isWorktree ? path.basename(info.root) : null,
+          held,
+        )
+      : null;
+    // fs.watch fires several times per write; posting unconditionally spams
+    // the channel and re-renders the composer for nothing.
+    const key = `${chip?.text ?? ''}|${chip?.worktree ?? false}`;
     if (entry.branchKey === key) return;
     entry.branchKey = key;
-    this.post(entry, { type: 'branch', name, worktree, held, path: cwd });
+    this.post(entry, {
+      type: 'branch',
+      name: chip?.text ?? null,
+      worktree: chip?.worktree ?? false,
+      held,
+      path: cwd,
+    });
   }
 
   /**

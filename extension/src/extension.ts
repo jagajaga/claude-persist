@@ -54,6 +54,8 @@ async function doConnect(context: vscode.ExtensionContext): Promise<DaemonClient
     onDelta: (sessionId, text) => panels.handleDelta(sessionId, text),
     onSessionsChanged: () => sessionsProvider.refresh(),
     onModels: (models) => panels.handleModels(models),
+    onWorkspace: (sessionId, cwd, worktrees) =>
+      panels.handleWorkspace(sessionId, cwd, worktrees),
     onDisconnect: () => {
       client = null;
       statusItem.text = '$(debug-disconnect) Claude Persist';

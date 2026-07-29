@@ -113,6 +113,9 @@ const callbacks = {
   onMetaChanged(): void {
     registry.save();
   },
+  onWorkspace(sessionId: string, cwd: string, worktrees: number): void {
+    broadcast(sessionId, { kind: 'workspace', sessionId, cwd, worktrees });
+  },
 };
 
 function getSession(id: string): DaemonSession {
@@ -140,6 +143,10 @@ function sessionInfo(id: string): SessionInfo {
     createdAt: meta.createdAt,
     lastActivityAt: meta.lastActivityAt,
     eventCount: live?.eventCount ?? 0,
+    // Only when it has actually moved, so a client can tell "never left" from
+    // "moved back".
+    ...(live && live.workingDir !== meta.cwd ? { effectiveCwd: live.workingDir } : {}),
+    ...(live?.worktreeCount ? { activeWorktrees: live.worktreeCount } : {}),
   };
 }
 

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
@@ -54,6 +55,8 @@ export interface SessionCallbacks {
   onMetaChanged(): void;
   /** Raw ModelInfo[] from the SDK init handshake. */
   onModels(models: unknown[]): void;
+  /** The conversation moved directory, or its subagents took/released worktrees. */
+  onWorkspace(sessionId: string, cwd: string, worktrees: number): void;
 }
 
 /** Truncate long tool payloads before persisting/rendering. */
@@ -87,11 +90,33 @@ export class DaemonSession {
   private logStream: fs.WriteStream | null = null;
   /** Usage of the most recent assistant API call — the true context size. */
   private lastCallUsage: Record<string, unknown> | null = null;
+  /**
+   * Where the conversation is working now. The SDK reports moves via the
+   * CwdChanged hook; scraping `cd` out of Bash commands would be guesswork,
+   * since those run in a subshell and don't move the session at all.
+   */
+  private effectiveCwd: string;
+  /** Worktree names subagents currently hold, by WorktreeCreate/Remove. */
+  private worktrees = new Set<string>();
 
   constructor(meta: SessionMeta, callbacks: SessionCallbacks) {
     this.meta = meta;
     this.callbacks = callbacks;
+    this.effectiveCwd = meta.cwd;
     this.loadLog();
+  }
+
+  /** Directory the conversation is working in right now. */
+  get workingDir(): string {
+    return this.effectiveCwd;
+  }
+
+  get worktreeCount(): number {
+    return this.worktrees.size;
+  }
+
+  private announceWorkspace(): void {
+    this.callbacks.onWorkspace(this.meta.id, this.effectiveCwd, this.worktrees.size);
   }
 
   get eventCount(): number {
@@ -266,6 +291,7 @@ export class DaemonSession {
         // mid-session; actual behavior is still governed by permissionMode.
         allowDangerouslySkipPermissions: true,
         canUseTool: this.canUseTool,
+        hooks: this.workspaceHooks(),
       },
     });
     this.activeQuery = q;
@@ -276,6 +302,51 @@ export class DaemonSession {
       })
       .catch(() => undefined);
     void this.consume(q);
+  }
+
+  /**
+   * Authoritative workspace signals from the SDK. These are the only reliable
+   * source: a `cd` inside a Bash tool call runs in a subshell and never moves
+   * the conversation, so parsing tool inputs would report movement that did
+   * not happen.
+   *
+   * Hooks must return an empty output — we observe, we never alter behaviour.
+   */
+  private workspaceHooks(): NonNullable<Parameters<typeof query>[0]['options']>['hooks'] {
+    const observe = async (input: unknown): Promise<Record<string, never>> => {
+      const hook = input as Record<string, unknown>;
+      switch (hook.hook_event_name) {
+        case 'CwdChanged': {
+          if (typeof hook.new_cwd === 'string' && hook.new_cwd) {
+            this.effectiveCwd = hook.new_cwd;
+            this.announceWorkspace();
+          }
+          break;
+        }
+        case 'WorktreeCreate': {
+          if (typeof hook.name === 'string' && hook.name) {
+            this.worktrees.add(hook.name);
+            this.announceWorkspace();
+          }
+          break;
+        }
+        case 'WorktreeRemove': {
+          // Create reports a name, Remove reports a path; the directory's
+          // basename is the name that was registered.
+          if (typeof hook.worktree_path === 'string' && hook.worktree_path) {
+            this.worktrees.delete(path.basename(hook.worktree_path));
+            this.announceWorkspace();
+          }
+          break;
+        }
+      }
+      return {};
+    };
+    return {
+      CwdChanged: [{ hooks: [observe] }],
+      WorktreeCreate: [{ hooks: [observe] }],
+      WorktreeRemove: [{ hooks: [observe] }],
+    };
   }
 
   private canUseTool = async (

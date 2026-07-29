@@ -36,6 +36,14 @@ interface PanelEntry {
   branchWatcher?: fs.FSWatcher;
   /** Last value pushed to the webview, so repeated fs events post once. */
   branchKey?: string;
+  /**
+   * Where the conversation is working, which is not always its cwd — it moves
+   * when the conversation enters a worktree. Only the chip uses this; file
+   * resolution stays anchored to cwd.
+   */
+  effectiveCwd?: string;
+  /** Worktrees this session's subagents currently hold. */
+  worktrees?: number;
   baseTitle: string;
   pendingAttachments: Attachment[];
   /** In-flight chunked uploads from the browser, keyed by uploadId. */
@@ -88,6 +96,21 @@ export class ChatPanelManager {
   handleDelta(sessionId: string, text: string): void {
     const entry = this.panels.get(sessionId);
     if (entry) this.post(entry, { type: 'delta', text });
+  }
+
+  /** The conversation moved, or its subagents took/released worktrees. */
+  handleWorkspace(sessionId: string, cwd: string, worktrees: number): void {
+    const entry = this.panels.get(sessionId);
+    if (!entry) return;
+    // effectiveCwd is undefined while the conversation is still in its own
+    // cwd, so compare against the resolved directory, not the raw field.
+    const moved = (entry.effectiveCwd ?? entry.cwd) !== cwd;
+    entry.effectiveCwd = cwd === entry.cwd ? undefined : cwd;
+    entry.worktrees = worktrees;
+    // Only re-establish the fs watch when the directory itself changed;
+    // a worktree count change doesn't move HEAD.
+    if (moved) this.watchBranch(entry);
+    this.updateBranch(entry);
   }
 
   handleModels(models: ModelDescriptor[]): void {
@@ -360,6 +383,8 @@ export class ChatPanelManager {
     entry.panel.title =
       (result.info.status === 'running' ? '⧗ ' : '') + result.info.title;
     entry.cwd = result.info.cwd;
+    entry.effectiveCwd = result.info.effectiveCwd;
+    entry.worktrees = result.info.activeWorktrees ?? 0;
     // A reattach means the webview was re-created and lost its chip; force a
     // fresh post by clearing the dedupe key.
     entry.branchKey = undefined;
@@ -386,7 +411,7 @@ export class ChatPanelManager {
 
   /** Push this session's branch to its webview, but only when it changed. */
   private updateBranch(entry: PanelEntry): void {
-    const cwd = entry.cwd;
+    const cwd = entry.effectiveCwd ?? entry.cwd;
     if (!cwd) return;
     const info = findGitDir(cwd);
     const worktree = info?.isWorktree ?? false;
@@ -395,10 +420,11 @@ export class ChatPanelManager {
       : null;
     // fs.watch fires several times per write; posting unconditionally spams
     // the channel and re-renders the composer for nothing.
-    const key = `${name ?? ''}|${worktree}`;
+    const worktrees = entry.worktrees ?? 0;
+    const key = `${name ?? ''}|${worktree}|${worktrees}`;
     if (entry.branchKey === key) return;
     entry.branchKey = key;
-    this.post(entry, { type: 'branch', name, worktree, path: cwd });
+    this.post(entry, { type: 'branch', name, worktree, worktrees, path: cwd });
   }
 
   /**
@@ -408,8 +434,9 @@ export class ChatPanelManager {
   private watchBranch(entry: PanelEntry): void {
     entry.branchWatcher?.close();
     entry.branchWatcher = undefined;
-    if (!entry.cwd) return;
-    const info = findGitDir(entry.cwd);
+    const cwd = entry.effectiveCwd ?? entry.cwd;
+    if (!cwd) return;
+    const info = findGitDir(cwd);
     if (!info) return;
     try {
       const watcher = fs.watch(info.headFile, (eventType) => {

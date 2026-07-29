@@ -28,6 +28,10 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      # Absent until the Open VSX token is added as a repo secret; the publish
+      # step below is skipped while it is, so the release still succeeds.
+      OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -69,3 +73,10 @@ jobs:
           name: v${{ steps.bump.outputs.version }}
           files: ${{ steps.vsix.outputs.file }}
           generate_release_notes: true
+
+      # Open VSX is the marketplace code-server uses by default, so publishing
+      # here is what makes the Extensions view show a normal "Update" button
+      # instead of the extension having to notify about itself.
+      - name: Publish to Open VSX
+        if: env.OVSX_TOKEN != ''
+        run: npx --yes ovsx publish "${{ steps.vsix.outputs.file }}" -p "$OVSX_TOKEN"

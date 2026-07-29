@@ -16,6 +16,22 @@ const SKIP_KEY = 'claudePersist.skipVersion';
  */
 let offering: string | null = null;
 
+/**
+ * True when this copy was installed from an extension gallery (Open VSX, via
+ * code-server's default) rather than sideloaded from a VSIX. VS Code then owns
+ * update notifications — the badge on the Extensions icon and the Update button
+ * — and ours would be a duplicate.
+ *
+ * The gallery stamps `__metadata` into package.json at install time; a
+ * sideloaded VSIX has none. If that internal field ever changes shape we fail
+ * towards notifying, which is the safe direction: a duplicate prompt is an
+ * annoyance, a missing one leaves you stranded on an old build.
+ */
+function installedFromGallery(context: vscode.ExtensionContext): boolean {
+  const metadata = (context.extension.packageJSON as { __metadata?: { id?: string } }).__metadata;
+  return typeof metadata?.id === 'string' && metadata.id.length > 0;
+}
+
 function getJson(url: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
     https
@@ -72,6 +88,7 @@ export async function notifyRelease(
   context: vscode.ExtensionContext,
   release: ReleaseInfo,
 ): Promise<void> {
+  if (installedFromGallery(context)) return; // VS Code shows its own
   const current = context.extension.packageJSON.version as string;
   if (!isNewerVersion(release.tagName, current)) return;
   if (context.globalState.get<string>(SKIP_KEY) === release.tagName) return;
@@ -87,6 +104,9 @@ export async function checkForUpdate(
   context: vscode.ExtensionContext,
   interactive = false,
 ): Promise<void> {
+  // A gallery install gets VS Code's own update UI; only the explicit command
+  // still answers, so "Check for Updates" is never silently inert.
+  if (!interactive && installedFromGallery(context)) return;
   const current = context.extension.packageJSON.version as string;
   let release: ReleaseInfo | null;
   try {

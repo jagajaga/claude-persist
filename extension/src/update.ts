@@ -3,7 +3,8 @@ import * as https from 'https';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { isNewerVersion, parseRelease, type ReleaseInfo } from '@claude-persist/shared';
+import type { ReleaseInfo } from '@claude-persist/shared';
+import { isNewerVersion, parseRelease } from './release';
 
 const REPO = 'jagajaga/claude-persist';
 const SKIP_KEY = 'claudePersist.skipVersion';

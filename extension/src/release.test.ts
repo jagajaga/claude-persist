@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRelease, isNewerVersion } from '@claude-persist/shared';
+import { parseRelease, isNewerVersion } from './release';
 
 test('parseRelease: picks the vsix asset out of a release', () => {
   const info = parseRelease({

@@ -250,6 +250,9 @@ function onConnection(socket: net.Socket): void {
     },
   };
   clients.add(client);
+  // First window in: nothing was polled while idle, so fetch now rather than
+  // making it wait a full interval.
+  releases.refresh();
 
   let buffer = '';
   socket.on('data', (chunk) => {

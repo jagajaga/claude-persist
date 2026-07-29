@@ -5,7 +5,6 @@ import type { SessionInfo } from '@claude-persist/shared';
 import { DaemonClient } from './daemonClient';
 import { ChatPanelManager, VIEW_TYPE } from './chatPanel';
 import { SessionsProvider } from './sessionsView';
-import { checkForUpdate, notifyRelease } from './update';
 import { sessionTitleFromInput } from './sessionTitle';
 
 let client: DaemonClient | null = null;
@@ -55,9 +54,6 @@ async function doConnect(context: vscode.ExtensionContext): Promise<DaemonClient
     onDelta: (sessionId, text) => panels.handleDelta(sessionId, text),
     onSessionsChanged: () => sessionsProvider.refresh(),
     onModels: (models) => panels.handleModels(models),
-    // The daemon polls GitHub for all windows and pushes the moment a release
-    // lands, so an update no longer waits for this window to reload.
-    onRelease: (release) => void notifyRelease(context, release).catch(() => undefined),
     onDisconnect: () => {
       client = null;
       statusItem.text = '$(debug-disconnect) Claude Persist';
@@ -319,12 +315,6 @@ export function activate(context: vscode.ExtensionContext): void {
     },
   });
 
-  context.subscriptions.push(
-    vscode.commands.registerCommand('claudePersist.checkForUpdate', () =>
-      checkForUpdate(context, true),
-    ),
-  );
-
   // Re-push the model dropdown when the user edits extraModels.
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
@@ -332,20 +322,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // Backstop only: the daemon pushes releases within a minute, so this covers
-  // the case where it is unreachable or predates release pushes.
-  const updateTimer = setInterval(
-    () => void checkForUpdate(context).catch(() => undefined),
-    6 * 60 * 60 * 1000,
-  );
-  context.subscriptions.push({ dispose: () => clearInterval(updateTimer) });
-
   // Connect eagerly so restored panels attach right after reload; don't spawn
   // errors at the user on startup if the daemon isn't built yet.
   void ensureClient(context).catch(() => undefined);
-
-  // Sideloaded VSIX installs don't auto-update; check GitHub releases quietly.
-  void checkForUpdate(context).catch(() => undefined);
 }
 
 export function deactivate(): void {

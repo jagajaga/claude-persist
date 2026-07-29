@@ -6,10 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export * from './release.js';
-import type { ReleaseInfo } from './release.js';
-
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 
 export type SessionStatus = 'idle' | 'running' | 'error';
 
@@ -118,12 +115,6 @@ export type Push =
   | { kind: 'models'; models: ModelDescriptor[] }
   /** Live-only streaming text; not persisted, superseded by the next assistant_text event. */
   | { kind: 'delta'; sessionId: string; text: string }
-  /**
-   * Latest GitHub release, pushed the moment the daemon notices it. The daemon
-   * polls once for every window, so update latency doesn't depend on a client
-   * reloading, and the poll rate doesn't scale with the number of windows.
-   */
-  | { kind: 'release'; release: ReleaseInfo }
   | { kind: 'sessions_changed' };
 
 export type ServerMessage =

@@ -67,10 +67,6 @@
         "icon": "$(refresh)"
       },
       {
-        "command": "claudePersist.checkForUpdate",
-        "title": "Claude Persist: Check for Updates"
-      },
-      {
         "command": "claudePersist.importSession",
         "title": "Claude Persist: Import Claude Code Session",
         "icon": "$(cloud-download)"

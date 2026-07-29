@@ -186,6 +186,60 @@
   // permanent DOM — releasing the reference without clearing it is what used
   // to strand raw '##'/'**' fragments, split mid-word at every tool call.
   let previewEls = [];
+  // The raw buffer is the source of truth: once part of a preview is rendered
+  // HTML, its textContent no longer round-trips. A WeakMap keeps a growing
+  // multi-KB string out of the DOM.
+  const previewRaw = new WeakMap();  // node -> accumulated raw text
+  const previewStable = new WeakMap(); // node -> length of prefix already rendered
+  let renderFrame = 0;
+
+  function makePreview() {
+    const node = el('div', 'assistant streaming');
+    node.appendChild(el('div', 'stable'));
+    node.appendChild(el('div', 'tail'));
+    previewRaw.set(node, '');
+    previewStable.set(node, -1);
+    return node;
+  }
+
+  function appendPreviewText(node, text) {
+    previewRaw.set(node, (previewRaw.get(node) || '') + text);
+    scheduleRender();
+  }
+
+  function scheduleRender() {
+    // Coalesce a burst of deltas into one parse — this is what keeps the
+    // markdown re-render off the critical path on phones.
+    if (renderFrame) return;
+    renderFrame = requestAnimationFrame(renderPreviews);
+  }
+
+  function cancelRender() {
+    if (renderFrame) {
+      cancelAnimationFrame(renderFrame);
+      renderFrame = 0;
+    }
+  }
+
+  function renderPreviews() {
+    renderFrame = 0;
+    for (const node of previewEls) {
+      const raw = previewRaw.get(node) || '';
+      const split = splitStreamingMarkdown(raw);
+      const stableEl = node.firstChild;
+      const tailEl = node.lastChild;
+      // The stable prefix only ever grows, so equal length means equal text —
+      // and re-parsing settled markdown is exactly the flicker we're avoiding.
+      if (previewStable.get(node) !== split.stable.length) {
+        if (split.stable) stableEl.replaceChildren(renderMarkdown(split.stable));
+        else stableEl.replaceChildren();
+        previewStable.set(node, split.stable.length);
+      }
+      tailEl.textContent = split.tail;
+    }
+    keepWorkingLast();
+    if (pinned) scrollToBottom();
+  }
 
   function endStreaming() {
     if (streamingEl) {
@@ -196,6 +250,7 @@
 
   /** Drop preview fragments superseded by an authoritative assistant_text. */
   function dropPreviews() {
+    cancelRender();
     for (const node of previewEls) node.remove();
     previewEls = [];
     streamingEl = null;
@@ -206,10 +261,15 @@
    * Render what streamed rather than discarding the user's text.
    */
   function settlePreviews() {
+    cancelRender();
     for (const node of previewEls) {
-      const text = node.textContent;
-      if (text && text.trim()) node.replaceChildren(renderMarkdown(text));
-      else node.remove();
+      const raw = previewRaw.get(node) || '';
+      if (raw.trim()) {
+        node.classList.remove('streaming');
+        node.replaceChildren(renderMarkdown(raw));
+      } else {
+        node.remove();
+      }
     }
     previewEls = [];
     streamingEl = null;
@@ -714,14 +774,14 @@
         break;
       case 'delta': {
         if (!streamingEl) {
-          streamingEl = el('div', 'assistant streaming', '');
+          streamingEl = makePreview();
           threadEl.appendChild(streamingEl);
           previewEls.push(streamingEl);
           setRunning(true);
         }
-        streamingEl.textContent += msg.text;
-        keepWorkingLast();
-        if (pinned) scrollToBottom();
+        // Scrolling and the working-row reorder happen in renderPreviews, on
+        // the animation frame, so they run once per frame rather than per chunk.
+        appendPreviewText(streamingEl, msg.text);
         break;
       }
       case 'attachments':

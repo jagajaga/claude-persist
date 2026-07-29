@@ -441,7 +441,12 @@ export class ChatPanelManager {
     const media = (...parts: string[]): string =>
       fs.readFileSync(path.join(this.context.extensionPath, 'media', ...parts), 'utf8');
     const inlineCss = media('chat.css');
-    const inlineJs = [media('vendor', 'marked.js'), media('vendor', 'purify.min.js'), media('chat.js')];
+    const inlineJs = [
+      media('vendor', 'marked.js'),
+      media('vendor', 'purify.min.js'),
+      media('streamingMarkdown.js'),
+      media('chat.js'),
+    ];
     const nonce = Math.random().toString(36).slice(2);
     return `<!DOCTYPE html>
 <html lang="en">

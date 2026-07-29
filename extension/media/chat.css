@@ -40,11 +40,16 @@ body { display: flex; flex-direction: column; }
 /* ---------- assistant: document-flow markdown --------------------------- */
 
 .assistant { line-height: 1.55; word-break: break-word; }
-.assistant.streaming::after {
+/* The caret rides the raw tail, so it stays on the last streamed line rather
+   than dropping below the block-level preview children. */
+.assistant.streaming .tail::after {
   content: '▍';
   animation: blink 1s step-start infinite;
   opacity: 0.6;
 }
+/* Raw text keeps its line breaks, so nothing jumps when it later renders. */
+.assistant .tail { white-space: pre-wrap; }
+.assistant .stable:empty, .assistant .tail:empty { display: none; }
 @keyframes blink { 50% { opacity: 0; } }
 
 .md p { margin: 0 0 10px; }

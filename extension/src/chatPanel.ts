@@ -10,6 +10,7 @@ import type {
 } from '@claude-persist/shared';
 import type { DaemonClient } from './daemonClient';
 import { mergeExtraModels } from './models';
+import { findGitDir, formatBranch, readBranch } from './gitBranch';
 
 export const VIEW_TYPE = 'claudePersist.chat';
 
@@ -31,6 +32,10 @@ interface PanelEntry {
   ready: boolean;
   queue: unknown[];
   cwd?: string;
+  /** Watches this session's own .git/HEAD so the branch chip tracks its cwd. */
+  branchWatcher?: fs.FSWatcher;
+  /** Last value pushed to the webview, so repeated fs events post once. */
+  branchKey?: string;
   baseTitle: string;
   pendingAttachments: Attachment[];
   /** In-flight chunked uploads from the browser, keyed by uploadId. */
@@ -315,6 +320,7 @@ export class ChatPanelManager {
     });
 
     panel.onDidDispose(() => {
+      this.panels.get(sessionId)?.branchWatcher?.close();
       this.panels.delete(sessionId);
       void this.client()?.detach(sessionId).catch(() => undefined);
     });
@@ -354,6 +360,11 @@ export class ChatPanelManager {
     entry.panel.title =
       (result.info.status === 'running' ? '⧗ ' : '') + result.info.title;
     entry.cwd = result.info.cwd;
+    // A reattach means the webview was re-created and lost its chip; force a
+    // fresh post by clearing the dedupe key.
+    entry.branchKey = undefined;
+    this.watchBranch(entry);
+    this.updateBranch(entry);
     if (result.events.length > 0) {
       entry.lastSeq = result.events[result.events.length - 1].seq + 1;
     }
@@ -371,6 +382,50 @@ export class ChatPanelManager {
         this.post(entry, { type: 'models', models: this.mergedModels() });
       })
       .catch(() => undefined);
+  }
+
+  /** Push this session's branch to its webview, but only when it changed. */
+  private updateBranch(entry: PanelEntry): void {
+    const cwd = entry.cwd;
+    if (!cwd) return;
+    const info = findGitDir(cwd);
+    const name = info ? formatBranch(readBranch(info)) : null;
+    const worktree = info?.isWorktree ?? false;
+    // fs.watch fires several times per write; posting unconditionally spams
+    // the channel and re-renders the composer for nothing.
+    const key = `${name ?? ''}|${worktree}`;
+    if (entry.branchKey === key) return;
+    entry.branchKey = key;
+    this.post(entry, { type: 'branch', name, worktree, path: cwd });
+  }
+
+  /**
+   * Watch the HEAD of the session's *own* git dir — a worktree has its own, so
+   * the chip follows that directory rather than the window's repository.
+   */
+  private watchBranch(entry: PanelEntry): void {
+    entry.branchWatcher?.close();
+    entry.branchWatcher = undefined;
+    if (!entry.cwd) return;
+    const info = findGitDir(entry.cwd);
+    if (!info) return;
+    try {
+      const watcher = fs.watch(info.headFile, (eventType) => {
+        if (this.panels.get(entry.sessionId) !== entry) return; // panel is gone
+        this.updateBranch(entry);
+        // git often replaces HEAD instead of writing in place, which kills the
+        // watch; re-establish it so the chip keeps updating.
+        if (eventType === 'rename') {
+          setTimeout(() => {
+            if (this.panels.get(entry.sessionId) === entry) this.watchBranch(entry);
+          }, 50);
+        }
+      });
+      watcher.on('error', () => undefined); // non-fatal: chip just stops updating
+      entry.branchWatcher = watcher;
+    } catch {
+      // Same: the chip keeps its attach-time value.
+    }
   }
 
   private post(entry: PanelEntry, message: unknown): void {
@@ -421,6 +476,7 @@ export class ChatPanelManager {
                     transform="rotate(-90 10 10)"/>
           </svg>
         </button>
+        <span id="branch-chip" class="branch-chip" hidden></span>
         <span class="flex-spacer"></span>
         <button id="perm-toggle" class="pill" title="Toggle bypass permissions">
           <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 1 2.5 3v4.1c0 3.3 2.3 6.4 5.5 7.4 3.2-1 5.5-4.1 5.5-7.4V3L8 1zm0 1.6 4 1.5v3c0 2.6-1.7 5-4 5.9-2.3-.9-4-3.3-4-5.9v-3l4-1.5z"/></svg>

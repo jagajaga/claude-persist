@@ -399,6 +399,25 @@ button.secondary {
 .ring-btn.warn .ring-fg { stroke: var(--vscode-charts-yellow, #d6a54a); }
 .ring-btn.hot .ring-fg { stroke: var(--vscode-errorForeground, #f14c4c); }
 
+/* ---------- branch chip ----------------------------------------------------- */
+
+.branch-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+  color: var(--vscode-descriptionForeground);
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.35));
+  border-radius: 999px;
+  padding: 3px 10px;
+  max-width: 12em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Dashed edge marks a worktree without relying on colour alone. */
+.branch-chip.wt { border-style: dashed; }
+
 /* ---------- inline working indicator in the thread ------------------------ */
 
 .working-row {

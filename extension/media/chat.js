@@ -25,6 +25,7 @@
   const modelSelect = document.getElementById('model-select');
   const effortSelect = document.getElementById('effort-select');
   const promptBar = document.getElementById('prompt-bar');
+  const branchChip = document.getElementById('branch-chip');
 
   const RING_CIRCUMFERENCE = 47.1;
   let contextWindow = 1000000; // default 1M; overwritten by the SDK's reported window
@@ -658,6 +659,18 @@
     );
   }
 
+  // Per-session branch indicator: this session's cwd, not the window's repo.
+  function renderBranch(name, worktree, dir) {
+    if (!name) {
+      branchChip.hidden = true;
+      return;
+    }
+    branchChip.textContent = `⎇ ${name}${worktree ? ' ·wt' : ''}`;
+    branchChip.classList.toggle('wt', !!worktree);
+    branchChip.title = worktree ? `${dir} (worktree)` : dir;
+    branchChip.hidden = false;
+  }
+
   function renderChips(items) {
     chipsEl.replaceChildren();
     items.forEach((item, index) => {
@@ -733,6 +746,9 @@
         modelInfos = msg.models ?? [];
         rebuildModelOptions();
         rebuildEffortOptions();
+        break;
+      case 'branch':
+        renderBranch(msg.name, msg.worktree, msg.path);
         break;
     }
   });

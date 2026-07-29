@@ -16,6 +16,8 @@ export interface GitInfo {
   headFile: string;
   /** True when the directory is a linked worktree with its own HEAD. */
   isWorktree: boolean;
+  /** Directory holding the `.git` entry — the checkout's own root. */
+  root: string;
 }
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
@@ -65,6 +67,7 @@ export function findGitDir(startDir: string): GitInfo | null {
         gitDir: candidate,
         headFile: path.join(candidate, 'HEAD'),
         isWorktree: false,
+        root: dir,
       };
     }
     if (stat?.isFile()) {
@@ -76,13 +79,25 @@ export function findGitDir(startDir: string): GitInfo | null {
       }
       if (!target) return null;
       const gitDir = path.isAbsolute(target) ? target : path.resolve(dir, target);
-      return { gitDir, headFile: path.join(gitDir, 'HEAD'), isWorktree: true };
+      return { gitDir, headFile: path.join(gitDir, 'HEAD'), isWorktree: true, root: dir };
     }
     const parent = path.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
   return null;
+}
+
+/**
+ * Chip label. A worktree's own directory name is appended, because knowing you
+ * are in a worktree is only half the answer — you need to know *which* one. It
+ * is dropped when it merely repeats the branch, which is the usual case.
+ */
+export function formatBranchLabel(head: HeadState, worktreeName: string | null): string | null {
+  const branch = formatBranch(head);
+  if (!branch) return null;
+  if (!worktreeName || worktreeName === branch) return branch;
+  return `${branch} ·${worktreeName}`;
 }
 
 export function readBranch(info: GitInfo): HeadState {

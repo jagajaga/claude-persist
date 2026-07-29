@@ -757,7 +757,9 @@
       branchChip.hidden = true;
       return;
     }
-    branchChip.textContent = `⎇ ${name}${worktree ? ' ·wt' : ''}`;
+    // Distinct glyph for a worktree: a line splitting off the main one. The
+    // name already carries which worktree, so no extra marker is needed.
+    branchChip.textContent = `${worktree ? '⋔' : '⎇'} ${name}`;
     branchChip.classList.toggle('wt', !!worktree);
     branchChip.title = worktree ? `${dir} (worktree)` : dir;
     branchChip.hidden = false;

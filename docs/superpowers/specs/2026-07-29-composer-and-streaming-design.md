@@ -100,10 +100,15 @@ New element in `#composer-row`, before `.flex-spacer`:
 <span id="branch-chip" class="branch-chip" hidden></span>
 ```
 
-- Text is the branch name, prefixed with the glyph `⎇` (U+2387) — a text
-  symbol, not an emoji, consistent with the `⧗`/`▣`/`▤`/`⚠︎` set already in use.
-- Worktree: the chip gets class `wt` and a trailing `·wt` marker, so it is
-  distinguishable without color alone.
+- Text is the branch name, prefixed with `⎇` (U+2387) — a text symbol, not an
+  emoji, consistent with the `⧗`/`▣`/`▤`/`⚠︎` set already in use.
+- Worktree: a different glyph, `⋔` (U+22D4, a line splitting off the main one),
+  plus the worktree's own directory name — `⋔ hotfix ·feature-x`. Knowing you
+  are in *a* worktree is only half the answer; you need to know which one, and
+  a tooltip cannot deliver that on a phone. The name is dropped when it merely
+  repeats the branch, which is the usual case, giving `⋔ feature-x`.
+- The chip also keeps class `wt` for its dashed border, so the distinction
+  survives a font that renders both glyphs poorly.
 - `title` carries the full path of the session's `cwd` plus, for a worktree,
   the word "worktree".
 - Not a button — nothing to click. It is an indicator.

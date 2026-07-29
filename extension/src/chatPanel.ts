@@ -10,7 +10,7 @@ import type {
 } from '@claude-persist/shared';
 import type { DaemonClient } from './daemonClient';
 import { mergeExtraModels } from './models';
-import { findGitDir, formatBranch, readBranch } from './gitBranch';
+import { findGitDir, formatBranchLabel, readBranch } from './gitBranch';
 
 export const VIEW_TYPE = 'claudePersist.chat';
 
@@ -389,8 +389,10 @@ export class ChatPanelManager {
     const cwd = entry.cwd;
     if (!cwd) return;
     const info = findGitDir(cwd);
-    const name = info ? formatBranch(readBranch(info)) : null;
     const worktree = info?.isWorktree ?? false;
+    const name = info
+      ? formatBranchLabel(readBranch(info), worktree ? path.basename(info.root) : null)
+      : null;
     // fs.watch fires several times per write; posting unconditionally spams
     // the channel and re-renders the composer for nothing.
     const key = `${name ?? ''}|${worktree}`;

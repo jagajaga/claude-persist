@@ -3,7 +3,43 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { parseHead, parseGitFile, formatBranch, findGitDir, readBranch } from './gitBranch';
+import {
+  parseHead,
+  parseGitFile,
+  formatBranch,
+  formatBranchLabel,
+  findGitDir,
+  readBranch,
+} from './gitBranch';
+
+test('formatBranchLabel: plain checkout shows the branch alone', () => {
+  assert.equal(formatBranchLabel({ kind: 'branch', name: 'main' }, null), 'main');
+});
+
+test('formatBranchLabel: a worktree appends its own name', () => {
+  assert.equal(
+    formatBranchLabel({ kind: 'branch', name: 'hotfix' }, 'feature-x'),
+    'hotfix ·feature-x',
+  );
+});
+
+test('formatBranchLabel: a worktree named after its branch says it once', () => {
+  assert.equal(formatBranchLabel({ kind: 'branch', name: 'feature-x' }, 'feature-x'), 'feature-x');
+});
+
+test('formatBranchLabel: detached head in a worktree keeps both parts', () => {
+  assert.equal(
+    formatBranchLabel(
+      { kind: 'detached', sha: '0123456789abcdef0123456789abcdef01234567' },
+      'feature-x',
+    ),
+    '01234567 ·feature-x',
+  );
+});
+
+test('formatBranchLabel: nothing to show stays null even inside a worktree', () => {
+  assert.equal(formatBranchLabel({ kind: 'unknown' }, 'feature-x'), null);
+});
 
 test('parseHead: symbolic ref to a branch', () => {
   assert.deepEqual(parseHead('ref: refs/heads/main\n'), { kind: 'branch', name: 'main' });
@@ -73,6 +109,7 @@ test('findGitDir: follows a worktree .git file to its own HEAD', () => {
   const info = findGitDir(wt);
   assert.ok(info);
   assert.equal(info.isWorktree, true);
+  assert.equal(info.root, wt); // the worktree's own directory, not the main repo
   assert.equal(info.gitDir, gitDir);
   assert.deepEqual(readBranch(info), { kind: 'branch', name: 'side' });
   fs.rmSync(root, { recursive: true, force: true });
@@ -86,7 +123,7 @@ test('findGitDir: returns null outside a repo', () => {
 
 test('readBranch: missing HEAD file is unknown, not a throw', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-git-'));
-  const info = { gitDir: root, headFile: path.join(root, 'HEAD'), isWorktree: false };
+  const info = { gitDir: root, headFile: path.join(root, 'HEAD'), isWorktree: false, root };
   assert.deepEqual(readBranch(info), { kind: 'unknown' });
   fs.rmSync(root, { recursive: true, force: true });
 });

@@ -467,12 +467,9 @@ export class ChatPanelManager {
       <textarea id="input" rows="1" placeholder="Message Claude…"></textarea>
       <div id="composer-row">
         <button id="attach" class="icon-btn" title="Attach files">+</button>
-        <select id="model-select" class="select-pill" title="Model">
-          <option value="">model: default</option>
-        </select>
-        <select id="effort-select" class="select-pill" title="Reasoning effort — how smart / how long it thinks">
-          <option value="">effort: default</option>
-        </select>
+        <button id="model-pill" class="pill" title="Model and reasoning effort">
+          <span id="model-pill-label">default</span>
+        </button>
         <button id="context-ring" class="ring-btn" title="Context usage" hidden>
           <svg viewBox="0 0 20 20" width="18" height="18">
             <circle class="ring-bg" cx="10" cy="10" r="7.5" fill="none" stroke-width="2.5"/>

@@ -437,31 +437,28 @@ button.secondary {
 }
 .working-row .pill { margin-left: 4px; padding: 2px 10px; font-size: 0.95em; }
 
-/* ---------- model / effort selects ----------------------------------------- */
+/* ---------- model + effort pill ------------------------------------------- */
 
-.select-pill {
-  appearance: none;
-  -webkit-appearance: none;
-  border-radius: 999px;
-  padding: 4px 10px;
-  font-family: inherit;
-  font-size: 0.85em;
-  background: transparent;
-  border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.35));
+#model-pill { font-size: 0.85em; max-width: 16em; }
+#model-pill-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.model-menu { max-height: 60vh; overflow-y: auto; min-width: 12em; }
+.menu-title {
+  padding: 6px 14px 3px;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--vscode-descriptionForeground);
-  cursor: pointer;
-  max-width: 130px;
-  text-overflow: ellipsis;
 }
-.select-pill:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.1)); }
-.select-pill:focus { outline: 1px solid var(--vscode-focusBorder); }
-.select-pill option {
-  background: var(--vscode-editorWidget-background, #222);
-  color: var(--vscode-foreground);
+.menu-check {
+  width: 1em;
+  flex: none;
+  color: var(--vscode-descriptionForeground);
 }
 
-@media (max-width: 520px) {
-  .select-pill { max-width: 92px; padding: 5px 8px; }
+@media (max-width: 640px) {
+  /* Model name only — effort still reads from the popover. */
+  #model-pill { max-width: 9em; }
 }
 
 /* ---------- sticky last-prompt bar ----------------------------------------- */

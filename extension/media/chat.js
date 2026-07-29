@@ -22,8 +22,8 @@
   const attachBtn = document.getElementById('attach');
   const chipsEl = document.getElementById('chips');
   const ringBtn = document.getElementById('context-ring');
-  const modelSelect = document.getElementById('model-select');
-  const effortSelect = document.getElementById('effort-select');
+  const modelPill = document.getElementById('model-pill');
+  const modelPillLabel = document.getElementById('model-pill-label');
   const promptBar = document.getElementById('prompt-bar');
   const branchChip = document.getElementById('branch-chip');
 
@@ -666,57 +666,85 @@
 
   const ALL_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
   let modelInfos = [];
+  let currentModel = '';
+  let currentEffort = '';
 
-  function setOptionList(select, defaultLabel, entries, current) {
-    select.replaceChildren();
-    const def = document.createElement('option');
-    def.value = '';
-    def.textContent = defaultLabel;
-    select.appendChild(def);
-    for (const entry of entries) {
-      const opt = document.createElement('option');
-      opt.value = entry.value;
-      opt.textContent = entry.label;
-      if (entry.title) opt.title = entry.title;
-      select.appendChild(opt);
-    }
-    // Keep a persisted value visible even if it's not in the reported list.
-    if (current && ![...select.options].some((o) => o.value === current)) {
-      const opt = document.createElement('option');
-      opt.value = current;
-      opt.textContent = current;
-      select.appendChild(opt);
-    }
-    select.value = current || '';
+  const modelMenu = el('div', 'attach-menu model-menu');
+  modelMenu.hidden = true;
+  document.getElementById('composer').appendChild(modelMenu);
+
+  function modelLabel(value) {
+    if (!value) return 'default';
+    const info = modelInfos.find((m) => m.value === value);
+    return (info && info.displayName) || value;
   }
 
-  function rebuildModelOptions(current) {
-    setOptionList(
-      modelSelect,
-      'model: default',
+  /** Effort levels the selected model supports; the full set when unknown. */
+  function effortLevels() {
+    const info = modelInfos.find((m) => m.value === currentModel);
+    return info && Array.isArray(info.effortLevels) && info.effortLevels.length
+      ? info.effortLevels
+      : ALL_EFFORTS;
+  }
+
+  function renderPill() {
+    const parts = [modelLabel(currentModel)];
+    if (currentEffort) parts.push(currentEffort);
+    modelPillLabel.textContent = parts.join(' · ');
+    modelPill.title = `Model: ${modelLabel(currentModel)} — Effort: ${currentEffort || 'default'}`;
+  }
+
+  function menuChoice(label, selected, onPick) {
+    const btn = el('button', 'menu-item');
+    btn.appendChild(el('span', 'menu-check', selected ? '✓' : ''));
+    btn.appendChild(el('span', null, label));
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onPick();
+    });
+    return btn;
+  }
+
+  function renderModelMenu() {
+    modelMenu.replaceChildren();
+    modelMenu.appendChild(el('div', 'menu-title', 'Model'));
+    const models = [{ value: '', label: 'default' }].concat(
       modelInfos
-        .filter((m) => m.value !== 'default') // our '' option already means default
-        .map((m) => ({
-          value: m.value,
-          label: m.displayName || m.value,
-          title: m.description,
-        })),
-      current !== undefined ? current : modelSelect.value,
+        .filter((m) => m.value !== 'default') // our '' entry already means default
+        .map((m) => ({ value: m.value, label: m.displayName || m.value })),
     );
-  }
-
-  function rebuildEffortOptions(current) {
-    const selected = modelInfos.find((m) => m.value === modelSelect.value);
-    const levels =
-      selected && Array.isArray(selected.effortLevels) && selected.effortLevels.length
-        ? selected.effortLevels
-        : ALL_EFFORTS;
-    setOptionList(
-      effortSelect,
-      'effort: default',
+    // A persisted model the SDK doesn't list must stay visible and selected.
+    if (currentModel && !models.some((m) => m.value === currentModel)) {
+      models.push({ value: currentModel, label: currentModel });
+    }
+    for (const entry of models) {
+      modelMenu.appendChild(
+        menuChoice(entry.label, entry.value === currentModel, () => {
+          currentModel = entry.value;
+          vscode.postMessage({ type: 'setOptions', model: currentModel });
+          renderPill();
+          // Effort levels depend on the model, so redraw and stay open: model
+          // then effort is the common two-step.
+          renderModelMenu();
+        }),
+      );
+    }
+    modelMenu.appendChild(el('div', 'menu-title', 'Effort'));
+    const levels = effortLevels().slice();
+    if (currentEffort && !levels.includes(currentEffort)) levels.push(currentEffort);
+    const efforts = [{ value: '', label: 'default' }].concat(
       levels.map((l) => ({ value: l, label: l })),
-      current !== undefined ? current : effortSelect.value,
     );
+    for (const entry of efforts) {
+      modelMenu.appendChild(
+        menuChoice(entry.label, entry.value === currentEffort, () => {
+          currentEffort = entry.value;
+          vscode.postMessage({ type: 'setOptions', effort: currentEffort });
+          renderPill();
+          modelMenu.hidden = true;
+        }),
+      );
+    }
   }
 
   // Per-session branch indicator: this session's cwd, not the window's repo.
@@ -762,8 +790,9 @@
         if (msg.info) {
           setRunning(msg.info.status === 'running');
           applyPermissionMode(msg.info.permissionMode);
-          rebuildModelOptions(msg.info.model || '');
-          rebuildEffortOptions(msg.info.effort || '');
+          currentModel = msg.info.model || '';
+          currentEffort = msg.info.effort || '';
+          renderPill();
         }
         pinned = true;
         scrollToBottom();
@@ -804,8 +833,8 @@
       }
       case 'models':
         modelInfos = msg.models ?? [];
-        rebuildModelOptions();
-        rebuildEffortOptions();
+        renderPill(); // display names may only now be known
+        if (!modelMenu.hidden) renderModelMenu();
         break;
       case 'branch':
         renderBranch(msg.name, msg.worktree, msg.path);
@@ -972,6 +1001,9 @@
   });
   document.addEventListener('click', (e) => {
     if (!attachMenu.hidden && !attachMenu.contains(e.target) && e.target !== attachBtn) hideMenu();
+    if (!modelMenu.hidden && !modelMenu.contains(e.target) && !modelPill.contains(e.target)) {
+      modelMenu.hidden = true;
+    }
   });
 
   // Paste an image/file straight into the input.
@@ -998,13 +1030,11 @@
   ringBtn.addEventListener('click', () => {
     vscode.postMessage({ type: 'compact' });
   });
-  modelSelect.addEventListener('change', () => {
-    vscode.postMessage({ type: 'setOptions', model: modelSelect.value });
-    // Effort choices depend on the selected model.
-    rebuildEffortOptions();
+  modelPill.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (modelMenu.hidden) renderModelMenu();
+    modelMenu.hidden = !modelMenu.hidden;
   });
-  effortSelect.addEventListener('change', () =>
-    vscode.postMessage({ type: 'setOptions', effort: effortSelect.value }));
   permToggle.addEventListener('click', () => {
     bypass = !bypass;
     permToggle.classList.toggle('active', bypass);

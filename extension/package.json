@@ -2,7 +2,7 @@
   "name": "claude-persist-vscode",
   "displayName": "Claude Persist",
   "description": "Persistent Claude Code sessions that survive window reloads — chat tabs backed by a server-side daemon (code-server friendly)",
-  "version": "0.7.20",
+  "version": "0.7.21",
   "publisher": "jaga",
   "license": "MIT",
   "icon": "media/ext-icon.png",

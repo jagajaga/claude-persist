@@ -34,6 +34,10 @@ jobs:
       OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history and tags: the changelog is built from the range between
+          # this release's tag and the previous one.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -55,6 +59,9 @@ jobs:
           git tag -a "v$NEW" -m "v$NEW"
           git push origin main "v$NEW"
           echo "version=$NEW" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog for the Extensions view
+        run: bash scripts/changelog.sh 3
 
       - name: Install dependencies
         run: npm install

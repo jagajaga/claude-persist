@@ -4,3 +4,6 @@ dist/
 *.log
 extension/daemon/
 *.vsix
+
+# Generated per release by scripts/changelog.sh; ships in the vsix only.
+extension/CHANGELOG.md

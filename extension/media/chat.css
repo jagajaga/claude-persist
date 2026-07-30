@@ -570,3 +570,12 @@ button.secondary {
   min-width: 3.2em;
   text-align: right;
 }
+
+/* ---------- load-earlier control (windowed replay) ------------------------- */
+
+.load-earlier {
+  display: flex;
+  justify-content: center;
+  padding: 2px 0 6px;
+}
+.load-earlier .pill { font-size: 0.9em; }

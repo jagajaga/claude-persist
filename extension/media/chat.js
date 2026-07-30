@@ -770,6 +770,34 @@
     branchChip.hidden = false;
   }
 
+  // A long transcript is replayed in a window, newest first, because sending
+  // and rendering tens of thousands of events blocks the webview outright.
+  let loadEarlierRow = null;
+  function showLoadEarlier() {
+    if (!loadEarlierRow) {
+      loadEarlierRow = el('div', 'load-earlier');
+      const btn = el('button', 'pill', 'Load earlier messages');
+      btn.addEventListener('click', () => {
+        btn.disabled = true;
+        btn.textContent = 'Loading…';
+        vscode.postMessage({ type: 'loadEarlier' });
+      });
+      loadEarlierRow.appendChild(btn);
+    }
+    threadEl.insertBefore(loadEarlierRow, threadEl.firstChild);
+  }
+
+  /** Drop every rendered event so a re-replay cannot duplicate the thread. */
+  function resetThread() {
+    dropPreviews();
+    threadEl.replaceChildren();
+    toolCards.clear();
+    loadEarlierRow = null;
+    lastUserEl = null;
+    promptBar.hidden = true;
+    workingRow = null;
+  }
+
   function renderChips(items) {
     chipsEl.replaceChildren();
     items.forEach((item, index) => {
@@ -790,6 +818,9 @@
     const msg = e.data;
     switch (msg.type) {
       case 'replay': {
+        // A widened window re-sends from the top, so clear what is there.
+        if (msg.reset) resetThread();
+        if (msg.hasEarlier) showLoadEarlier();
         for (const persisted of msg.events) {
           // One malformed event must never blank the whole transcript.
           try {

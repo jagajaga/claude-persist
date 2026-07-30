@@ -24,6 +24,8 @@ const IMAGE_TYPES: Record<string, string> = {
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const IMAGE_MIMES = new Set(Object.values(IMAGE_TYPES));
 const uploadsDir = path.join(os.homedir(), '.claude-persist', 'uploads');
+/** Matches the daemon's default; "Load earlier" multiplies it. */
+const REPLAY_LIMIT = 400;
 
 interface PanelEntry {
   panel: vscode.WebviewPanel;
@@ -44,6 +46,8 @@ interface PanelEntry {
   effectiveCwd?: string;
   /** Watches the worktree registry, so held worktrees update live. */
   registryWatcher?: fs.FSWatcher;
+  /** How many events this panel asks for; grows when the user loads earlier. */
+  replayLimit: number;
   baseTitle: string;
   pendingAttachments: Attachment[];
   /** In-flight chunked uploads from the browser, keyed by uploadId. */
@@ -164,6 +168,7 @@ export class ChatPanelManager {
       baseTitle: title ?? panel.title,
       pendingAttachments: [],
       uploads: new Map(),
+      replayLimit: REPLAY_LIMIT,
     };
     this.panels.set(sessionId, entry);
     panel.onDidChangeViewState((e) => {
@@ -225,6 +230,15 @@ export class ChatPanelManager {
       }
       // 'ready' must never be dropped: mark the panel ready even with no
       // daemon connection yet, so reattachAll() finds it after connect.
+      if (msg.type === 'loadEarlier') {
+        // Each click reaches four times further back. No hard ceiling: past a
+        // few clicks the user has explicitly asked for the whole transcript.
+        entry.replayLimit *= 4;
+        if (await this.requireClient()) {
+          await this.attach(entry, { full: true }).catch(() => undefined);
+        }
+        return;
+      }
       if (msg.type === 'ready') {
         entry.ready = true;
         for (const queued of entry.queue.splice(0)) void panel.webview.postMessage(queued);
@@ -374,10 +388,17 @@ export class ChatPanelManager {
     });
   }
 
-  private async attach(entry: PanelEntry): Promise<void> {
+  private async attach(entry: PanelEntry, opts?: { full?: boolean }): Promise<void> {
     const client = this.client();
     if (!client) return;
-    const result = await client.attach(entry.sessionId, entry.lastSeq);
+    // A full re-read replaces the transcript in the webview; an incremental
+    // re-attach after a reconnect must only append what was missed.
+    const full = opts?.full === true || entry.lastSeq === 0;
+    const result = await client.attach(
+      entry.sessionId,
+      full ? 0 : entry.lastSeq,
+      entry.replayLimit,
+    );
     entry.baseTitle = result.info.title;
     entry.panel.title =
       (result.info.status === 'running' ? '⧗ ' : '') + result.info.title;
@@ -396,6 +417,10 @@ export class ChatPanelManager {
       info: result.info,
       events: result.events,
       fromSeq: entry.lastSeq,
+      // Tells the webview to clear first, so a widened window doesn't
+      // duplicate what is already rendered.
+      reset: full,
+      hasEarlier: result.hasEarlier === true,
     });
     // Model list is account-wide; fetch lazily and push to this panel.
     void client

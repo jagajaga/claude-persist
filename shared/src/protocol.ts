@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 14;
+export const PROTOCOL_VERSION = 15;
 
 export type SessionStatus = 'idle' | 'running' | 'error';
 
@@ -102,7 +102,12 @@ export type Request =
   | { id: number; op: 'hello'; protocolVersion: number }
   | { id: number; op: 'listSessions' }
   | { id: number; op: 'createSession'; cwd: string; title?: string }
-  | { id: number; op: 'attach'; sessionId: string; sinceSeq: number }
+  /**
+   * `limit` caps how many events come back, keeping the newest. A long-running
+   * session can hold tens of thousands; replaying all of them would ship
+   * megabytes to the webview and then block its renderer building the DOM.
+   */
+  | { id: number; op: 'attach'; sessionId: string; sinceSeq: number; limit?: number }
   | { id: number; op: 'detach'; sessionId: string }
   | { id: number; op: 'sendMessage'; sessionId: string; text: string; attachments?: Attachment[] }
   | { id: number; op: 'interrupt'; sessionId: string }

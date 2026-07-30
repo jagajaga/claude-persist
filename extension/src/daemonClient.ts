@@ -20,7 +20,7 @@ const socketPath = path.join(baseDir, 'daemon.sock');
 
 // Keep in sync with PROTOCOL_VERSION in shared/src/protocol.ts (the shared
 // package is ESM, so the constant can't be require()d from this CJS module).
-const EXPECTED_PROTOCOL = 14;
+const EXPECTED_PROTOCOL = 15;
 
 /** Omit that distributes over a union (plain Omit collapses union members). */
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
@@ -28,6 +28,8 @@ type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : n
 export interface AttachResult {
   info: SessionInfo;
   events: PersistedEvent[];
+  /** True when the replay was capped and older events exist on disk. */
+  hasEarlier?: boolean;
 }
 
 type PushHandler = {
@@ -205,8 +207,8 @@ export class DaemonClient {
     return this.request({ op: 'createSession', cwd, title });
   }
 
-  attach(sessionId: string, sinceSeq: number): Promise<AttachResult> {
-    return this.request({ op: 'attach', sessionId, sinceSeq });
+  attach(sessionId: string, sinceSeq: number, limit?: number): Promise<AttachResult> {
+    return this.request({ op: 'attach', sessionId, sinceSeq, ...(limit ? { limit } : {}) });
   }
 
   detach(sessionId: string): Promise<void> {

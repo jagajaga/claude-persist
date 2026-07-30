@@ -21,6 +21,12 @@ function logLine(text: string): void {
   log.write(`${new Date().toISOString()} ${text}\n`);
 }
 
+/**
+ * Events replayed to a freshly attached panel. Chosen so a huge transcript
+ * opens instantly; "Load earlier" widens the window on demand.
+ */
+const DEFAULT_REPLAY_LIMIT = 400;
+
 const registry = new Registry();
 registry.load();
 
@@ -166,7 +172,15 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
       let subs = subscribers.get(req.sessionId);
       if (!subs) subscribers.set(req.sessionId, (subs = new Set()));
       subs.add(client);
-      return { info: sessionInfo(req.sessionId), events: session.eventsSince(req.sinceSeq) };
+      const all = session.eventsSince(req.sinceSeq);
+      const limit = req.limit && req.limit > 0 ? req.limit : DEFAULT_REPLAY_LIMIT;
+      // Keep the newest: that is what the user is looking at.
+      const events = all.length > limit ? all.slice(all.length - limit) : all;
+      return {
+        info: sessionInfo(req.sessionId),
+        events,
+        hasEarlier: events.length < all.length,
+      };
     }
     case 'detach': {
       client.attached.delete(req.sessionId);

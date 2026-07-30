@@ -773,6 +773,10 @@
   // A long transcript is replayed in a window, newest first, because sending
   // and rendering tens of thousands of events blocks the webview outright.
   let loadEarlierRow = null;
+  /** Seq of the oldest event currently rendered — the anchor when widening. */
+  let firstRenderedSeq = null;
+  /** Set while a "load earlier" round-trip is in flight. */
+  let anchorSeq = null;
   function showLoadEarlier() {
     if (!loadEarlierRow) {
       loadEarlierRow = el('div', 'load-earlier');
@@ -780,6 +784,10 @@
       btn.addEventListener('click', () => {
         btn.disabled = true;
         btn.textContent = 'Loading…';
+        // Stay on the message being read: the widened replay re-renders the
+        // whole thread, so remember where the current window began and scroll
+        // back to it instead of landing at the bottom.
+        anchorSeq = firstRenderedSeq;
         vscode.postMessage({ type: 'loadEarlier' });
       });
       loadEarlierRow.appendChild(btn);
@@ -793,6 +801,7 @@
     threadEl.replaceChildren();
     toolCards.clear();
     loadEarlierRow = null;
+    firstRenderedSeq = null;
     lastUserEl = null;
     promptBar.hidden = true;
     workingRow = null;
@@ -821,7 +830,16 @@
         // A widened window re-sends from the top, so clear what is there.
         if (msg.reset) resetThread();
         if (msg.hasEarlier) showLoadEarlier();
+        // Suppress per-event auto-scroll while a bulk replay renders; where to
+        // land is decided once, at the end.
+        pinned = false;
+        // Note where the anchor event lands rather than injecting a marker
+        // node, which would add a stray gap to the thread's flex layout.
+        let anchorIndex = -1;
         for (const persisted of msg.events) {
+          if (anchorSeq !== null && persisted.seq === anchorSeq) {
+            anchorIndex = threadEl.childElementCount;
+          }
           // One malformed event must never blank the whole transcript.
           try {
             renderEvent(persisted.event);
@@ -829,6 +847,7 @@
             console.error('render failed for event', persisted.seq, err);
           }
         }
+        firstRenderedSeq = msg.events.length ? msg.events[0].seq : firstRenderedSeq;
         if (msg.info) {
           setRunning(msg.info.status === 'running');
           applyPermissionMode(msg.info.permissionMode);
@@ -836,8 +855,16 @@
           currentEffort = msg.info.effort || '';
           renderPill();
         }
-        pinned = true;
-        scrollToBottom();
+        const anchorEl = anchorIndex >= 0 ? threadEl.children[anchorIndex] : null;
+        if (anchorEl) {
+          // Land on the message that was at the top before, with the newly
+          // loaded history above it.
+          anchorEl.scrollIntoView({ block: 'start' });
+        } else {
+          pinned = true;
+          scrollToBottom();
+        }
+        anchorSeq = null;
         break;
       }
       case 'event':

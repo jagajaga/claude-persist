@@ -582,13 +582,10 @@ button.secondary {
 
 /* ---------- message timestamp (double click / double tap) ------------------ */
 
+/* Typography comes from .meta, which the element also carries — the clock and
+   the duration/token line must read as the same thing. This rule is layout
+   only. */
 .time-line {
-  align-self: center;
-  font-size: 0.78em;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.04em;
-  color: var(--vscode-descriptionForeground);
-  opacity: 0.85;
   /* Sits tight above its message rather than taking a full thread gap. */
   margin-bottom: -8px;
 }

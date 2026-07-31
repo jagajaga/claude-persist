@@ -590,7 +590,8 @@
     }
     const time = clockTime(node.dataset.ts);
     if (!time) return;
-    threadEl.insertBefore(el('div', 'time-line', time), node);
+    // Same class as the duration/token line, so the two can never drift apart.
+    threadEl.insertBefore(el('div', 'meta time-line', time), node);
   });
 
   function renderEvent(event) {

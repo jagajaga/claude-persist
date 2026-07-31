@@ -557,44 +557,7 @@
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   }
 
-  /**
-   * Render an event and stamp whatever it added with the send time, so a
-   * double click can reveal it later. Done here rather than inside
-   * renderEvent so every branch of that switch gets it for free.
-   */
-  function renderEventAt(persisted) {
-    const before = threadEl.childElementCount;
-    renderEvent(persisted.event);
-    for (let i = before; i < threadEl.childElementCount; i++) {
-      const node = threadEl.children[i];
-      // The working row and the load-earlier button are chrome, not messages.
-      if (node.classList.contains('working-row')) continue;
-      if (node.classList.contains('load-earlier')) continue;
-      // Only stamp a real time; an absent one must leave no marker at all,
-      // so double clicking simply does nothing rather than showing 1970.
-      if (!node.dataset.ts && Number(persisted.ts) > 0) {
-        node.dataset.ts = String(persisted.ts);
-      }
-    }
-  }
-
-  // Double click (double tap on touch) toggles a small time line above the
-  // message. Delegated, so it covers every message ever rendered.
-  threadEl.addEventListener('dblclick', (e) => {
-    const node = e.target.closest && e.target.closest('[data-ts]');
-    if (!node || node.parentNode !== threadEl) return;
-    const existing = node.previousElementSibling;
-    if (existing && existing.classList.contains('time-line')) {
-      existing.remove();
-      return;
-    }
-    const time = clockTime(node.dataset.ts);
-    if (!time) return;
-    // Same class as the duration/token line, so the two can never drift apart.
-    threadEl.insertBefore(el('div', 'meta time-line', time), node);
-  });
-
-  function renderEvent(event) {
+  function renderEvent(event, ts) {
     switch (event.type) {
       case 'user_message': {
         endStreaming();
@@ -687,6 +650,10 @@
       case 'result': {
         settlePreviews();
         const bits = [];
+        // Sent-at time leads the line: it is the one part that answers "when",
+        // and it reads naturally before the cost of the turn.
+        const time = clockTime(ts);
+        if (time) bits.push(time);
         if (typeof event.durationMs === 'number') bits.push(`${(event.durationMs / 1000).toFixed(1)}s`);
         if (typeof event.turnTokens === 'number') {
           bits.push(
@@ -890,7 +857,7 @@
           }
           // One malformed event must never blank the whole transcript.
           try {
-            renderEventAt(persisted);
+            renderEvent(persisted.event, persisted.ts);
           } catch (err) {
             console.error('render failed for event', persisted.seq, err);
           }
@@ -916,7 +883,7 @@
         break;
       }
       case 'event':
-        renderEventAt(msg.event);
+        renderEvent(msg.event.event, msg.event.ts);
         break;
       case 'delta': {
         if (!streamingEl) {

@@ -38,12 +38,6 @@ interface PanelEntry {
   branchWatcher?: fs.FSWatcher;
   /** Last value pushed to the webview, so repeated fs events post once. */
   branchKey?: string;
-  /**
-   * Where the conversation is working, which is not always its cwd — it moves
-   * when the conversation enters a worktree. Only the chip uses this; file
-   * resolution stays anchored to cwd.
-   */
-  effectiveCwd?: string;
   /** Watches the worktree registry, so held worktrees update live. */
   registryWatcher?: fs.FSWatcher;
   /** How many events this panel asks for; grows when the user loads earlier. */
@@ -100,18 +94,6 @@ export class ChatPanelManager {
   handleDelta(sessionId: string, text: string): void {
     const entry = this.panels.get(sessionId);
     if (entry) this.post(entry, { type: 'delta', text });
-  }
-
-  /** The conversation moved directory (it entered or left a worktree). */
-  handleWorkspace(sessionId: string, cwd: string): void {
-    const entry = this.panels.get(sessionId);
-    if (!entry) return;
-    // effectiveCwd is undefined while the conversation is still in its own
-    // cwd, so compare against the resolved directory, not the raw field.
-    const moved = (entry.effectiveCwd ?? entry.cwd) !== cwd;
-    entry.effectiveCwd = cwd === entry.cwd ? undefined : cwd;
-    if (moved) this.watchBranch(entry);
-    this.updateBranch(entry);
   }
 
   handleModels(models: ModelDescriptor[]): void {
@@ -412,7 +394,6 @@ export class ChatPanelManager {
     entry.panel.title =
       (result.info.status === 'running' ? '⧗ ' : '') + result.info.title;
     entry.cwd = result.info.cwd;
-    entry.effectiveCwd = result.info.effectiveCwd;
     // A reattach means the webview was re-created and lost its chip; force a
     // fresh post by clearing the dedupe key.
     entry.branchKey = undefined;
@@ -443,7 +424,7 @@ export class ChatPanelManager {
 
   /** Push this session's branch to its webview, but only when it changed. */
   private updateBranch(entry: PanelEntry): void {
-    const cwd = entry.effectiveCwd ?? entry.cwd;
+    const cwd = entry.cwd;
     if (!cwd) return;
     const info = findGitDir(cwd);
     // Read from git's registry, not from remembered hook events: worktrees
@@ -479,7 +460,7 @@ export class ChatPanelManager {
     entry.branchWatcher = undefined;
     entry.registryWatcher?.close();
     entry.registryWatcher = undefined;
-    const cwd = entry.effectiveCwd ?? entry.cwd;
+    const cwd = entry.cwd;
     if (!cwd) return;
     const info = findGitDir(cwd);
     if (!info) return;

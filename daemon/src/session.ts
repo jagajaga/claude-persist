@@ -63,8 +63,6 @@ export interface SessionCallbacks {
   onMetaChanged(): void;
   /** Raw ModelInfo[] from the SDK init handshake. */
   onModels(models: unknown[]): void;
-  /** The conversation moved directory, or its subagents took/released worktrees. */
-  onWorkspace(sessionId: string, cwd: string): void;
 }
 
 /** Truncate long tool payloads before persisting/rendering. */
@@ -111,17 +109,10 @@ export class DaemonSession {
   private logFd: number | null = null;
   /** Usage of the most recent assistant API call — the true context size. */
   private lastCallUsage: Record<string, unknown> | null = null;
-  /**
-   * Where the conversation is working now. The SDK reports moves via the
-   * CwdChanged hook; scraping `cd` out of Bash commands would be guesswork,
-   * since those run in a subshell and don't move the session at all.
-   */
-  private effectiveCwd: string;
 
   constructor(meta: SessionMeta, callbacks: SessionCallbacks) {
     this.meta = meta;
     this.callbacks = callbacks;
-    this.effectiveCwd = meta.cwd;
     const { tail, count, perFile } = loadTailAndCount(allLogFiles(meta.id), MAX_TAIL);
     this.tail = tail;
     this.totalCount = count;
@@ -130,15 +121,6 @@ export class DaemonSession {
     // this rotation policy) immediately, rather than waiting for its next
     // appended event.
     this.rotateIfNeeded();
-  }
-
-  /** Directory the conversation is working in right now. */
-  get workingDir(): string {
-    return this.effectiveCwd;
-  }
-
-  private announceWorkspace(): void {
-    this.callbacks.onWorkspace(this.meta.id, this.effectiveCwd);
   }
 
   get eventCount(): number {
@@ -336,7 +318,6 @@ export class DaemonSession {
         // mid-session; actual behavior is still governed by permissionMode.
         allowDangerouslySkipPermissions: true,
         canUseTool: this.canUseTool,
-        hooks: this.workspaceHooks(),
       },
     });
     this.activeQuery = q;
@@ -347,31 +328,6 @@ export class DaemonSession {
       })
       .catch(() => undefined);
     void this.consume(q);
-  }
-
-  /**
-   * Authoritative workspace signals from the SDK. These are the only reliable
-   * source: a `cd` inside a Bash tool call runs in a subshell and never moves
-   * the conversation, so parsing tool inputs would report movement that did
-   * not happen.
-   *
-   * Hooks must return an empty output — we observe, we never alter behaviour.
-   */
-  private workspaceHooks(): NonNullable<Parameters<typeof query>[0]['options']>['hooks'] {
-    const observe = async (input: unknown): Promise<Record<string, never>> => {
-      const hook = input as Record<string, unknown>;
-      switch (hook.hook_event_name) {
-        case 'CwdChanged': {
-          if (typeof hook.new_cwd === 'string' && hook.new_cwd) {
-            this.effectiveCwd = hook.new_cwd;
-            this.announceWorkspace();
-          }
-          break;
-        }
-      }
-      return {};
-    };
-    return { CwdChanged: [{ hooks: [observe] }] };
   }
 
   private canUseTool = async (

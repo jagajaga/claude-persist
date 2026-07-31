@@ -24,7 +24,6 @@ const noopCallbacks = {
   onDelta(): void {},
   onMetaChanged(): void {},
   onModels(): void {},
-  onWorkspace(): void {},
 };
 
 function makeSession(id: string): InstanceType<typeof DaemonSession> {

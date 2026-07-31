@@ -546,6 +546,53 @@
 
   // ---------- events ------------------------------------------------------------
 
+  /** HH:mm in local time — what "when was this sent" means to a reader. */
+  function clockTime(ts) {
+    const ms = Number(ts);
+    // Guard falsy as well as NaN: a missing stamp coerces to 0, which would
+    // render 1970 rather than nothing.
+    if (!ms || Number.isNaN(ms)) return '';
+    const d = new Date(ms);
+    if (Number.isNaN(d.getTime())) return '';
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+
+  /**
+   * Render an event and stamp whatever it added with the send time, so a
+   * double click can reveal it later. Done here rather than inside
+   * renderEvent so every branch of that switch gets it for free.
+   */
+  function renderEventAt(persisted) {
+    const before = threadEl.childElementCount;
+    renderEvent(persisted.event);
+    for (let i = before; i < threadEl.childElementCount; i++) {
+      const node = threadEl.children[i];
+      // The working row and the load-earlier button are chrome, not messages.
+      if (node.classList.contains('working-row')) continue;
+      if (node.classList.contains('load-earlier')) continue;
+      // Only stamp a real time; an absent one must leave no marker at all,
+      // so double clicking simply does nothing rather than showing 1970.
+      if (!node.dataset.ts && Number(persisted.ts) > 0) {
+        node.dataset.ts = String(persisted.ts);
+      }
+    }
+  }
+
+  // Double click (double tap on touch) toggles a small time line above the
+  // message. Delegated, so it covers every message ever rendered.
+  threadEl.addEventListener('dblclick', (e) => {
+    const node = e.target.closest && e.target.closest('[data-ts]');
+    if (!node || node.parentNode !== threadEl) return;
+    const existing = node.previousElementSibling;
+    if (existing && existing.classList.contains('time-line')) {
+      existing.remove();
+      return;
+    }
+    const time = clockTime(node.dataset.ts);
+    if (!time) return;
+    threadEl.insertBefore(el('div', 'time-line', time), node);
+  });
+
   function renderEvent(event) {
     switch (event.type) {
       case 'user_message': {
@@ -842,7 +889,7 @@
           }
           // One malformed event must never blank the whole transcript.
           try {
-            renderEvent(persisted.event);
+            renderEventAt(persisted);
           } catch (err) {
             console.error('render failed for event', persisted.seq, err);
           }
@@ -868,7 +915,7 @@
         break;
       }
       case 'event':
-        renderEvent(msg.event.event);
+        renderEventAt(msg.event);
         break;
       case 'delta': {
         if (!streamingEl) {
@@ -1121,6 +1168,50 @@
       send();
     }
   });
+
+  // ---------- swipe between tabs (touch) --------------------------------------
+
+  // The webview is an iframe and cannot switch VS Code tabs itself, so the
+  // gesture is detected here and the host runs the editor command.
+  const SWIPE_MIN_X = 60;      // px before it counts as intent
+  const SWIPE_MAX_MS = 600;    // slower than this is a scroll, not a swipe
+  let touch = null;
+
+  /** True when the gesture began inside something that scrolls sideways. */
+  function startedInScroller(target) {
+    for (let node = target; node && node !== document.body; node = node.parentElement) {
+      if (node.scrollWidth > node.clientWidth + 4) return true;
+    }
+    return false;
+  }
+
+  document.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) {
+      touch = null; // pinch/zoom is never a tab switch
+      return;
+    }
+    const t = e.touches[0];
+    touch = startedInScroller(e.target)
+      ? null
+      : { x: t.clientX, y: t.clientY, at: Date.now() };
+  }, { passive: true });
+
+  document.addEventListener('touchend', (e) => {
+    const start = touch;
+    touch = null;
+    if (!start) return;
+    const t = e.changedTouches && e.changedTouches[0];
+    if (!t) return;
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (Date.now() - start.at > SWIPE_MAX_MS) return;
+    // Must be decisively horizontal, or every diagonal scroll flips a tab.
+    if (Math.abs(dx) < SWIPE_MIN_X || Math.abs(dx) < Math.abs(dy) * 2) return;
+    // Selecting text drags horizontally too; that is not a swipe.
+    const selection = window.getSelection();
+    if (selection && String(selection).length > 0) return;
+    vscode.postMessage({ type: 'switchTab', direction: dx < 0 ? 'next' : 'previous' });
+  }, { passive: true });
 
   vscode.postMessage({ type: 'ready' });
 })();

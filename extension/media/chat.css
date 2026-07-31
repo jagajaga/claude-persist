@@ -579,3 +579,16 @@ button.secondary {
   padding: 2px 0 6px;
 }
 .load-earlier .pill { font-size: 0.9em; }
+
+/* ---------- message timestamp (double click / double tap) ------------------ */
+
+.time-line {
+  align-self: center;
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--vscode-descriptionForeground);
+  opacity: 0.85;
+  /* Sits tight above its message rather than taking a full thread gap. */
+  margin-bottom: -8px;
+}

@@ -230,6 +230,15 @@ export class ChatPanelManager {
       }
       // 'ready' must never be dropped: mark the panel ready even with no
       // daemon connection yet, so reattachAll() finds it after connect.
+      if (msg.type === 'switchTab') {
+        // A webview cannot move between editor tabs itself; the host can.
+        await vscode.commands.executeCommand(
+          msg.direction === 'previous'
+            ? 'workbench.action.previousEditor'
+            : 'workbench.action.nextEditor',
+        );
+        return;
+      }
       if (msg.type === 'loadEarlier') {
         // Each click reaches four times further back. No hard ceiling: past a
         // few clicks the user has explicitly asked for the whole transcript.

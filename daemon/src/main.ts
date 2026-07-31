@@ -172,14 +172,14 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
       let subs = subscribers.get(req.sessionId);
       if (!subs) subscribers.set(req.sessionId, (subs = new Set()));
       subs.add(client);
-      const all = session.eventsSince(req.sinceSeq);
       const limit = req.limit && req.limit > 0 ? req.limit : DEFAULT_REPLAY_LIMIT;
-      // Keep the newest: that is what the user is looking at.
-      const events = all.length > limit ? all.slice(all.length - limit) : all;
+      // eventsSince keeps the newest `limit` itself, so a huge transcript is
+      // never materialized just to throw most of it away.
+      const { events, hasEarlier } = session.eventsSince(req.sinceSeq, limit);
       return {
         info: sessionInfo(req.sessionId),
         events,
-        hasEarlier: events.length < all.length,
+        hasEarlier,
       };
     }
     case 'detach': {

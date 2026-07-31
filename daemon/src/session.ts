@@ -9,6 +9,15 @@ import type {
 } from '@claude-persist/shared';
 import type { SessionMeta } from './registry.js';
 import { sessionLogPath } from './paths.js';
+import { ROTATE_THRESHOLD, allLogFiles, loadTailAndCount, readRange, rotateActiveLog } from './logStore.js';
+
+/**
+ * Recent events kept resident per session. Larger than
+ * DEFAULT_REPLAY_LIMIT (see main.ts) so a normal attach is served entirely
+ * from memory; only a deliberate "load earlier" past this window touches
+ * disk.
+ */
+const MAX_TAIL = 1000;
 
 /**
  * Push-based AsyncIterable used as the SDK's streaming prompt input. The
@@ -75,7 +84,12 @@ function summarize(value: unknown, max = 2000): string {
 export class DaemonSession {
   readonly meta: SessionMeta;
   status: SessionStatus = 'idle';
-  private events: PersistedEvent[] = [];
+  /** Newest events, oldest first, capped at MAX_TAIL — never the full transcript. */
+  private tail: PersistedEvent[] = [];
+  /** Total valid events ever appended (this session's next seq number). */
+  private totalCount = 0;
+  /** Valid events written to the *active* log file since it was last rotated. */
+  private activeCount = 0;
   private input: InputQueue<unknown> | null = null;
   private activeQuery: ReturnType<typeof query> | null = null;
   private pendingPermissions = new Map<
@@ -86,7 +100,15 @@ export class DaemonSession {
     }
   >();
   private callbacks: SessionCallbacks;
-  private logStream: fs.WriteStream | null = null;
+  /**
+   * A raw fd written synchronously, not a WriteStream: opening a stream is
+   * asynchronous, so a rotation check running right after a write could
+   * otherwise race the file's very creation. A sync fd makes "written" and
+   * "exists on disk" the same moment, so rotateIfNeeded can never observe a
+   * partially-open file. Volume here is interactive chat events, not a hot
+   * loop, so the blocking write is not a concern.
+   */
+  private logFd: number | null = null;
   /** Usage of the most recent assistant API call — the true context size. */
   private lastCallUsage: Record<string, unknown> | null = null;
   /**
@@ -100,7 +122,14 @@ export class DaemonSession {
     this.meta = meta;
     this.callbacks = callbacks;
     this.effectiveCwd = meta.cwd;
-    this.loadLog();
+    const { tail, count, perFile } = loadTailAndCount(allLogFiles(meta.id), MAX_TAIL);
+    this.tail = tail;
+    this.totalCount = count;
+    this.activeCount = perFile[perFile.length - 1] ?? 0;
+    // Catch up a pre-existing oversized active file (e.g. one that predates
+    // this rotation policy) immediately, rather than waiting for its next
+    // appended event.
+    this.rotateIfNeeded();
   }
 
   /** Directory the conversation is working in right now. */
@@ -113,37 +142,57 @@ export class DaemonSession {
   }
 
   get eventCount(): number {
-    return this.events.length;
+    return this.totalCount;
   }
 
-  eventsSince(seq: number): PersistedEvent[] {
-    return this.events.slice(Math.max(0, seq));
+  /**
+   * Events at or after `seq`, keeping only the newest `limit` (mirrors what
+   * callers used to do themselves after fetching everything — pushed down
+   * here so a request bounded to `limit` never has to materialize more).
+   * `hasEarlier` tells the caller whether older events were cut off.
+   */
+  eventsSince(seq: number, limit: number): { events: PersistedEvent[]; hasEarlier: boolean } {
+    const start = Math.max(0, seq);
+    const total = this.totalCount;
+    if (start >= total) return { events: [], hasEarlier: false };
+    const effectiveStart = Math.max(start, total - limit);
+    const hasEarlier = effectiveStart > start;
+    const tailStart = total - this.tail.length;
+    const events =
+      effectiveStart >= tailStart
+        ? this.tail.slice(effectiveStart - tailStart)
+        : readRange(allLogFiles(this.meta.id), effectiveStart, total);
+    return { events, hasEarlier };
   }
 
-  private loadLog(): void {
-    try {
-      const lines = fs.readFileSync(sessionLogPath(this.meta.id), 'utf8').split('\n');
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          this.events.push(JSON.parse(line) as PersistedEvent);
-        } catch {
-          // skip corrupt line
-        }
-      }
-    } catch {
-      // no log yet
+  /**
+   * Move the active log file to a new archive generation once it has grown
+   * past ROTATE_THRESHOLD events, so no single file this daemon ever reads or
+   * writes can grow without bound. Nothing is deleted — the archive stays on
+   * disk and stays readable via allLogFiles(); only the *active* file (the one
+   * new events are appended to) resets to empty.
+   */
+  private rotateIfNeeded(): void {
+    if (this.activeCount < ROTATE_THRESHOLD) return;
+    if (this.logFd !== null) {
+      fs.closeSync(this.logFd);
+      this.logFd = null;
     }
+    if (rotateActiveLog(this.meta.id)) this.activeCount = 0;
   }
 
   private appendEvent(event: ChatEvent): void {
-    const persisted: PersistedEvent = { seq: this.events.length, ts: Date.now(), event };
-    this.events.push(persisted);
-    if (!this.logStream) {
-      this.logStream = fs.createWriteStream(sessionLogPath(this.meta.id), { flags: 'a' });
+    const persisted: PersistedEvent = { seq: this.totalCount, ts: Date.now(), event };
+    this.totalCount++;
+    this.tail.push(persisted);
+    if (this.tail.length > MAX_TAIL) this.tail.shift();
+    if (this.logFd === null) {
+      this.logFd = fs.openSync(sessionLogPath(this.meta.id), 'a');
     }
-    this.logStream.write(`${JSON.stringify(persisted)}\n`);
+    fs.writeSync(this.logFd, `${JSON.stringify(persisted)}\n`);
+    this.activeCount++;
     this.callbacks.onEvent(this.meta.id, persisted);
+    this.rotateIfNeeded();
   }
 
   private setStatus(status: SessionStatus, detail?: string): void {
@@ -263,7 +312,10 @@ export class DaemonSession {
   dispose(): void {
     this.input?.close();
     this.activeQuery = null;
-    this.logStream?.end();
+    if (this.logFd !== null) {
+      fs.closeSync(this.logFd);
+      this.logFd = null;
+    }
   }
 
   private ensureQuery(): void {

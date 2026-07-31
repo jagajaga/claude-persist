@@ -4,7 +4,8 @@
   "type": "module",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc -p ."
+    "build": "tsc -p .",
+    "test": "node --test dist/*.test.js"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "*",

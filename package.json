@@ -15,6 +15,7 @@
   ],
   "scripts": {
     "build": "npm run build -w shared && npm run build -w daemon && npm run build -w extension",
+    "test": "npm run build && npm run test -w daemon && node --test extension/dist/*.test.js",
     "daemon": "node daemon/dist/main.js"
   },
   "devDependencies": {

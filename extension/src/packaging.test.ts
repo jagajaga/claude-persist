@@ -12,9 +12,28 @@ import * as path from 'path';
  * mechanism to recover with.
  *
  * `import type` is erased and stays fine; this catches the value imports.
+ *
+ * One narrow, named exception: chatWebview.test.js spins up a jsdom window to
+ * exercise the webview client (extension/media/chat.js) and requires the
+ * jsdom package to do it. That require() is real, but it is not a runtime
+ * hazard the way an activation-path require would be — nothing under
+ * extension.ts ever requires a *.test.js file, compiled or not, so it never
+ * executes during activation. It IS worth naming explicitly rather than
+ * exempting every "*.test.js" wholesale: compiled test files currently ship
+ * inside the VSIX as-is (confirmed both by reading .vscodeignore — it only
+ * excludes src/**, tsconfig.json, node_modules/** and *.map/*.ts, nothing
+ * under dist/*.test.js — and by running `vsce ls`, whose output lists e.g.
+ * dist/packaging.test.js and dist/streamingMarkdown.test.js next to the real
+ * dist/*.js files). Shipping them is harmless dead weight since they're never
+ * loaded, but it means a blanket "*.test.js" exemption would silently wave
+ * through a bare require in *any* future test file, vetted or not. Naming the
+ * one file (and the one specifier) keeps the guard meaningful.
  */
 test('no compiled extension-host file requires a bare package at runtime', () => {
   const dist = path.join(__dirname); // this test runs from dist/
+  const ALLOWLIST: Record<string, string[]> = {
+    'chatWebview.test.js': ['jsdom'],
+  };
   const offenders: string[] = [];
   // Recursive: a future src/<subdir>/foo.ts lands in dist/<subdir>/ and must
   // not slip past this check.
@@ -27,6 +46,7 @@ test('no compiled extension-host file requires a bare package at runtime', () =>
       // built-ins are always present.
       if (specifier.startsWith('.') || specifier === 'vscode') continue;
       if (specifier.startsWith('node:')) continue;
+      if (ALLOWLIST[file]?.includes(specifier)) continue;
       try {
         // Core modules resolve to their own bare name; anything else resolves
         // to a path, which means it came from node_modules — and node_modules

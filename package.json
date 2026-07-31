@@ -20,6 +20,7 @@
   "devDependencies": {
     "@types/node": "^20.11.0",
     "dompurify": "^3.4.12",
+    "jsdom": "^30.0.1",
     "marked": "^18.0.7",
     "sharp": "^0.35.3",
     "typescript": "^5.4.0"

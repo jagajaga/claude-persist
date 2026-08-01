@@ -319,6 +319,9 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('claudePersist.extraModels')) panels.refreshModels();
+      if (e.affectsConfiguration('claudePersist.connectionIndicator')) {
+        panels.refreshConnectionIndicator();
+      }
     }),
   );
 

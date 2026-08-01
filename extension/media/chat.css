@@ -583,3 +583,26 @@ button.secondary {
 /* The elapsed/start-time readout inside the working row keeps .meta typography
    so it matches the duration/token line it will be replaced by. */
 .working-row .working-since { margin-left: 2px; }
+
+/* ---------- disconnected perimeter ---------------------------------------- */
+
+/* A border rather than a dimming overlay: it has to be noticeable at a glance
+   without obscuring the conversation you are trying to read. pointer-events
+   stays off so it never intercepts a tap. */
+.offline-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  border: 2px solid var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground, #f14c4c));
+  border-radius: 3px;
+  animation: offline-pulse 1.4s ease-in-out infinite;
+}
+@keyframes offline-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.15; }
+}
+/* Honour the OS setting: a permanent border still communicates the state. */
+@media (prefers-reduced-motion: reduce) {
+  .offline-veil { animation: none; opacity: 0.9; }
+}

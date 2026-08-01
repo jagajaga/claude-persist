@@ -953,6 +953,16 @@
         }
         break;
       }
+      case 'pong':
+        lastPongAt = Date.now();
+        daemonUp = msg.daemon !== false;
+        if (typeof msg.indicator === 'boolean') indicatorEnabled = msg.indicator;
+        paintConnection();
+        break;
+      case 'connectionIndicator':
+        indicatorEnabled = msg.enabled !== false;
+        paintConnection();
+        break;
       case 'models':
         modelInfos = msg.models ?? [];
         renderPill(); // display names may only now be known
@@ -1219,5 +1229,61 @@
     vscode.postMessage({ type: 'switchTab', direction: dx < 0 ? 'next' : 'previous' });
   }, { passive: true });
 
+  // ---------- connection health ----------------------------------------------
+
+  // Two hops can break: browser -> code-server (the flaky one on mobile) and
+  // extension host -> daemon. If the first breaks the webview receives nothing
+  // at all, so the host cannot tell us — we have to probe. A round-trip ping
+  // whose reply carries the daemon's state covers both hops in one message.
+  const PING_MS = 3000;
+  const STALE_MS = 8000; // ~2 missed replies before we claim anything
+  let lastPongAt = Date.now();
+  let daemonUp = true;
+  let indicatorEnabled = true;
+  let pingTimer = null;
+
+  const veil = el('div', 'offline-veil');
+  veil.hidden = true;
+  document.body.appendChild(veil);
+
+  function paintConnection() {
+    // Silence beats a false alarm: while the tab is hidden, timers are
+    // throttled and replies queue up, so staleness there means nothing.
+    const hidden = document.visibilityState === 'hidden';
+    const stale = !hidden && Date.now() - lastPongAt > STALE_MS;
+    const offline = navigator.onLine === false;
+    veil.hidden = !indicatorEnabled || !(stale || offline || !daemonUp);
+  }
+
+  function ping() {
+    vscode.postMessage({ type: 'ping' });
+    paintConnection();
+  }
+
+  function startHeartbeat() {
+    if (pingTimer) return;
+    pingTimer = setInterval(ping, PING_MS);
+    ping();
+  }
+
+  // A tab returning to the foreground has not been talking to anyone; give it
+  // a fresh window before judging, or every unlock would flash the border.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      lastPongAt = Date.now();
+      ping();
+    } else {
+      paintConnection();
+    }
+  });
+  // The browser's own view of the link: instant, and worth reacting to even
+  // though it reports the interface rather than reachability.
+  window.addEventListener('offline', paintConnection);
+  window.addEventListener('online', () => {
+    lastPongAt = Date.now();
+    ping();
+  });
+
   vscode.postMessage({ type: 'ready' });
+  startHeartbeat();
 })();

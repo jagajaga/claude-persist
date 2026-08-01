@@ -143,6 +143,11 @@
           "default": [],
           "description": "Extra model ids merged into the model dropdown (e.g. claude-opus-5) — for models the SDK's probed list doesn't include yet. Entries the SDK already lists are ignored."
         },
+        "claudePersist.connectionIndicator": {
+          "type": "boolean",
+          "default": true,
+          "description": "Blink a border around the chat when it loses contact with the server — the browser connection or the daemon. Detected by a round-trip heartbeat, not by guessing from silence."
+        },
         "claudePersist.defaultModel": {
           "type": "string",
           "default": "",

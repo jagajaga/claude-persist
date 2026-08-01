@@ -27,6 +27,13 @@ const uploadsDir = path.join(os.homedir(), '.claude-persist', 'uploads');
 /** Matches the daemon's default; "Load earlier" multiplies it. */
 const REPLAY_LIMIT = 400;
 
+/** Whether the panel should flag a broken connection at all. */
+function connectionIndicatorEnabled(): boolean {
+  return vscode.workspace
+    .getConfiguration('claudePersist')
+    .get<boolean>('connectionIndicator', true);
+}
+
 interface PanelEntry {
   panel: vscode.WebviewPanel;
   sessionId: string;
@@ -112,6 +119,14 @@ export class ChatPanelManager {
       .getConfiguration('claudePersist')
       .get<string[]>('extraModels', []);
     return mergeExtraModels(this.lastModels, extras);
+  }
+
+  /** Tell every panel whether to flag a broken connection. */
+  refreshConnectionIndicator(): void {
+    const enabled = connectionIndicatorEnabled();
+    for (const entry of this.panels.values()) {
+      this.post(entry, { type: 'connectionIndicator', enabled });
+    }
   }
 
   /** Re-push the model list to open panels (after extraModels changes). */
@@ -212,6 +227,17 @@ export class ChatPanelManager {
       }
       // 'ready' must never be dropped: mark the panel ready even with no
       // daemon connection yet, so reattachAll() finds it after connect.
+      if (msg.type === 'ping') {
+        // Answer immediately, before any daemon work: the round trip is what
+        // proves the browser <-> code-server hop is alive, and the payload
+        // carries the second hop's state so one probe covers both.
+        this.post(entry, {
+          type: 'pong',
+          daemon: this.client()?.connected === true,
+          indicator: connectionIndicatorEnabled(),
+        });
+        return;
+      }
       if (msg.type === 'switchTab') {
         // A webview cannot move between editor tabs itself; the host can.
         await vscode.commands.executeCommand(

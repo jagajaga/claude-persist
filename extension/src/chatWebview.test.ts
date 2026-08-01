@@ -31,6 +31,8 @@ interface JsdomWindow {
   dispatchEvent: (event: DomNode) => boolean;
   acquireVsCodeApi?: () => unknown;
   IntersectionObserver?: unknown;
+  navigator: { onLine: boolean };
+  Date: { now: () => number };
   close(): void;
 }
 
@@ -452,4 +454,115 @@ test('a later status event does not restart the elapsed clock', () => {
 
   const since = h.document.querySelector('.working-row .working-since');
   assert.match(since.textContent, new RegExp(`^${expectedClock(startedAt)} · `));
+});
+
+// ---------------------------------------------------------------------------
+// Connection indicator. The webview must decide this itself: if the browser
+// loses code-server, no host message can reach it to say so.
+// ---------------------------------------------------------------------------
+
+/** Force jsdom's document.visibilityState, which is otherwise read-only. */
+function setVisibility(h: Harness, state: 'visible' | 'hidden'): void {
+  Object.defineProperty(h.document, 'visibilityState', {
+    configurable: true,
+    get: () => state,
+  });
+}
+
+/** Run code inside the jsdom realm, where chat.js lives. */
+function evalInWindow(h: Harness, code: string): void {
+  const script = h.document.createElement('script');
+  script.textContent = code;
+  h.document.body.appendChild(script);
+}
+
+/** Pin Date.now inside the window so staleness can be reached instantly. */
+function freezeClock(h: Harness, at: number): void {
+  evalInWindow(h, `Date.now = function () { return ${at}; };`);
+}
+
+/** Same for navigator.onLine — a getter, so plain assignment is a no-op. */
+function setOnline(h: Harness, online: boolean): void {
+  Object.defineProperty(h.window.navigator, 'onLine', {
+    configurable: true,
+    get: () => online,
+  });
+}
+
+test('connection: a pong keeps the perimeter hidden', () => {
+  const h = createHarness();
+  h.send({ type: 'pong', daemon: true, indicator: true });
+  const veil = h.document.querySelector('.offline-veil');
+  assert.ok(veil, 'the indicator element must exist');
+  assert.equal(veil.hidden, true, 'a healthy round trip shows nothing');
+  h.close();
+});
+
+test('connection: the client probes rather than waiting to be told', () => {
+  const h = createHarness();
+  // Nothing can reach a webview whose socket died, so it has to ask.
+  assert.ok(
+    h.posted.some((m) => m.type === 'ping'),
+    'client must send its own heartbeat',
+  );
+  h.close();
+});
+
+test('connection: the daemon being down raises the perimeter', () => {
+  const h = createHarness();
+  h.send({ type: 'pong', daemon: false, indicator: true });
+  assert.equal(h.document.querySelector('.offline-veil').hidden, false);
+  // ...and recovers on its own once the daemon is back.
+  h.send({ type: 'pong', daemon: true, indicator: true });
+  assert.equal(h.document.querySelector('.offline-veil').hidden, true);
+  h.close();
+});
+
+test('connection: going offline raises the perimeter immediately', () => {
+  const h = createHarness();
+  h.send({ type: 'pong', daemon: true, indicator: true });
+  setOnline(h, false);
+  h.window.dispatchEvent(new h.window.MessageEvent('offline', { data: null }));
+  assert.equal(
+    h.document.querySelector('.offline-veil').hidden,
+    false,
+    'no need to wait out a heartbeat when the browser already knows',
+  );
+  h.close();
+});
+
+test('connection: a hidden tab is never called disconnected', () => {
+  const h = createHarness();
+  h.send({ type: 'pong', daemon: true, indicator: true });
+
+  // Push the clock well past the staleness window. Without this the test
+  // proves nothing: `stale` would be false whatever the visibility guard did.
+  // Stub the clock *inside* the window: chat.js runs in jsdom's realm, and
+  // assigning h.window.Date.now from out here does not reach it.
+  freezeClock(h, Date.now() + 60_000);
+
+  // Backgrounded tabs get their timers throttled, so silence there proves
+  // nothing — this is the false positive that makes naive heartbeats useless
+  // on a phone.
+  setVisibility(h, 'hidden');
+  h.document.dispatchEvent(new h.window.MessageEvent('visibilitychange', { data: null }));
+  assert.equal(
+    h.document.querySelector('.offline-veil').hidden,
+    true,
+    'a throttled background tab must not be reported as disconnected',
+  );
+
+  h.close();
+});
+
+test('connection: the setting suppresses the perimeter entirely', () => {
+  const h = createHarness();
+  h.send({ type: 'connectionIndicator', enabled: false });
+  h.send({ type: 'pong', daemon: false, indicator: false });
+  assert.equal(
+    h.document.querySelector('.offline-veil').hidden,
+    true,
+    'opting out must win even when genuinely disconnected',
+  );
+  h.close();
 });

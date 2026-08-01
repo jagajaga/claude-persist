@@ -276,22 +276,58 @@
   }
 
   let workingRow = null;
-  function setRunning(running, detail) {
+  /** When the turn now running began, so a stuck turn is obvious. */
+  let runningSince = null;
+  let elapsedTimer = null;
+
+  /** "12s", "4m 12s", "1h 3m" — coarse enough to read at a glance. */
+  function elapsedSince(startedAt) {
+    const secs = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+    if (secs < 60) return `${secs}s`;
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `${mins}m ${secs % 60}s`;
+    return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+  }
+
+  function paintElapsed() {
+    if (!workingRow || runningSince === null) return;
+    const label = workingRow.querySelector('.working-since');
+    if (!label) return;
+    const started = clockTime(runningSince);
+    // Start time answers "when", elapsed answers "how long" — a turn that is
+    // stuck needs both without doing arithmetic against the wall clock.
+    label.textContent = started
+      ? `${started} · ${elapsedSince(runningSince)}`
+      : elapsedSince(runningSince);
+  }
+
+  function setRunning(running, detail, startedAt) {
     // Single inline indicator riding at the bottom of the conversation:
-    // spinner + label + Stop.
+    // spinner + label + elapsed + Stop.
     if (running) {
       if (!workingRow) {
         workingRow = el('div', 'working-row');
         workingRow.appendChild(el('span', 'spinner'));
         workingRow.appendChild(el('span', 'working-text', ''));
+        workingRow.appendChild(el('span', 'meta working-since', ''));
         const stop = el('button', 'pill', 'Stop');
         stop.addEventListener('click', () => vscode.postMessage({ type: 'interrupt' }));
         workingRow.appendChild(stop);
       }
+      // Only the first call starts the clock; later status events during the
+      // same turn must not reset it.
+      if (runningSince === null) runningSince = Number(startedAt) || Date.now();
+      if (!elapsedTimer) elapsedTimer = setInterval(paintElapsed, 1000);
       workingRow.querySelector('.working-text').textContent = detail || 'Working…';
+      paintElapsed();
       threadEl.appendChild(workingRow); // appending moves it to the end
-    } else if (workingRow) {
-      workingRow.remove();
+    } else {
+      runningSince = null;
+      if (elapsedTimer) {
+        clearInterval(elapsedTimer);
+        elapsedTimer = null;
+      }
+      if (workingRow) workingRow.remove();
     }
   }
 
@@ -637,7 +673,7 @@
         break;
       }
       case 'status': {
-        if (event.status === 'running') setRunning(true);
+        if (event.status === 'running') setRunning(true, undefined, ts);
         else {
           settlePreviews();
           setRunning(false);
@@ -813,6 +849,8 @@
   /** Drop every rendered event so a re-replay cannot duplicate the thread. */
   function resetThread() {
     dropPreviews();
+    // Also stops the elapsed timer; nulling workingRow alone would leak it.
+    setRunning(false);
     threadEl.replaceChildren();
     toolCards.clear();
     loadEarlierRow = null;

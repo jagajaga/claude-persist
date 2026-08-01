@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -31,7 +31,25 @@ interface JsdomWindow {
   dispatchEvent: (event: DomNode) => boolean;
   acquireVsCodeApi?: () => unknown;
   IntersectionObserver?: unknown;
+  close(): void;
 }
+
+/**
+ * Every harness holds a live jsdom window, and `pretendToBeVisual` keeps a
+ * requestAnimationFrame loop running in each one. Left open they hold the
+ * event loop up and node:test never exits, so close them all at the end
+ * rather than relying on each test to remember.
+ */
+const openHarnesses: Array<{ close(): void }> = [];
+after(() => {
+  for (const harness of openHarnesses) {
+    try {
+      harness.close();
+    } catch {
+      // already closed by a test that cleaned up after itself
+    }
+  }
+});
 
 const MEDIA_DIR = path.join(__dirname, '../media');
 const CHAT_JS = fs.readFileSync(path.join(MEDIA_DIR, 'chat.js'), 'utf8');
@@ -99,6 +117,12 @@ interface Harness {
   send(message: Record<string, unknown>): void;
   /** Lets requestAnimationFrame-scheduled preview rendering run one tick. */
   flush(): Promise<void>;
+  /**
+   * Tears down the jsdom window. Called for every harness by the global
+   * after() hook; a test only needs it directly when it wants the window gone
+   * before the suite ends.
+   */
+  close(): void;
 }
 
 let nextSeq = 0;
@@ -149,7 +173,7 @@ function createHarness(sessionId = 'harness-session'): Harness {
   runScript(STREAMING_MARKDOWN_JS);
   runScript(CHAT_JS);
 
-  return {
+  const harness: Harness = {
     window,
     document: window.document,
     posted,
@@ -160,7 +184,12 @@ function createHarness(sessionId = 'harness-session'): Harness {
     flush() {
       return new Promise((resolve) => window.setTimeout(resolve, 20));
     },
+    close() {
+      dom.window.close();
+    },
   };
+  openHarnesses.push(harness);
+  return harness;
 }
 
 // ---------------------------------------------------------------------------
@@ -388,4 +417,39 @@ test('load earlier: present when hasEarlier is true, and clicking posts loadEarl
   const loadEarlierMessages = h.posted.filter((m) => m.type === 'loadEarlier');
   assert.equal(loadEarlierMessages.length, 1);
   assert.equal(Object.keys(loadEarlierMessages[0]).length, 1);
+});
+
+test('working row shows when the running turn started', () => {
+  const h = createHarness();
+  const startedAt = new Date(2026, 6, 31, 14, 32).getTime();
+  h.send({ type: 'replay', reset: true, events: [], info: { status: 'idle', permissionMode: 'default' } });
+  h.send(liveEvent({ type: 'status', status: 'running' }, startedAt));
+
+  const since = h.document.querySelector('.working-row .working-since');
+  assert.ok(since, 'running turn must show a time readout');
+  // Start time first, elapsed after it: "when" then "how long".
+  assert.match(since.textContent, new RegExp(`^${expectedClock(startedAt)} · \\d`));
+});
+
+test('working row readout disappears once the turn ends', () => {
+  const h = createHarness();
+  h.send({ type: 'replay', reset: true, events: [], info: { status: 'idle', permissionMode: 'default' } });
+  h.send(liveEvent({ type: 'status', status: 'running' }, Date.now()));
+  assert.ok(h.document.querySelector('.working-row'), 'row present while running');
+
+  h.send(liveEvent({ type: 'status', status: 'idle' }, Date.now()));
+  assert.equal(h.document.querySelector('.working-row'), null, 'row gone once idle');
+});
+
+test('a later status event does not restart the elapsed clock', () => {
+  const h = createHarness();
+  const startedAt = new Date(2026, 6, 31, 9, 5).getTime();
+  h.send({ type: 'replay', reset: true, events: [], info: { status: 'idle', permissionMode: 'default' } });
+  h.send(liveEvent({ type: 'status', status: 'running' }, startedAt));
+  // A second running status mid-turn (detail update) must keep the original
+  // start time, or a stuck turn would look like it just began.
+  h.send(liveEvent({ type: 'status', status: 'running' }, startedAt + 120000));
+
+  const since = h.document.querySelector('.working-row .working-since');
+  assert.match(since.textContent, new RegExp(`^${expectedClock(startedAt)} · `));
 });

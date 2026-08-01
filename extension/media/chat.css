@@ -579,3 +579,7 @@ button.secondary {
   padding: 2px 0 6px;
 }
 .load-earlier .pill { font-size: 0.9em; }
+
+/* The elapsed/start-time readout inside the working row keeps .meta typography
+   so it matches the duration/token line it will be replaced by. */
+.working-row .working-since { margin-left: 2px; }

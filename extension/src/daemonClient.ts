@@ -12,7 +12,7 @@ import type {
   ModelDescriptor,
   PermissionMode,
   PersistedEvent,
-  RateLimits,
+  UsageSnapshot,
   Request,
   ServerMessage,
   SessionInfo,
@@ -25,7 +25,7 @@ const socketPath = path.join(baseDir, 'daemon.sock');
 // package is ESM, so the constant can't be require()d from this CJS module).
 // protocolVersion.test.ts asserts the two stay equal — desyncing them makes
 // the extension kill every daemon it spawns.
-const EXPECTED_PROTOCOL = 19;
+const EXPECTED_PROTOCOL = 20;
 
 /** How long to wait for a reply before treating the daemon as wedged. */
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -122,7 +122,7 @@ type PushHandler = {
   onDelta(sessionId: string, text: string): void;
   onSessionsChanged(): void;
   onModels(models: ModelDescriptor[]): void;
-  onRateLimits(windows: RateLimits): void;
+  onRateLimits(usage: UsageSnapshot): void;
   onAccounts(accounts: AccountInfo[]): void;
   onDisconnect(): void;
 };
@@ -320,7 +320,7 @@ export class DaemonClient {
         this.handler.onModels(message.models);
         break;
       case 'rateLimits':
-        this.handler.onRateLimits(message.windows);
+        this.handler.onRateLimits(message.usage);
         break;
       case 'accounts':
         this.handler.onAccounts(message.accounts);
@@ -426,7 +426,7 @@ export class DaemonClient {
     return this.request({ op: 'listModels' });
   }
 
-  listRateLimits(): Promise<RateLimits> {
+  listRateLimits(): Promise<UsageSnapshot> {
     return this.request({ op: 'listRateLimits' });
   }
 

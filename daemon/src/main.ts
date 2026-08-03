@@ -5,11 +5,10 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
   ModelDescriptor,
   PersistedEvent,
-  RateLimits,
-  RateLimitWindowKind,
   Request,
   ServerMessage,
   SessionInfo,
+  UsageSnapshot,
 } from '@claude-persist/shared';
 import type { HelloResult } from '@claude-persist/shared';
 import { PROTOCOL_VERSION } from '@claude-persist/shared';
@@ -20,6 +19,7 @@ import { Registry } from './registry.js';
 import { DaemonSession } from './session.js';
 import { importClaudeSession, listClaudeSessions } from './importer.js';
 import { accountsStore } from './accounts.js';
+import { applyRateLimitEvent, applyUsageResponse } from './usage.js';
 
 /**
  * Logging comes first and degrades rather than failing, because a crash during
@@ -129,6 +129,9 @@ function probeModels(): Promise<ModelDescriptor[]> {
     try {
       const init = await q.initializationResult();
       if (Array.isArray(init.models)) cacheModels(init.models);
+      // Same throwaway query also seeds plan usage, so a freshly started daemon
+      // can fill the status bar before any session has run a turn.
+      await fetchUsageFrom(q);
     } finally {
       try {
         q.close();
@@ -144,32 +147,28 @@ function probeModels(): Promise<ModelDescriptor[]> {
 
 // ---------- plan rate limits (account-wide, learned from the live SDK push) -
 
-const RATE_LIMIT_WINDOW_KINDS: RateLimitWindowKind[] = [
-  'five_hour',
-  'seven_day',
-  'seven_day_opus',
-  'seven_day_sonnet',
-  'seven_day_overage_included',
-  'overage',
-];
-const RATE_LIMIT_STATUSES = new Set(['allowed', 'allowed_warning', 'rejected']);
+let usage: UsageSnapshot = { windows: {}, subscriptionType: null, available: true };
 
-let rateLimitCache: RateLimits = {};
+function broadcastUsage(): void {
+  broadcastAll({ kind: 'rateLimits', usage });
+}
 
-/** Raw SDKRateLimitInfo -> one normalised window keyed by its rateLimitType. */
-function normalizeRateLimitEvent(
-  info: Record<string, unknown>,
-): { kind: RateLimitWindowKind; window: NonNullable<RateLimits[RateLimitWindowKind]> } | null {
-  const kind = info.rateLimitType;
-  if (typeof kind !== 'string' || !RATE_LIMIT_WINDOW_KINDS.includes(kind as RateLimitWindowKind)) {
-    return null;
+/** Pull plan usage off a live query; swallows everything (experimental API). */
+async function fetchUsageFrom(activeQuery: unknown): Promise<void> {
+  const probe = activeQuery as {
+    usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<unknown>;
+  } | null;
+  const fetchUsage = probe?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+  if (typeof fetchUsage !== 'function') return;
+  try {
+    const result = await fetchUsage.call(probe);
+    if (result && typeof result === 'object') {
+      usage = applyUsageResponse(usage, result as Record<string, unknown>);
+      broadcastUsage();
+    }
+  } catch {
+    // no usage is the old behaviour, not a failure
   }
-  const utilization = typeof info.utilization === 'number' ? info.utilization : null;
-  const resetsAt = typeof info.resetsAt === 'number' ? info.resetsAt : null;
-  const status = RATE_LIMIT_STATUSES.has(info.status as string)
-    ? (info.status as 'allowed' | 'allowed_warning' | 'rejected')
-    : 'allowed';
-  return { kind: kind as RateLimitWindowKind, window: { utilization, resetsAt, status } };
 }
 
 const callbacks = {
@@ -177,10 +176,14 @@ const callbacks = {
     cacheModels(models);
   },
   onRateLimit(info: Record<string, unknown>): void {
-    const normalized = normalizeRateLimitEvent(info);
-    if (!normalized) return;
-    rateLimitCache = { ...rateLimitCache, [normalized.kind]: normalized.window };
-    broadcastAll({ kind: 'rateLimits', windows: rateLimitCache });
+    const windows = applyRateLimitEvent(usage.windows, info);
+    if (windows === usage.windows) return; // a kind we don't model
+    usage = { ...usage, windows };
+    broadcastUsage();
+  },
+  onUsage(raw: Record<string, unknown>): void {
+    usage = applyUsageResponse(usage, raw);
+    broadcastUsage();
   },
   onEvent(sessionId: string, event: PersistedEvent): void {
     broadcast(sessionId, { kind: 'event', sessionId, event });
@@ -298,7 +301,7 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
     case 'listModels':
       return modelCache ?? probeModels();
     case 'listRateLimits':
-      return rateLimitCache;
+      return usage;
     case 'listClaudeSessions':
       return listClaudeSessions();
     case 'importClaudeSession': {

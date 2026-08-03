@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   formatRelativeReset,
+  formatStatusBarFallback,
   formatStatusBarText,
   formatTooltip,
   normalizeResetsAt,
@@ -12,7 +13,7 @@ import {
 
 // ---- normalizeResetsAt: the two resetsAt shapes -----------------------------
 
-test('normalizeResetsAt: an epoch-ms number (live push shape) passes through', () => {
+test('normalizeResetsAt: an epoch-ms number passes through', () => {
   assert.equal(normalizeResetsAt(1_700_000_000_000), 1_700_000_000_000);
 });
 
@@ -41,19 +42,23 @@ test('pickNextLimit: highest utilization wins', () => {
 });
 
 test('pickNextLimit: a tie is broken by whichever resets soonest', () => {
+  // Realistic epoch-ms values: anything under 1e11 is epoch seconds and gets
+  // scaled, so toy numbers like 2000 can't stand in for timestamps.
+  const soon = Date.parse('2026-08-03T11:00:00.000Z');
+  const later = Date.parse('2026-08-03T12:00:00.000Z');
   const next = pickNextLimit({
-    five_hour: { utilization: 80, resetsAt: 5000 },
-    seven_day: { utilization: 80, resetsAt: 2000 },
+    five_hour: { utilization: 80, resetsAt: later },
+    seven_day: { utilization: 80, resetsAt: soon },
   });
   assert.equal(next?.kind, 'seven_day');
-  assert.equal(next?.resetsAtMs, 2000);
+  assert.equal(next?.resetsAtMs, soon);
 });
 
 test('pickNextLimit: null and missing windows are ignored', () => {
   const next = pickNextLimit({
     five_hour: null,
     seven_day: { utilization: null, resetsAt: null },
-    seven_day_opus: { utilization: 33, resetsAt: 4000 },
+    seven_day_opus: { utilization: 33, resetsAt: Date.parse('2026-08-03T12:00:00.000Z') },
   });
   assert.equal(next?.kind, 'seven_day_opus');
 });
@@ -185,7 +190,7 @@ test('formatTooltip: nothing reported yet falls back to the plain connected mess
 });
 
 test('formatTooltip: lists every reported window with utilization and relative reset', () => {
-  const now = 0;
+  const now = Date.parse('2026-08-03T10:00:00.000Z');
   const text = formatTooltip(
     {
       five_hour: { utilization: 62, resetsAt: now + 60_000 },
@@ -201,7 +206,7 @@ test('formatTooltip: lists every reported window with utilization and relative r
 });
 
 test('formatTooltip: subscription type is prepended when known', () => {
-  const now = 0;
+  const now = Date.parse('2026-08-03T10:00:00.000Z');
   const text = formatTooltip(
     { five_hour: { utilization: 62, resetsAt: now + 60_000 } },
     'max',
@@ -229,4 +234,84 @@ test('formatRelativeReset: long windows read in days, not dozens of hours', () =
   assert.equal(formatRelativeReset(hours(24), now), 'resets in 1d');
   // Below a day the hour/minute form still reads best.
   assert.equal(formatRelativeReset(hours(23), now), 'resets in 23h');
+});
+
+// ---- resetsAt units: the live push reports SECONDS, not milliseconds --------
+
+/**
+ * The bug: `SDKRateLimitInfo.resetsAt` is typed as a bare `number` and this code
+ * documented and treated it as epoch milliseconds. A real observed value of
+ * 1785766800 is epoch *seconds* — read as ms it lands in 1970, so every window
+ * rendered "resets any moment now", permanently, for every user.
+ */
+test('normalizeResetsAt: an epoch-seconds number is scaled to milliseconds', () => {
+  const seconds = 1785766800; // 2026-08-03T14:20:00Z, a real observed value
+  assert.equal(normalizeResetsAt(seconds), seconds * 1000);
+  assert.equal(new Date(normalizeResetsAt(seconds)!).toISOString(), '2026-08-03T14:20:00.000Z');
+});
+
+test('normalizeResetsAt: seconds and milliseconds for the same instant agree', () => {
+  const ms = Date.parse('2026-08-03T14:20:00.000Z');
+  assert.equal(normalizeResetsAt(ms / 1000), normalizeResetsAt(ms));
+});
+
+test('normalizeResetsAt: a seconds value renders as a future reset, not "any moment now"', () => {
+  const now = Date.parse('2026-08-03T10:46:00.000Z');
+  const resets = normalizeResetsAt(1785766800);
+  assert.equal(formatRelativeReset(resets, now), 'resets in 3h 34m');
+});
+
+// ---- formatStatusBarFallback: something beats nothing ----------------------
+
+/**
+ * `utilization` is optional in SDKRateLimitInfo and in practice absent from the
+ * live push, so pickNextLimit (which requires a number) returned null and the
+ * status bar showed only its default label — indistinguishable from the feature
+ * not existing.
+ */
+test('formatStatusBarFallback: shows the window and its reset when utilization is missing', () => {
+  const now = Date.parse('2026-08-03T10:46:00.000Z');
+  const text = formatStatusBarFallback(
+    { five_hour: { utilization: null, resetsAt: 1785766800, status: 'allowed' } },
+    now,
+  );
+  assert.equal(text, '$(sparkle) 5h resets in 3h 34m');
+});
+
+test('formatStatusBarFallback: a non-allowed status without a reset still says something', () => {
+  const text = formatStatusBarFallback(
+    { five_hour: { utilization: null, resetsAt: null, status: 'rejected' } },
+    Date.now(),
+  );
+  assert.equal(text, '$(warning) 5h rejected');
+});
+
+test('formatStatusBarFallback: null when a window reports nothing usable at all', () => {
+  assert.equal(
+    formatStatusBarFallback({ five_hour: { utilization: null, resetsAt: null, status: 'allowed' } }, Date.now()),
+    null,
+  );
+  assert.equal(formatStatusBarFallback({}, Date.now()), null);
+  assert.equal(formatStatusBarFallback(null, Date.now()), null);
+});
+
+test('formatStatusBarFallback: defers to pickNextLimit when a utilization exists', () => {
+  // Windows WITH a utilization are pickNextLimit's job; the fallback skips them
+  // so the two can never disagree about which window to show.
+  assert.equal(
+    formatStatusBarFallback({ five_hour: { utilization: 42, resetsAt: 1785766800, status: 'allowed' } }, Date.now()),
+    null,
+  );
+});
+
+test('formatStatusBarFallback: follows WINDOW_ORDER, five_hour first', () => {
+  const now = Date.parse('2026-08-03T10:46:00.000Z');
+  const text = formatStatusBarFallback(
+    {
+      seven_day: { utilization: null, resetsAt: 1785766800, status: 'allowed' },
+      five_hour: { utilization: null, resetsAt: 1785770400, status: 'allowed' },
+    },
+    now,
+  );
+  assert.match(text ?? '', /^\$\(sparkle\) 5h/);
 });

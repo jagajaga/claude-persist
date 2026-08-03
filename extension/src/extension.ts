@@ -6,7 +6,14 @@ import { DaemonClient } from './daemonClient';
 import { ChatPanelManager, VIEW_TYPE } from './chatPanel';
 import { SessionsProvider } from './sessionsView';
 import { sessionTitleFromInput } from './sessionTitle';
-import { formatStatusBarText, formatTooltip, pickNextLimit, severityFor, type Severity } from './rateLimits';
+import {
+  formatStatusBarFallback,
+  formatStatusBarText,
+  formatTooltip,
+  pickNextLimit,
+  severityFor,
+  type Severity,
+} from './rateLimits';
 
 let client: DaemonClient | null = null;
 let panels: ChatPanelManager;
@@ -16,12 +23,13 @@ let reconnectTimer: NodeJS.Timeout | undefined;
 let connecting: Promise<DaemonClient> | null = null;
 /**
  * Account-wide, not per-session — the daemon broadcasts one shared snapshot
- * to every client (see the 'rateLimits' push in daemonClient.ts).
- * subscription_type is never populated: it lives on the SDK's experimental
- * usage_EXPERIMENTAL_… response, not on anything this extension has verified
- * fires (see the comment on the 'rate_limit_event' case in daemon/session.ts).
+ * to every client (see the 'rateLimits' push in daemonClient.ts). Merged by the
+ * daemon from two half-sources: the live rate_limit_event push (status, reset)
+ * and the SDK's experimental usage call (utilization, subscription type).
  */
 let latestRateLimits: RateLimits = {};
+/** From the SDK usage call: 'pro' | 'max' | ... or null for API-key sessions. */
+let latestSubscriptionType: string | null = null;
 
 function severityColor(sev: Severity): vscode.ThemeColor | undefined {
   if (sev === 'error') return new vscode.ThemeColor('statusBarItem.errorBackground');
@@ -32,8 +40,13 @@ function severityColor(sev: Severity): vscode.ThemeColor | undefined {
 /** Repaint the status bar item from latestRateLimits; connect/disconnect own their own text otherwise. */
 function refreshRateLimitDisplay(): void {
   const next = pickNextLimit(latestRateLimits);
-  statusItem.text = formatStatusBarText(next);
-  statusItem.tooltip = formatTooltip(latestRateLimits, null);
+  // With no utilization anywhere, show whatever a window does report (its reset
+  // or a non-'allowed' status) rather than the bare label, which read as "this
+  // feature doesn't exist".
+  statusItem.text = next
+    ? formatStatusBarText(next)
+    : formatStatusBarFallback(latestRateLimits, Date.now()) ?? formatStatusBarText(null);
+  statusItem.tooltip = formatTooltip(latestRateLimits, latestSubscriptionType);
   statusItem.backgroundColor = severityColor(severityFor(next));
 }
 
@@ -77,8 +90,9 @@ async function doConnect(context: vscode.ExtensionContext): Promise<DaemonClient
     onDelta: (sessionId, text) => panels.handleDelta(sessionId, text),
     onSessionsChanged: () => sessionsProvider.refresh(),
     onModels: (models) => panels.handleModels(models),
-    onRateLimits: (windows) => {
-      latestRateLimits = windows;
+    onRateLimits: (usage) => {
+      latestRateLimits = usage.windows;
+      latestSubscriptionType = usage.subscriptionType;
       refreshRateLimitDisplay();
     },
     onAccounts: (accounts) => panels.handleAccounts(accounts),
@@ -102,8 +116,9 @@ async function doConnect(context: vscode.ExtensionContext): Promise<DaemonClient
   // pulls listModels() on attach rather than relying on the broadcast alone.
   void fresh
     .listRateLimits()
-    .then((windows) => {
-      latestRateLimits = windows;
+    .then((usage) => {
+      latestRateLimits = usage.windows;
+      latestSubscriptionType = usage.subscriptionType;
       refreshRateLimitDisplay();
     })
     .catch(() => undefined);

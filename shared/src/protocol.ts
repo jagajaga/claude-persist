@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 19;
+export const PROTOCOL_VERSION = 20;
 
 /**
  * Reply to `hello`. `entry` is the module path the daemon was launched from;
@@ -118,6 +118,25 @@ export interface RateLimitWindow {
 /** Every window the daemon has heard about so far; absent keys are simply unknown. */
 export type RateLimits = Partial<Record<RateLimitWindowKind, RateLimitWindow>>;
 
+/**
+ * Everything the daemon knows about plan usage, from two sources that report
+ * different halves of it: the live `rate_limit_event` push carries `status` and
+ * `resetsAt` but usually no `utilization`, and the SDK's experimental usage call
+ * carries `utilization` and `subscription_type` but no status. They are merged
+ * per window rather than one replacing the other.
+ */
+export interface UsageSnapshot {
+  windows: RateLimits;
+  /** 'pro' | 'max' | 'team' | 'enterprise', or null for API-key/3P sessions. */
+  subscriptionType: string | null;
+  /**
+   * False when plan rate limits don't apply at all (API key, Bedrock, Vertex,
+   * or a profile missing the usage scope) — distinct from "not measured yet",
+   * so the UI can say so instead of showing a permanently blank meter.
+   */
+  available: boolean;
+}
+
 /** An existing Claude Code (CLI / official extension) session on this machine. */
 export interface ClaudeSessionCandidate {
   file: string;
@@ -170,7 +189,7 @@ export type Push =
   /** Broadcast when the daemon (re)learns the account's model list. */
   | { kind: 'models'; models: ModelDescriptor[] }
   /** Broadcast when a plan rate-limit window changes; account-wide. */
-  | { kind: 'rateLimits'; windows: RateLimits }
+  | { kind: 'rateLimits'; usage: UsageSnapshot }
   /** Live-only streaming text; not persisted, superseded by the next assistant_text event. */
   | { kind: 'delta'; sessionId: string; text: string }
   | { kind: 'sessions_changed' }

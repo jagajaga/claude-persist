@@ -51,14 +51,30 @@ export function windowLabel(kind: RateLimitWindowKind): string {
 }
 
 /**
- * Normalise the two `resetsAt` shapes the SDK uses into epoch milliseconds:
- * the init-handshake's `rate_limits` block reports an ISO 8601 string, the
- * live `rate_limit_event` push reports an epoch-ms number. Invalid or
- * missing values become null rather than NaN so callers never have to guard.
+ * Epoch *seconds* below this, epoch milliseconds at or above it. 1e11 ms is
+ * 1973, and 1e11 seconds is the year 5138 — no real timestamp is ambiguous.
+ */
+const EPOCH_MS_FLOOR = 1e11;
+
+/**
+ * Normalise every `resetsAt` shape the SDK uses into epoch milliseconds.
+ *
+ * The usage endpoint's `resets_at` is an ISO 8601 string. The live
+ * `rate_limit_event` push reports a *number*, and this code previously
+ * documented and treated that number as epoch milliseconds — it is epoch
+ * seconds. A real observed value of 1785766800 was being read as
+ * 1970-01-21 instead of 2026-08-03T14:20Z, so every reset rendered as
+ * "resets any moment now", permanently. The SDK types say only
+ * `resetsAt?: number` with no unit, so scale is detected rather than assumed.
+ *
+ * Invalid or missing values become null rather than NaN, so callers never guard.
  */
 export function normalizeResetsAt(value: string | number | null | undefined): number | null {
   if (value === null || value === undefined) return null;
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
+    return value < EPOCH_MS_FLOOR ? value * 1000 : value;
+  }
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? null : parsed;
 }
@@ -130,6 +146,38 @@ const DEFAULT_STATUS_TEXT = '$(sparkle) Claude Persist';
 export function formatStatusBarText(next: NextLimit | null): string {
   if (!next) return DEFAULT_STATUS_TEXT;
   return `$(sparkle) ${windowLabel(next.kind)} ${Math.round(next.utilization)}%`;
+}
+
+/**
+ * What to show when no window reports a utilization, but one still tells us
+ * something useful — a reset time, or a non-'allowed' status.
+ *
+ * The live `rate_limit_event` push often carries only `status` and `resetsAt`
+ * (`utilization` is optional in SDKRateLimitInfo and is frequently absent),
+ * and because pickNextLimit requires a number, the status bar fell back to the
+ * bare "Claude Persist" label and looked like the feature simply didn't exist.
+ * Showing the window and its reset beats showing nothing.
+ *
+ * Returns null when there is genuinely nothing to say, so the caller keeps the
+ * default label.
+ */
+export function formatStatusBarFallback(
+  windows: RawWindows | null | undefined,
+  now: number,
+): string | null {
+  if (!windows) return null;
+  for (const kind of WINDOW_ORDER) {
+    const raw = windows[kind];
+    if (!raw) continue;
+    if (raw.utilization !== null && raw.utilization !== undefined) continue; // pickNextLimit's job
+    const resetsAtMs = normalizeResetsAt(raw.resetsAt);
+    const status = raw.status ?? 'allowed';
+    if (resetsAtMs === null && status === 'allowed') continue; // nothing worth showing
+    const icon = status === 'allowed' ? '$(sparkle)' : '$(warning)';
+    if (resetsAtMs === null) return `${icon} ${windowLabel(kind)} ${status.replace('_', ' ')}`;
+    return `${icon} ${windowLabel(kind)} ${formatRelativeReset(resetsAtMs, now)}`;
+  }
+  return null;
 }
 
 /** "resets in 2h 10m" — falls back to "resets at an unknown time" rather than guessing. */

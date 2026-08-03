@@ -70,6 +70,8 @@ export interface SessionCallbacks {
    * case in handleSdkMessage for why this is the only wired source.
    */
   onRateLimit(info: Record<string, unknown>): void;
+  /** Raw SDKControlGetUsageResponse from the experimental usage control call. */
+  onUsage(usage: Record<string, unknown>): void;
 }
 
 /** Truncate long tool payloads before persisting/rendering. */
@@ -326,6 +328,37 @@ export class DaemonSession {
   }
 
   /**
+   * Ask the SDK for real plan usage.
+   *
+   * The live `rate_limit_event` push is the only source that reliably fires, but
+   * `SDKRateLimitInfo.utilization` is optional and in practice absent — so the
+   * status bar, which needs a percentage, had nothing to show and fell back to a
+   * bare label. This control call is where `utilization` and `subscription_type`
+   * actually live (documented as "Percentage of the window used, 0-100").
+   *
+   * Called through a structural check rather than the typed method, and every
+   * failure is swallowed: the name says
+   * `_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET`, so an SDK that
+   * renames or drops it must degrade to "no utilization" — which is merely the
+   * old behaviour — instead of breaking turns.
+   */
+  private async pollUsage(activeQuery: unknown): Promise<void> {
+    const probe = activeQuery as {
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<unknown>;
+    } | null;
+    const fetchUsage = probe?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+    if (typeof fetchUsage !== 'function') return;
+    try {
+      const usage = await fetchUsage.call(probe);
+      if (usage && typeof usage === 'object') {
+        this.callbacks.onUsage(usage as Record<string, unknown>);
+      }
+    } catch {
+      // unstable API, or a session that ended mid-call — not worth surfacing
+    }
+  }
+
+  /**
    * Tear down the live query only — unlike dispose(), the session (its
    * transcript, log file, meta) stays fully alive. Used when the active
    * account changes: the next sendMessage() spawns a fresh query under the
@@ -407,6 +440,9 @@ export class DaemonSession {
       .initializationResult()
       .then((init) => {
         if (Array.isArray(init.models)) this.callbacks.onModels(init.models);
+        // Populate usage as soon as the session is up, so the status bar has a
+        // percentage before the first turn rather than only after one.
+        void this.pollUsage(q);
       })
       .catch(() => undefined);
     void this.consume(q);
@@ -530,6 +566,10 @@ export class DaemonSession {
         break;
       }
       case 'result': {
+        // Refresh usage after every turn: a turn is the only thing that moves
+        // utilization, so this is exactly as often as it can change (plus the
+        // window reset, which the live push reports on its own).
+        void this.pollUsage(this.activeQuery);
         const summaryText =
           typeof msg.result === 'string' ? msg.result : `Turn finished (${String(msg.subtype ?? 'done')})`;
         const usage = msg.usage as Record<string, unknown> | undefined;

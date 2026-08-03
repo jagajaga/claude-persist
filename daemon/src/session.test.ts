@@ -25,6 +25,7 @@ const noopCallbacks = {
   onMetaChanged(): void {},
   onModels(): void {},
   onRateLimit(): void {},
+  onUsage(): void {},
 };
 
 function makeSession(id: string): InstanceType<typeof DaemonSession> {

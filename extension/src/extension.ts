@@ -364,9 +364,28 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // Connect eagerly so restored panels attach right after reload; don't spawn
-  // errors at the user on startup if the daemon isn't built yet.
-  void ensureClient(context).catch(() => undefined);
+  // Connect eagerly so restored panels attach right after reload. A failure
+  // here used to be swallowed outright, which made a failed daemon upgrade
+  // look like the extension had simply stopped existing: no sidebar content,
+  // no chat, and nothing anywhere saying why. Report it on the status bar
+  // (non-modal, since "the daemon isn't built yet" is normal in dev) and
+  // escalate to a notification only when the user has to act.
+  void ensureClient(context).catch((err: unknown) => {
+    const reason = err instanceof Error ? err.message : String(err);
+    statusItem.text = '$(error) Claude Persist';
+    statusItem.tooltip = `Could not connect to the daemon:\n${reason}`;
+    statusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+    if (/protocol \d+ > \d+/.test(reason)) {
+      void vscode.window
+        .showWarningMessage(
+          'A newer claude-persist daemon is running than this window supports. Reload the window to pick up the updated extension.',
+          'Reload Window',
+        )
+        .then((choice) => {
+          if (choice) void vscode.commands.executeCommand('workbench.action.reloadWindow');
+        });
+    }
+  });
 }
 
 export function deactivate(): void {

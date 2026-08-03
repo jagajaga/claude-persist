@@ -298,11 +298,29 @@ export class DaemonSession {
     pending.settle(allow, message, answers);
   }
 
-  dispose(): void {
+  /**
+   * Full teardown; never rejects. Resolves once the SDK query has been asked to
+   * close — the previous version dropped the activeQuery reference without
+   * closing it, so on an upgrade kill cycle (SIGTERM, then an immediate
+   * process.exit) the SDK's own `claude` child process was never told to stop
+   * and could outlive the daemon that spawned it.
+   */
+  async dispose(): Promise<void> {
     this.input?.close();
+    this.input = null;
+    const active = this.activeQuery;
     this.activeQuery = null;
+    try {
+      await active?.close();
+    } catch {
+      // already closed/gone
+    }
     if (this.logFd !== null) {
-      fs.closeSync(this.logFd);
+      try {
+        fs.closeSync(this.logFd);
+      } catch {
+        // fd already invalid
+      }
       this.logFd = null;
     }
   }
@@ -328,14 +346,17 @@ export class DaemonSession {
     if (this.activeQuery) return;
     // null = default account, env stays untouched (SDK falls back to ~/.claude).
     const activeAccountDir = accountsStore.active;
-    if (activeAccountDir) {
-      ensureSdkTranscript(
-        this.meta.sdkSessionId,
-        this.meta.cwd,
-        activeAccountDir,
-        accountsStore.allConcreteDirs(),
-      );
-    }
+    // Sync unconditionally, including when switching *back* to the default:
+    // a session created while a named account was active has its SDK-side
+    // transcript only under that account, so gating this on activeAccountDir
+    // made the default direction fail to resume with the same
+    // "No conversation found with session ID" error.
+    ensureSdkTranscript(
+      this.meta.sdkSessionId,
+      this.meta.cwd,
+      accountsStore.activeConcreteDir(),
+      accountsStore.allConcreteDirs(),
+    );
     this.input = new InputQueue();
     const q = query({
       // The SDK accepts an AsyncIterable of user messages for multi-turn

@@ -17,18 +17,70 @@ export interface SessionMeta {
 
 export class Registry {
   private sessions = new Map<string, SessionMeta>();
+  private readonly filePath: string;
 
-  load(): void {
+  constructor(filePath: string = registryPath) {
+    this.filePath = filePath;
+  }
+
+  /**
+   * Returns the path the previous registry was quarantined to if it was
+   * unreadable, else null. A missing file is not a failure (first run).
+   *
+   * Starting empty on a parse error is not survivable on its own: the very next
+   * save() — touch() runs on every message — would overwrite the only copy of
+   * every session's title, cwd and sdkSessionId. Moving the bad file aside
+   * keeps it recoverable and makes the loss visible in the log instead of
+   * looking like the sidebar spontaneously forgot everything.
+   */
+  load(): string | null {
+    let raw: string;
     try {
-      const raw = JSON.parse(fs.readFileSync(registryPath, 'utf8')) as SessionMeta[];
-      for (const meta of raw) this.sessions.set(meta.id, meta);
+      raw = fs.readFileSync(this.filePath, 'utf8');
     } catch {
-      // first run or corrupt registry — start empty
+      return null; // first run
+    }
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) throw new Error('registry is not an array');
+      for (const meta of parsed as SessionMeta[]) {
+        // Skip junk entries rather than letting one bad record poison the load.
+        if (meta && typeof meta.id === 'string') this.sessions.set(meta.id, meta);
+      }
+      return null;
+    } catch {
+      this.sessions.clear();
+      const quarantine = `${this.filePath}.corrupt-${Date.now()}`;
+      try {
+        fs.renameSync(this.filePath, quarantine);
+      } catch {
+        return this.filePath; // couldn't even move it; at least name it
+      }
+      return quarantine;
     }
   }
 
+  /**
+   * Atomic replace. save() runs on every sent message, so a plain
+   * writeFileSync interrupted by the SIGTERM of an extension upgrade — exactly
+   * when it is most likely to be interrupted — left a truncated JSON file,
+   * which load() then treated as "start empty".
+   */
   save(): void {
-    fs.writeFileSync(registryPath, JSON.stringify([...this.sessions.values()], null, 2));
+    const payload = JSON.stringify([...this.sessions.values()], null, 2);
+    const tmp = `${this.filePath}.tmp-${process.pid}`;
+    const fd = fs.openSync(tmp, 'w');
+    try {
+      fs.writeFileSync(fd, payload);
+      try {
+        fs.fsyncSync(fd);
+      } catch {
+        // some filesystems (and some container overlays) don't support fsync
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, this.filePath);
   }
 
   list(): SessionMeta[] {

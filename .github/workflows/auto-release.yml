@@ -43,6 +43,14 @@ jobs:
         with:
           node-version: '22'
 
+      # Before the bump, not after: the bump step pushes a tag, so a failure
+      # later in the job leaves a published tag with no release behind it.
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests
+        run: npm test
+
       - name: Bump patch version, commit, and tag
         id: bump
         run: |
@@ -62,9 +70,6 @@ jobs:
 
       - name: Generate changelog for the Extensions view
         run: bash scripts/changelog.sh 3
-
-      - name: Install dependencies
-        run: npm install
 
       - name: Build and package
         run: bash scripts/package.sh

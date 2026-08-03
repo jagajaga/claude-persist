@@ -4,6 +4,8 @@ import fs from 'node:fs';
 
 export const baseDir = path.join(os.homedir(), '.claude-persist');
 export const socketPath = path.join(baseDir, 'daemon.sock');
+/** Holds the owning pid; created with O_EXCL so only one daemon can win it. */
+export const lockPath = path.join(baseDir, 'daemon.lock');
 export const registryPath = path.join(baseDir, 'registry.json');
 export const sessionsDir = path.join(baseDir, 'sessions');
 export const logPath = path.join(baseDir, 'daemon.log');

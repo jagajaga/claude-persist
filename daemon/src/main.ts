@@ -11,17 +11,49 @@ import type {
   ServerMessage,
   SessionInfo,
 } from '@claude-persist/shared';
+import type { HelloResult } from '@claude-persist/shared';
 import { PROTOCOL_VERSION } from '@claude-persist/shared';
 import { ensureDirs, socketPath, sessionLogPath, logPath } from './paths.js';
+import { acquireLock, readLock, releaseLock } from './lock.js';
 import { Registry } from './registry.js';
 import { DaemonSession } from './session.js';
 import { importClaudeSession, listClaudeSessions } from './importer.js';
 import { accountsStore } from './accounts.js';
 
-ensureDirs();
-const log = fs.createWriteStream(logPath, { flags: 'a' });
+/**
+ * Logging comes first and degrades rather than failing, because a crash during
+ * module init used to leave no trace anywhere: the uncaughtException handlers
+ * were installed at the *bottom* of this file — after ensureDirs() and the log
+ * stream had already run — and the extension spawns us with stdio:'ignore', so
+ * an unwritable ~/.claude-persist produced a daemon that died silently and an
+ * extension that could only report "could not start".
+ *
+ * The append is synchronous on purpose. A buffered WriteStream drops whatever
+ * was written immediately before a process.exit(), which is exactly when this
+ * log matters — "daemon already running, exiting" and the server-error path both
+ * exit on the next line, and both messages were being lost. This is a
+ * lifecycle-only log (a handful of lines per daemon lifetime), so appendFileSync
+ * costs nothing next to being able to diagnose a daemon that won't start.
+ */
 function logLine(text: string): void {
-  log.write(`${new Date().toISOString()} ${text}\n`);
+  const line = `${new Date().toISOString()} ${text}\n`;
+  try {
+    fs.appendFileSync(logPath, line);
+  } catch {
+    process.stderr.write(line);
+  }
+}
+
+// Deliberately non-fatal: an uncaught error in one session's callback should
+// not take down every other live session with it.
+process.on('uncaughtException', (err) => logLine(`uncaught: ${err.stack ?? err.message}`));
+process.on('unhandledRejection', (err) => logLine(`unhandled rejection: ${String(err)}`));
+
+try {
+  ensureDirs();
+} catch (err) {
+  logLine(`fatal: cannot create ${logPath}'s directory: ${String(err)}`);
+  process.exit(1);
 }
 
 /**
@@ -31,7 +63,10 @@ function logLine(text: string): void {
 const DEFAULT_REPLAY_LIMIT = 400;
 
 const registry = new Registry();
-registry.load();
+const quarantined = registry.load();
+if (quarantined) {
+  logLine(`registry was unreadable and has been moved to ${quarantined}; starting with no sessions`);
+}
 
 const sessions = new Map<string, DaemonSession>();
 /** sessionId -> set of client connections subscribed to it */
@@ -191,7 +226,16 @@ function sessionInfo(id: string): SessionInfo {
 function handleRequest(client: Client, req: Request): unknown | Promise<unknown> {
   switch (req.op) {
     case 'hello':
-      return { protocolVersion: PROTOCOL_VERSION, pid: process.pid };
+      return {
+        protocolVersion: PROTOCOL_VERSION,
+        pid: process.pid,
+        // process.argv[1] is the daemon entry the extension spawned us with.
+        // The client checks it still exists: an upgrade that doesn't change
+        // the protocol keeps this daemon alive on purpose, but VS Code has by
+        // then deleted the versioned extension directory this file — and the
+        // bundled SDK, and its native `claude` binary — was loaded from.
+        entry: process.argv[1] ?? '',
+      } satisfies HelloResult;
     case 'listSessions':
       return registry.list().map((meta) => sessionInfo(meta.id));
     case 'createSession': {
@@ -262,7 +306,7 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
       return sessionInfo(meta.id);
     }
     case 'deleteSession': {
-      sessions.get(req.sessionId)?.dispose();
+      void sessions.get(req.sessionId)?.dispose(); // never rejects; nothing to await on
       sessions.delete(req.sessionId);
       subscribers.delete(req.sessionId);
       registry.delete(req.sessionId);
@@ -347,43 +391,78 @@ function onConnection(socket: net.Socket): void {
   socket.on('error', cleanup);
 }
 
-function start(): void {
-  // Single-instance guard: if a live daemon already owns the socket, exit;
-  // if the socket file is stale (previous daemon died), remove it.
-  const probe = net.connect(socketPath);
-  probe.once('connect', () => {
-    probe.destroy();
-    logLine('daemon already running, exiting');
-    process.exit(0);
-  });
-  probe.once('error', () => {
-    try {
-      fs.unlinkSync(socketPath);
-    } catch {
-      // did not exist
-    }
-    const server = net.createServer(onConnection);
-    server.listen(socketPath, () => {
-      fs.chmodSync(socketPath, 0o600);
-      logLine(`daemon listening on ${socketPath} (pid ${process.pid})`);
-    });
-    const shutdown = (): void => {
-      logLine('daemon shutting down');
-      for (const session of sessions.values()) session.dispose();
-      server.close();
-      try {
-        fs.unlinkSync(socketPath);
-      } catch {
-        // already gone
-      }
-      process.exit(0);
-    };
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
-  });
-}
+/** How long SDK query teardown gets before we exit anyway. */
+const SHUTDOWN_GRACE_MS = 2000;
 
-process.on('uncaughtException', (err) => logLine(`uncaught: ${err.stack ?? err.message}`));
-process.on('unhandledRejection', (err) => logLine(`unhandled rejection: ${String(err)}`));
+function start(): void {
+  if (!acquireLock()) {
+    logLine(`daemon already running (pid ${readLock()}), exiting`);
+    process.exit(0);
+  }
+  // The lock is ours, so any socket file still sitting here is stale by
+  // definition — no live daemon could have been holding it.
+  try {
+    fs.unlinkSync(socketPath);
+  } catch {
+    // wasn't there
+  }
+
+  const server = net.createServer(onConnection);
+  /** Identifies the socket file we bound, so shutdown doesn't delete someone else's. */
+  let boundIno: number | null = null;
+
+  server.on('error', (err) => {
+    // Previously unhandled: EADDRINUSE was swallowed by the uncaughtException
+    // logger and left this process alive with no listener at all — a zombie
+    // that the next client's probe would connect to and then hang against,
+    // forever, because requests had no timeout either.
+    logLine(`server error, exiting: ${String(err)}`);
+    releaseLock();
+    process.exit(1);
+  });
+
+  server.listen(socketPath, () => {
+    fs.chmodSync(socketPath, 0o600);
+    try {
+      boundIno = fs.statSync(socketPath).ino;
+    } catch {
+      boundIno = null;
+    }
+    logLine(`daemon listening on ${socketPath} (pid ${process.pid})`);
+  });
+
+  let finished = false;
+  const finish = (): void => {
+    if (finished) return;
+    finished = true;
+    process.exit(0);
+  };
+
+  let shuttingDown = false;
+  const shutdown = (signal: string): void => {
+    if (shuttingDown) return; // a second SIGTERM must not re-enter teardown
+    shuttingDown = true;
+    logLine(`daemon shutting down (${signal})`);
+    server.close();
+    // Only remove the socket if it is still the one we bound. Unconditional
+    // unlink meant a daemon exiting slowly during an upgrade deleted its own
+    // *replacement's* socket on the way out, leaving a healthy daemon that
+    // nothing could reach and a client stuck reconnecting to nothing.
+    try {
+      if (boundIno !== null && fs.statSync(socketPath).ino === boundIno) {
+        fs.unlinkSync(socketPath);
+      }
+    } catch {
+      // already gone
+    }
+    releaseLock();
+    // Give SDK teardown a bounded moment: exiting immediately after dispose()
+    // skipped it entirely and orphaned `claude` children on every kill cycle.
+    void Promise.allSettled([...sessions.values()].map((s) => s.dispose())).then(finish);
+    setTimeout(finish, SHUTDOWN_GRACE_MS).unref();
+  };
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+}
 
 start();

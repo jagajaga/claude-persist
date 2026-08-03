@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { AccountInfo } from '@claude-persist/shared';
-import { projectDirName } from './importer.js';
+import { projectDirName } from './projectDir.js';
 
 const DEFAULT_ACCOUNT_NAME = 'default';
 
@@ -43,34 +43,142 @@ export function scanAccounts(
 }
 
 /**
+ * Session-scoped state that lives at the config-dir root rather than beside
+ * the transcript. Resume works without these, but subagent shell environments
+ * and background task state don't carry over.
+ */
+const ROOT_SIDECAR_DIRS = ['session-env', 'tasks'];
+
+/** Newer = later mtime; equal mtimes fall back to the longer transcript. */
+function isNewer(a: fs.Stats, b: fs.Stats): boolean {
+  if (a.mtimeMs !== b.mtimeMs) return a.mtimeMs > b.mtimeMs;
+  return a.size > b.size;
+}
+
+/**
+ * Which project-dir names a session's transcript might be filed under.
+ *
+ * Claude Code realpaths cwd before encoding it, so a workspace reached through
+ * a symlink (`/home/coder/code-workspace` -> `/home/jaga/code-workspace`, the
+ * usual code-server layout) is filed under the *resolved* path while the
+ * daemon's registry stores the path the user opened. Probing only the stored
+ * spelling found nothing and silently skipped the copy, and the resume then
+ * failed with "No conversation found with session ID".
+ *
+ * `dest` is the name the SDK will actually read from, so it's the only correct
+ * copy target; `search` covers both spellings because transcripts written by
+ * older builds (or by tools that don't resolve) can sit under the raw one.
+ */
+function projectDirCandidates(cwd: string): { dest: string; search: string[] } {
+  const raw = projectDirName(cwd);
+  let resolved = raw;
+  try {
+    resolved = projectDirName(fs.realpathSync(cwd));
+  } catch {
+    // cwd is gone or unreadable — the stored spelling is the best we have
+  }
+  return { dest: resolved, search: resolved === raw ? [raw] : [resolved, raw] };
+}
+
+/** Recursive copy that only overwrites files the source is newer than. */
+function mergeTree(src: string, dest: string): void {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(src, { withFileTypes: true });
+  } catch {
+    return; // no sidecar of this kind for this session
+  }
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of entries) {
+    const from = path.join(src, entry.name);
+    const to = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      mergeTree(from, to);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    try {
+      const srcStat = fs.statSync(from);
+      let destStat: fs.Stats | null = null;
+      try {
+        destStat = fs.statSync(to);
+      } catch {
+        // not there yet
+      }
+      if (destStat && !isNewer(srcStat, destStat)) continue;
+      fs.copyFileSync(from, to);
+      fs.utimesSync(to, srcStat.atime, srcStat.mtime);
+    } catch {
+      // skip anything unreadable rather than aborting the whole sync
+    }
+  }
+}
+
+export interface TranscriptSync {
+  from: string;
+  to: string;
+}
+
+/**
  * The Agent SDK resumes a session by reading
- * `<CLAUDE_CONFIG_DIR>/projects/<projectDirName(cwd)>/<sdkSessionId>.jsonl`
+ * `<CLAUDE_CONFIG_DIR>/projects/<projectDirName(realpath(cwd))>/<sdkSessionId>.jsonl`
  * under whatever config dir it is currently launched with. Switching to a
- * config dir that has never seen this session means `resume` finds nothing
- * and the conversation's history is silently lost — even though the daemon's
- * own transcript (in ~/.claude-persist) is untouched. Copy the SDK-side
- * transcript over first if it's missing from the active dir but present under
- * any other known dir. No-ops if the destination already has it, or if no
- * source has it either (brand-new session, nothing to copy yet).
+ * config dir that has never seen this session means `resume` finds nothing and
+ * the conversation's history is lost — even though the daemon's own transcript
+ * (in ~/.claude-persist) is untouched. So before launching, make sure the
+ * active dir holds the newest copy of the SDK-side transcript.
+ *
+ * "Newest", not "any": once a session has run under two accounts, both dirs
+ * hold a transcript of different length, and resuming the shorter one silently
+ * drops every turn recorded under the other account. Copies keep the source's
+ * mtime so an unchanged transcript isn't rewritten on every switch — these
+ * files reach tens of megabytes.
+ *
+ * Returns what was copied, or null if nothing needed copying (active dir
+ * already newest) or nothing was found (brand-new session).
  */
 export function ensureSdkTranscript(
   sdkSessionId: string | undefined,
   cwd: string,
   activeConfigDir: string,
   otherConfigDirs: string[],
-): void {
-  if (!sdkSessionId) return;
-  const projectDir = projectDirName(cwd);
-  const destFile = path.join(activeConfigDir, 'projects', projectDir, `${sdkSessionId}.jsonl`);
-  if (fs.existsSync(destFile)) return;
-  for (const dir of otherConfigDirs) {
-    if (dir === activeConfigDir) continue;
-    const srcFile = path.join(dir, 'projects', projectDir, `${sdkSessionId}.jsonl`);
-    if (!fs.existsSync(srcFile)) continue;
-    fs.mkdirSync(path.dirname(destFile), { recursive: true });
-    fs.copyFileSync(srcFile, destFile);
-    return;
+): TranscriptSync | null {
+  if (!sdkSessionId) return null;
+  const { dest: destProject, search } = projectDirCandidates(cwd);
+  const destFile = path.join(activeConfigDir, 'projects', destProject, `${sdkSessionId}.jsonl`);
+
+  // The active dir competes as a source too, so an already-present but stale
+  // copy loses to a fresher one elsewhere.
+  let best: { file: string; dir: string; project: string; stat: fs.Stats } | null = null;
+  for (const dir of [activeConfigDir, ...otherConfigDirs]) {
+    for (const project of search) {
+      const file = path.join(dir, 'projects', project, `${sdkSessionId}.jsonl`);
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(file);
+      } catch {
+        continue;
+      }
+      if (!best || isNewer(stat, best.stat)) best = { file, dir, project, stat };
+    }
   }
+  if (!best) return null; // brand-new session, nothing to copy yet
+  if (path.resolve(best.file) === path.resolve(destFile)) return null; // already newest
+
+  fs.mkdirSync(path.dirname(destFile), { recursive: true });
+  fs.copyFileSync(best.file, destFile);
+  fs.utimesSync(destFile, best.stat.atime, best.stat.mtime);
+
+  // Subagent transcripts and tool results live in a dir named after the
+  // session next to the transcript itself.
+  mergeTree(
+    path.join(best.dir, 'projects', best.project, sdkSessionId),
+    path.join(activeConfigDir, 'projects', destProject, sdkSessionId),
+  );
+  for (const name of ROOT_SIDECAR_DIRS) {
+    mergeTree(path.join(best.dir, name, sdkSessionId), path.join(activeConfigDir, name, sdkSessionId));
+  }
+  return { from: best.file, to: destFile };
 }
 
 export interface AccountsStoreOptions {

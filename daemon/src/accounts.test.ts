@@ -131,3 +131,121 @@ test('ensureSdkTranscript: a missing sdkSessionId (brand-new session, no resume 
   ensureSdkTranscript(undefined, '/home/me/project', path.join(root, 'claude'), []);
   assert.deepEqual(fs.readdirSync(root), []);
 });
+
+/**
+ * The regression that produced "No conversation found with session ID": on
+ * code-server the workspace is reached through a symlink
+ * (/home/coder/code-workspace -> /home/jaga/code-workspace), the registry
+ * stores the symlinked path, but Claude Code realpaths cwd before encoding it.
+ * Probing only the stored spelling found nothing, skipped the copy silently,
+ * and then resumed into an empty account dir.
+ */
+test('ensureSdkTranscript: finds a transcript filed under the realpath of a symlinked cwd', () => {
+  const root = fs.realpathSync(tmpDir());
+  const realProject = path.join(root, 'real', 'project');
+  fs.mkdirSync(realProject, { recursive: true });
+  fs.symlinkSync(path.join(root, 'real'), path.join(root, 'link'), 'dir');
+  const cwd = path.join(root, 'link', 'project'); // what the registry stores
+  const resolvedName = realProject.replace(/[^a-zA-Z0-9]/g, '-');
+  const linkedName = cwd.replace(/[^a-zA-Z0-9]/g, '-');
+  assert.notEqual(resolvedName, linkedName); // the two spellings really differ
+
+  const oldDir = path.join(root, 'claude');
+  const newDir = path.join(root, 'claude-accounts', 'work');
+  const sdkSessionId = 'sym-1';
+
+  // Claude Code wrote it under the *resolved* name.
+  const srcFile = path.join(oldDir, 'projects', resolvedName, `${sdkSessionId}.jsonl`);
+  fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+  fs.writeFileSync(srcFile, '{"turn":1}\n');
+
+  const result = ensureSdkTranscript(sdkSessionId, cwd, newDir, [oldDir, newDir]);
+
+  // ...and it must land under the resolved name too, since that's where the
+  // SDK will look when it resumes.
+  const destFile = path.join(newDir, 'projects', resolvedName, `${sdkSessionId}.jsonl`);
+  assert.equal(result?.to, destFile);
+  assert.equal(fs.readFileSync(destFile, 'utf8'), '{"turn":1}\n');
+  assert.equal(
+    fs.existsSync(path.join(newDir, 'projects', linkedName, `${sdkSessionId}.jsonl`)),
+    false,
+  );
+});
+
+test('ensureSdkTranscript: a stale copy in the active dir loses to a newer one elsewhere', () => {
+  const root = tmpDir();
+  const cwd = '/home/me/project';
+  const projectDir = cwd.replace(/[^a-zA-Z0-9]/g, '-');
+  const activeDir = path.join(root, 'claude-accounts', 'work');
+  const otherDir = path.join(root, 'claude');
+  const sdkSessionId = 'abc-123';
+
+  // The session ran under `work` first, then continued under the default
+  // account, so the default's transcript is longer and newer.
+  const staleFile = path.join(activeDir, 'projects', projectDir, `${sdkSessionId}.jsonl`);
+  fs.mkdirSync(path.dirname(staleFile), { recursive: true });
+  fs.writeFileSync(staleFile, '{"turn":1}\n');
+  fs.utimesSync(staleFile, new Date(1_000_000), new Date(1_000_000));
+
+  const freshFile = path.join(otherDir, 'projects', projectDir, `${sdkSessionId}.jsonl`);
+  fs.mkdirSync(path.dirname(freshFile), { recursive: true });
+  fs.writeFileSync(freshFile, '{"turn":1}\n{"turn":2}\n');
+  fs.utimesSync(freshFile, new Date(2_000_000), new Date(2_000_000));
+
+  const result = ensureSdkTranscript(sdkSessionId, cwd, activeDir, [otherDir, activeDir]);
+
+  assert.equal(result?.from, freshFile);
+  assert.equal(fs.readFileSync(staleFile, 'utf8'), '{"turn":1}\n{"turn":2}\n');
+  // mtime is carried over so the next switch compares content age, not copy
+  // age — otherwise every switch rewrites tens of megabytes of identical bytes.
+  assert.equal(fs.statSync(staleFile).mtimeMs, fs.statSync(freshFile).mtimeMs);
+  assert.equal(ensureSdkTranscript(sdkSessionId, cwd, activeDir, [otherDir, activeDir]), null);
+});
+
+test('ensureSdkTranscript: copies into the default dir too (switching back off a named account)', () => {
+  const root = tmpDir();
+  const cwd = '/home/me/project';
+  const projectDir = cwd.replace(/[^a-zA-Z0-9]/g, '-');
+  const claudeDir = path.join(root, 'claude'); // the default account
+  const workDir = path.join(root, 'claude-accounts', 'work');
+  const sdkSessionId = 'born-under-work';
+
+  const srcFile = path.join(workDir, 'projects', projectDir, `${sdkSessionId}.jsonl`);
+  fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+  fs.writeFileSync(srcFile, '{"turn":1}\n');
+
+  ensureSdkTranscript(sdkSessionId, cwd, claudeDir, [claudeDir, workDir]);
+
+  const destFile = path.join(claudeDir, 'projects', projectDir, `${sdkSessionId}.jsonl`);
+  assert.equal(fs.existsSync(destFile), true);
+});
+
+test('ensureSdkTranscript: brings the subagent and task sidecars along', () => {
+  const root = tmpDir();
+  const cwd = '/home/me/project';
+  const projectDir = cwd.replace(/[^a-zA-Z0-9]/g, '-');
+  const oldDir = path.join(root, 'claude');
+  const newDir = path.join(root, 'claude-accounts', 'work');
+  const sdkSessionId = 'with-sidecars';
+
+  const srcFile = path.join(oldDir, 'projects', projectDir, `${sdkSessionId}.jsonl`);
+  fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+  fs.writeFileSync(srcFile, '{"turn":1}\n');
+  const srcSubagent = path.join(oldDir, 'projects', projectDir, sdkSessionId, 'subagents');
+  fs.mkdirSync(srcSubagent, { recursive: true });
+  fs.writeFileSync(path.join(srcSubagent, 'agent-1.jsonl'), '{"sub":1}\n');
+  const srcTasks = path.join(oldDir, 'tasks', sdkSessionId);
+  fs.mkdirSync(srcTasks, { recursive: true });
+  fs.writeFileSync(path.join(srcTasks, 'state.json'), '{}');
+
+  ensureSdkTranscript(sdkSessionId, cwd, newDir, [oldDir, newDir]);
+
+  assert.equal(
+    fs.readFileSync(
+      path.join(newDir, 'projects', projectDir, sdkSessionId, 'subagents', 'agent-1.jsonl'),
+      'utf8',
+    ),
+    '{"sub":1}\n',
+  );
+  assert.equal(fs.existsSync(path.join(newDir, 'tasks', sdkSessionId, 'state.json')), true);
+});

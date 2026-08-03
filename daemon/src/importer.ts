@@ -3,25 +3,11 @@
 // ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl — the same store the
 // Agent SDK resumes from, so an imported session can be continued seamlessly.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import type { ChatEvent, ClaudeSessionCandidate, PersistedEvent } from '@claude-persist/shared';
 import type { Registry, SessionMeta } from './registry.js';
 import { sessionLogPath } from './paths.js';
-
-const projectsDir = path.join(os.homedir(), '.claude', 'projects');
-
-/**
- * Claude Code's directory name for a project's transcripts: every
- * non-alphanumeric character of the cwd becomes a literal '-' (verified
- * against real ~/.claude/projects entries, e.g. ".../blooper2.0/.claude-worktrees/x"
- * -> "...-blooper2-0--claude-worktrees-x" — no collapsing of runs). Shared
- * with accounts.ts, which needs the same encoding to relocate a transcript
- * between config dirs when switching accounts.
- */
-export function projectDirName(cwd: string): string {
-  return cwd.replace(/[^a-zA-Z0-9]/g, '-');
-}
+import { accountsStore } from './accounts.js';
 
 interface TranscriptLine {
   type?: string;
@@ -104,42 +90,67 @@ function firstTextOf(content: unknown): string | null {
   return null;
 }
 
-export function listClaudeSessions(): ClaudeSessionCandidate[] {
-  const out: ClaudeSessionCandidate[] = [];
-  let dirs: string[] = [];
-  try {
-    dirs = fs.readdirSync(projectsDir);
-  } catch {
-    return out;
-  }
-  for (const dir of dirs) {
-    const dirPath = path.join(projectsDir, dir);
-    let files: string[] = [];
+/** Scanned per call, and capped: a long-lived ~/.claude holds thousands. */
+const MAX_CANDIDATES = 100;
+
+/**
+ * Every importable Claude Code transcript across every known account.
+ *
+ * This used to read a hardcoded ~/.claude/projects, which was wrong in both
+ * directions once accounts existed: with a named account active it listed the
+ * default account's sessions and offered to import transcripts the SDK would
+ * then fail to resume, and sessions created under a named account were
+ * invisible no matter which account was active.
+ *
+ * The same session can legitimately appear in two config dirs — switching
+ * accounts copies it (see ensureSdkTranscript) — so dedupe by sdk session id
+ * and keep the newest copy, which is the one that holds every turn.
+ */
+export function listClaudeSessions(
+  configDirs: string[] = accountsStore.allConcreteDirs(),
+): ClaudeSessionCandidate[] {
+  const bySession = new Map<string, ClaudeSessionCandidate>();
+  for (const configDir of configDirs) {
+    const projectsDir = path.join(configDir, 'projects');
+    let dirs: string[] = [];
     try {
-      files = fs.readdirSync(dirPath).filter((f) => f.endsWith('.jsonl'));
+      dirs = fs.readdirSync(projectsDir);
     } catch {
-      continue;
+      continue; // this account has never run a session
     }
-    for (const file of files) {
-      const full = path.join(dirPath, file);
+    for (const dir of dirs) {
+      const dirPath = path.join(projectsDir, dir);
+      let files: string[] = [];
       try {
-        const stat = fs.statSync(full);
-        const info = scanHead(full);
-        if (!info.cwd) continue;
-        out.push({
-          file: full,
-          sdkSessionId: info.sessionId ?? path.basename(file, '.jsonl'),
-          cwd: info.cwd,
-          title: info.summary ?? info.firstUserText ?? path.basename(info.cwd),
-          mtimeMs: stat.mtimeMs,
-        });
+        files = fs.readdirSync(dirPath).filter((f) => f.endsWith('.jsonl'));
       } catch {
-        // unreadable file — skip
+        continue;
+      }
+      for (const file of files) {
+        const full = path.join(dirPath, file);
+        try {
+          const stat = fs.statSync(full);
+          const info = scanHead(full);
+          if (!info.cwd) continue;
+          const sdkSessionId = info.sessionId ?? path.basename(file, '.jsonl');
+          const existing = bySession.get(sdkSessionId);
+          if (existing && existing.mtimeMs >= stat.mtimeMs) continue;
+          bySession.set(sdkSessionId, {
+            file: full,
+            sdkSessionId,
+            cwd: info.cwd,
+            title: info.summary ?? info.firstUserText ?? path.basename(info.cwd),
+            mtimeMs: stat.mtimeMs,
+          });
+        } catch {
+          // unreadable file — skip
+        }
       }
     }
   }
-  out.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return out.slice(0, 100);
+  return [...bySession.values()]
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .slice(0, MAX_CANDIDATES);
 }
 
 /** Convert a Claude Code transcript into our event log and register it. */

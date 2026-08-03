@@ -6,7 +6,19 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 18;
+export const PROTOCOL_VERSION = 19;
+
+/**
+ * Reply to `hello`. `entry` is the module path the daemon was launched from;
+ * clients check that it still exists on disk, because the protocol number
+ * alone can't detect a daemon whose extension directory has been deleted out
+ * from under it by an upgrade that didn't change the protocol.
+ */
+export interface HelloResult {
+  protocolVersion: number;
+  pid: number;
+  entry: string;
+}
 
 export type SessionStatus = 'idle' | 'running' | 'error';
 

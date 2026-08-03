@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { AccountsStore, ensureSdkTranscript, scanAccounts } from './accounts.js';
+import {
+  AccountsStore,
+  ensureSdkTranscript,
+  scanAccounts,
+  sdkTranscriptExists,
+} from './accounts.js';
 
 /** A fresh scratch directory per test, cleaned up automatically. */
 function tmpDir(): string {
@@ -218,6 +223,90 @@ test('ensureSdkTranscript: copies into the default dir too (switching back off a
 
   const destFile = path.join(claudeDir, 'projects', projectDir, `${sdkSessionId}.jsonl`);
   assert.equal(fs.existsSync(destFile), true);
+});
+
+/**
+ * The failure that proved deriving the path from cwd can never work. A session
+ * registered as /home/coder/code-workspace/blooper2.0 had its transcript filed
+ * under the git worktree it actually ran in — a directory since deleted — so no
+ * spelling of the registered cwd could reach it, and resume failed under every
+ * account rather than only after a switch. A session id is a UUID, so scanning
+ * project dirs for the filename is unambiguous.
+ */
+test('ensureSdkTranscript: finds a transcript filed under an unrelated cwd (git worktree)', () => {
+  const root = tmpDir();
+  const cwd = '/home/me/project';
+  const worktreeDir = '/home/me/project/.claude-worktrees/feature-x'; // long gone
+  const claudeDir = path.join(root, 'claude');
+  const workDir = path.join(root, 'claude-accounts', 'work');
+  const sdkSessionId = 'wt-1';
+
+  const srcFile = path.join(
+    claudeDir,
+    'projects',
+    worktreeDir.replace(/[^a-zA-Z0-9]/g, '-'),
+    `${sdkSessionId}.jsonl`,
+  );
+  fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+  fs.writeFileSync(srcFile, '{"turn":1}\n');
+
+  const result = ensureSdkTranscript(sdkSessionId, cwd, workDir, [claudeDir, workDir]);
+
+  // Copied to where the SDK will look given the *registered* cwd.
+  const destFile = path.join(
+    workDir,
+    'projects',
+    cwd.replace(/[^a-zA-Z0-9]/g, '-'),
+    `${sdkSessionId}.jsonl`,
+  );
+  assert.equal(result?.from, srcFile);
+  assert.equal(result?.to, destFile);
+  assert.equal(fs.readFileSync(destFile, 'utf8'), '{"turn":1}\n');
+  assert.equal(sdkTranscriptExists(sdkSessionId, cwd, workDir), true);
+});
+
+test('ensureSdkTranscript: a worktree transcript is reachable under the default account too', () => {
+  const root = tmpDir();
+  const cwd = '/home/me/project';
+  const claudeDir = path.join(root, 'claude');
+  const sdkSessionId = 'wt-2';
+
+  const srcFile = path.join(
+    claudeDir,
+    'projects',
+    '-home-me-project--claude-worktrees-gone',
+    `${sdkSessionId}.jsonl`,
+  );
+  fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+  fs.writeFileSync(srcFile, '{"turn":1}\n');
+
+  // No account switch involved at all — same config dir in and out.
+  assert.equal(sdkTranscriptExists(sdkSessionId, cwd, claudeDir), false);
+  ensureSdkTranscript(sdkSessionId, cwd, claudeDir, [claudeDir]);
+  assert.equal(sdkTranscriptExists(sdkSessionId, cwd, claudeDir), true);
+});
+
+test('sdkTranscriptExists: false when nothing has been written for this session', () => {
+  const root = tmpDir();
+  assert.equal(sdkTranscriptExists('never-existed', '/home/me/project', path.join(root, 'claude')), false);
+});
+
+test('sdkTranscriptExists: resolves symlinked cwds the way the SDK does', () => {
+  const root = fs.realpathSync(tmpDir());
+  const realProject = path.join(root, 'real', 'project');
+  fs.mkdirSync(realProject, { recursive: true });
+  fs.symlinkSync(path.join(root, 'real'), path.join(root, 'link'), 'dir');
+  const claudeDir = path.join(root, 'claude');
+  const file = path.join(
+    claudeDir,
+    'projects',
+    realProject.replace(/[^a-zA-Z0-9]/g, '-'),
+    'sym-2.jsonl',
+  );
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '{}\n');
+
+  assert.equal(sdkTranscriptExists('sym-2', path.join(root, 'link', 'project'), claudeDir), true);
 });
 
 test('ensureSdkTranscript: brings the subagent and task sidecars along', () => {

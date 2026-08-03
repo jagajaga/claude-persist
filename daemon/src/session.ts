@@ -10,7 +10,7 @@ import type {
 import type { SessionMeta } from './registry.js';
 import { sessionLogPath } from './paths.js';
 import { ROTATE_THRESHOLD, allLogFiles, loadTailAndCount, readRange, rotateActiveLog } from './logStore.js';
-import { accountsStore, ensureSdkTranscript } from './accounts.js';
+import { accountsStore, ensureSdkTranscript, sdkTranscriptExists } from './accounts.js';
 
 /**
  * Recent events kept resident per session. Larger than
@@ -346,6 +346,7 @@ export class DaemonSession {
     if (this.activeQuery) return;
     // null = default account, env stays untouched (SDK falls back to ~/.claude).
     const activeAccountDir = accountsStore.active;
+    const activeConcreteDir = accountsStore.activeConcreteDir();
     // Sync unconditionally, including when switching *back* to the default:
     // a session created while a named account was active has its SDK-side
     // transcript only under that account, so gating this on activeAccountDir
@@ -354,9 +355,32 @@ export class DaemonSession {
     ensureSdkTranscript(
       this.meta.sdkSessionId,
       this.meta.cwd,
-      accountsStore.activeConcreteDir(),
+      activeConcreteDir,
       accountsStore.allConcreteDirs(),
     );
+    // Only resume against a transcript that is actually there. Passing an
+    // sdkSessionId the SDK can't find fails every single turn with "No
+    // conversation found with session ID" and leaves the user no way out — the
+    // session is bricked for good. Starting a fresh SDK session loses the
+    // model's context, but keeps the session usable, and the daemon's own
+    // transcript still renders the full history in the panel. Say so rather
+    // than dropping the context silently.
+    const resumable =
+      !!this.meta.sdkSessionId &&
+      sdkTranscriptExists(this.meta.sdkSessionId, this.meta.cwd, activeConcreteDir);
+    if (this.meta.sdkSessionId && !resumable) {
+      // appendEvent, not setStatus: this renders the ⚠︎ notice in the thread
+      // without marking the session errored — it is about to work fine.
+      this.appendEvent({
+        type: 'status',
+        status: 'error',
+        detail:
+          `Previous conversation context could not be found (session ${this.meta.sdkSessionId}) — ` +
+          'continuing as a new Claude session. The transcript above is preserved.',
+      });
+      this.meta.sdkSessionId = undefined;
+      this.callbacks.onMetaChanged();
+    }
     this.input = new InputQueue();
     const q = query({
       // The SDK accepts an AsyncIterable of user messages for multi-turn

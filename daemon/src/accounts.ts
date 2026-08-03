@@ -56,28 +56,87 @@ function isNewer(a: fs.Stats, b: fs.Stats): boolean {
 }
 
 /**
- * Which project-dir names a session's transcript might be filed under.
+ * The single project dir the SDK will read when resumed with this cwd.
  *
  * Claude Code realpaths cwd before encoding it, so a workspace reached through
  * a symlink (`/home/coder/code-workspace` -> `/home/jaga/code-workspace`, the
- * usual code-server layout) is filed under the *resolved* path while the
- * daemon's registry stores the path the user opened. Probing only the stored
- * spelling found nothing and silently skipped the copy, and the resume then
- * failed with "No conversation found with session ID".
- *
- * `dest` is the name the SDK will actually read from, so it's the only correct
- * copy target; `search` covers both spellings because transcripts written by
- * older builds (or by tools that don't resolve) can sit under the raw one.
+ * usual code-server layout) is filed under the resolved path while the daemon's
+ * registry stores the path the user opened.
  */
-function projectDirCandidates(cwd: string): { dest: string; search: string[] } {
-  const raw = projectDirName(cwd);
-  let resolved = raw;
+function destProjectDir(cwd: string): string {
   try {
-    resolved = projectDirName(fs.realpathSync(cwd));
+    return projectDirName(fs.realpathSync(cwd));
   } catch {
-    // cwd is gone or unreadable — the stored spelling is the best we have
+    return projectDirName(cwd); // cwd is gone or unreadable
   }
-  return { dest: resolved, search: resolved === raw ? [raw] : [resolved, raw] };
+}
+
+interface FoundTranscript {
+  file: string;
+  configDir: string;
+  project: string;
+  stat: fs.Stats;
+}
+
+/**
+ * Every copy of this session's transcript, found by scanning project dirs for
+ * the session id rather than by deriving a path from cwd.
+ *
+ * Deriving the path cannot work in general, because the directory a transcript
+ * is filed under is whatever cwd the SDK happened to run with — which is not
+ * necessarily the cwd the session is registered with. The case that proved it:
+ * a session registered as `/home/coder/code-workspace/blooper2.0` had its
+ * transcript filed under
+ * `-home-jaga-code-workspace-blooper2-0--claude-worktrees-agent-budget-liveness`,
+ * a git worktree that had since been deleted. No spelling of the registered cwd
+ * could ever reach it, and the resume failed with "No conversation found with
+ * session ID" under *every* account, not just after a switch.
+ *
+ * A session id is a UUID, so a filename match is unambiguous — this finds the
+ * transcript whatever cwd wrote it, and subsumes the symlink and account cases.
+ */
+function findTranscripts(sdkSessionId: string, configDirs: string[]): FoundTranscript[] {
+  const found: FoundTranscript[] = [];
+  const seen = new Set<string>();
+  for (const configDir of configDirs) {
+    const projectsDir = path.join(configDir, 'projects');
+    let projects: string[];
+    try {
+      projects = fs.readdirSync(projectsDir);
+    } catch {
+      continue; // this account has never run a session
+    }
+    for (const project of projects) {
+      const file = path.join(projectsDir, project, `${sdkSessionId}.jsonl`);
+      if (seen.has(file)) continue;
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(file);
+      } catch {
+        continue;
+      }
+      if (!stat.isFile()) continue;
+      seen.add(file);
+      found.push({ file, configDir, project, stat });
+    }
+  }
+  return found;
+}
+
+/**
+ * Is this session resumable under `configDir` — i.e. will the SDK find a
+ * transcript where it is about to look? Callers use this to decide whether to
+ * pass `resume` at all: passing an id with no transcript behind it makes every
+ * turn fail with "No conversation found", permanently, with no way out.
+ */
+export function sdkTranscriptExists(
+  sdkSessionId: string,
+  cwd: string,
+  configDir: string,
+): boolean {
+  return fs.existsSync(
+    path.join(configDir, 'projects', destProjectDir(cwd), `${sdkSessionId}.jsonl`),
+  );
 }
 
 /** Recursive copy that only overwrites files the source is newer than. */
@@ -144,23 +203,14 @@ export function ensureSdkTranscript(
   otherConfigDirs: string[],
 ): TranscriptSync | null {
   if (!sdkSessionId) return null;
-  const { dest: destProject, search } = projectDirCandidates(cwd);
+  const destProject = destProjectDir(cwd);
   const destFile = path.join(activeConfigDir, 'projects', destProject, `${sdkSessionId}.jsonl`);
 
   // The active dir competes as a source too, so an already-present but stale
   // copy loses to a fresher one elsewhere.
-  let best: { file: string; dir: string; project: string; stat: fs.Stats } | null = null;
-  for (const dir of [activeConfigDir, ...otherConfigDirs]) {
-    for (const project of search) {
-      const file = path.join(dir, 'projects', project, `${sdkSessionId}.jsonl`);
-      let stat: fs.Stats;
-      try {
-        stat = fs.statSync(file);
-      } catch {
-        continue;
-      }
-      if (!best || isNewer(stat, best.stat)) best = { file, dir, project, stat };
-    }
+  let best: FoundTranscript | null = null;
+  for (const candidate of findTranscripts(sdkSessionId, [activeConfigDir, ...otherConfigDirs])) {
+    if (!best || isNewer(candidate.stat, best.stat)) best = candidate;
   }
   if (!best) return null; // brand-new session, nothing to copy yet
   if (path.resolve(best.file) === path.resolve(destFile)) return null; // already newest
@@ -172,11 +222,14 @@ export function ensureSdkTranscript(
   // Subagent transcripts and tool results live in a dir named after the
   // session next to the transcript itself.
   mergeTree(
-    path.join(best.dir, 'projects', best.project, sdkSessionId),
+    path.join(best.configDir, 'projects', best.project, sdkSessionId),
     path.join(activeConfigDir, 'projects', destProject, sdkSessionId),
   );
   for (const name of ROOT_SIDECAR_DIRS) {
-    mergeTree(path.join(best.dir, name, sdkSessionId), path.join(activeConfigDir, name, sdkSessionId));
+    mergeTree(
+      path.join(best.configDir, name, sdkSessionId),
+      path.join(activeConfigDir, name, sdkSessionId),
+    );
   }
   return { from: best.file, to: destFile };
 }

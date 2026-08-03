@@ -13,8 +13,9 @@ import type {
 } from '@claude-persist/shared';
 import type { HelloResult } from '@claude-persist/shared';
 import { PROTOCOL_VERSION } from '@claude-persist/shared';
-import { ensureDirs, socketPath, sessionLogPath, logPath } from './paths.js';
-import { acquireLock, readLock, releaseLock } from './lock.js';
+import { ensureDirs, socketPath, lockPath, sessionLogPath, logPath } from './paths.js';
+import { releaseLock } from './lock.js';
+import { claimOwnership } from './ownership.js';
 import { Registry } from './registry.js';
 import { DaemonSession } from './session.js';
 import { importClaudeSession, listClaudeSessions } from './importer.js';
@@ -393,10 +394,14 @@ function onConnection(socket: net.Socket): void {
 
 /** How long SDK query teardown gets before we exit anyway. */
 const SHUTDOWN_GRACE_MS = 2000;
+/** How often to confirm the socket we bound is still the one at socketPath. */
+const SOCKET_WATCH_MS = 5000;
 
-function start(): void {
-  if (!acquireLock()) {
-    logLine(`daemon already running (pid ${readLock()}), exiting`);
+/** Set once teardown begins, so the socket watcher stops second-guessing it. */
+let shuttingDown = false;
+
+async function start(): Promise<void> {
+  if (!(await claimOwnership({ lockFile: lockPath, socketPath, log: logLine }))) {
     process.exit(0);
   }
   // The lock is ours, so any socket file still sitting here is stale by
@@ -407,11 +412,12 @@ function start(): void {
     // wasn't there
   }
 
-  const server = net.createServer(onConnection);
+  /** Every server we've bound; kept so shutdown closes them all. */
+  const servers: net.Server[] = [];
   /** Identifies the socket file we bound, so shutdown doesn't delete someone else's. */
   let boundIno: number | null = null;
 
-  server.on('error', (err) => {
+  const onServerError = (err: Error): void => {
     // Previously unhandled: EADDRINUSE was swallowed by the uncaughtException
     // logger and left this process alive with no listener at all — a zombie
     // that the next client's probe would connect to and then hang against,
@@ -419,17 +425,61 @@ function start(): void {
     logLine(`server error, exiting: ${String(err)}`);
     releaseLock();
     process.exit(1);
-  });
+  };
 
-  server.listen(socketPath, () => {
-    fs.chmodSync(socketPath, 0o600);
+  const bind = (): void => {
+    const server = net.createServer(onConnection);
+    servers.push(server);
+    server.on('error', onServerError);
+    server.listen(socketPath, () => {
+      fs.chmodSync(socketPath, 0o600);
+      try {
+        boundIno = fs.statSync(socketPath).ino;
+      } catch {
+        boundIno = null;
+      }
+      logLine(`daemon listening on ${socketPath} (pid ${process.pid})`);
+    });
+  };
+  bind();
+
+  /**
+   * Self-heal: notice when our socket file stops being ours.
+   *
+   * Builds up to 0.7.32 unlink socketPath unconditionally on shutdown, so an
+   * older daemon exiting during an upgrade silently deletes the socket a newer
+   * one is serving on. The newer daemon stayed alive and healthy while being
+   * completely unreachable — clients got ENOENT, and because it still held the
+   * lock, every replacement they spawned exited as "already running".
+   *
+   * Rebinding costs one stat every few seconds and turns that permanent wedge
+   * into a few seconds of downtime. A fresh server is bound rather than reusing
+   * the old one, because close() only completes once existing connections end,
+   * and those connections are still perfectly good.
+   */
+  const socketWatch = setInterval(() => {
+    if (shuttingDown || boundIno === null) return;
+    let ino: number | null = null;
     try {
-      boundIno = fs.statSync(socketPath).ino;
+      ino = fs.statSync(socketPath).ino;
     } catch {
-      boundIno = null;
+      ino = null;
     }
-    logLine(`daemon listening on ${socketPath} (pid ${process.pid})`);
-  });
+    if (ino === boundIno) return;
+    if (ino === null) {
+      logLine('socket file vanished (an older daemon unlinked it) — rebinding');
+      boundIno = null;
+      bind();
+      return;
+    }
+    // Someone else bound a new socket at our path. Two servers answering as
+    // "the daemon" is worse than none: they would both append to the same
+    // session logs and race registry writes. Newest wins; stand down.
+    logLine(`socket at ${socketPath} is now owned by another daemon — exiting`);
+    releaseLock();
+    process.exit(0);
+  }, SOCKET_WATCH_MS);
+  socketWatch.unref();
 
   let finished = false;
   const finish = (): void => {
@@ -438,12 +488,12 @@ function start(): void {
     process.exit(0);
   };
 
-  let shuttingDown = false;
   const shutdown = (signal: string): void => {
     if (shuttingDown) return; // a second SIGTERM must not re-enter teardown
     shuttingDown = true;
+    clearInterval(socketWatch);
     logLine(`daemon shutting down (${signal})`);
-    server.close();
+    for (const server of servers) server.close();
     // Only remove the socket if it is still the one we bound. Unconditional
     // unlink meant a daemon exiting slowly during an upgrade deleted its own
     // *replacement's* socket on the way out, leaving a healthy daemon that
@@ -465,4 +515,4 @@ function start(): void {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
-start();
+void start();

@@ -63,6 +63,12 @@ export interface SessionCallbacks {
   onMetaChanged(): void;
   /** Raw ModelInfo[] from the SDK init handshake. */
   onModels(models: unknown[]): void;
+  /**
+   * Raw SDKRateLimitInfo from a live `rate_limit_event` message. Account-wide,
+   * not scoped to this session — see the comment on the 'rate_limit_event'
+   * case in handleSdkMessage for why this is the only wired source.
+   */
+  onRateLimit(info: Record<string, unknown>): void;
 }
 
 /** Truncate long tool payloads before persisting/rendering. */
@@ -486,6 +492,21 @@ export class DaemonSession {
           ...(turnTokens ? { turnTokens } : {}),
         });
         this.setStatus('idle');
+        break;
+      }
+      case 'rate_limit_event': {
+        // Plan rate-limit windows are NOT part of SDKControlInitializeResponse
+        // (what q.initializationResult() returns, above) — that type only
+        // carries commands/agents/models/output_style/account/fast_mode.
+        // subscription_type/rate_limits_available/rate_limits live on
+        // SDKControlGetUsageResponse, returned by the separate, explicitly
+        // experimental usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()
+        // control call — not called here. This live push (SDKRateLimitEvent,
+        // part of the same SDKMessage union already flowing through this
+        // switch) is the only rate-limit source this daemon has verified
+        // actually fires, so it is the only one wired up.
+        const info = msg.rate_limit_info as Record<string, unknown> | undefined;
+        if (info) this.callbacks.onRateLimit(info);
         break;
       }
       default:

@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 16;
+export const PROTOCOL_VERSION = 17;
 
 export type SessionStatus = 'idle' | 'running' | 'error';
 
@@ -82,6 +82,30 @@ export interface ModelDescriptor {
   effortLevels?: EffortLevel[];
 }
 
+/**
+ * Plan rate-limit window kinds, as reported by the SDK's live `rate_limit_event`
+ * push (`SDKRateLimitInfo.rateLimitType`). This is account-wide, not per-session.
+ */
+export type RateLimitWindowKind =
+  | 'five_hour'
+  | 'seven_day'
+  | 'seven_day_opus'
+  | 'seven_day_sonnet'
+  | 'seven_day_overage_included'
+  | 'overage';
+
+export type RateLimitStatus = 'allowed' | 'allowed_warning' | 'rejected';
+
+/** One window's last-known state. `resetsAt` is epoch milliseconds. */
+export interface RateLimitWindow {
+  utilization: number | null;
+  resetsAt: number | null;
+  status: RateLimitStatus;
+}
+
+/** Every window the daemon has heard about so far; absent keys are simply unknown. */
+export type RateLimits = Partial<Record<RateLimitWindowKind, RateLimitWindow>>;
+
 /** An existing Claude Code (CLI / official extension) session on this machine. */
 export interface ClaudeSessionCandidate {
   file: string;
@@ -110,6 +134,7 @@ export type Request =
   /** undefined = leave unchanged; null = reset to default. */
   | { id: number; op: 'setSessionOptions'; sessionId: string; model?: string | null; effort?: EffortLevel | null }
   | { id: number; op: 'listModels' }
+  | { id: number; op: 'listRateLimits' }
   | { id: number; op: 'listClaudeSessions' }
   | { id: number; op: 'importClaudeSession'; file: string }
   | { id: number; op: 'deleteSession'; sessionId: string };
@@ -118,6 +143,8 @@ export type Push =
   | { kind: 'event'; sessionId: string; event: PersistedEvent }
   /** Broadcast when the daemon (re)learns the account's model list. */
   | { kind: 'models'; models: ModelDescriptor[] }
+  /** Broadcast when a plan rate-limit window changes; account-wide. */
+  | { kind: 'rateLimits'; windows: RateLimits }
   /** Live-only streaming text; not persisted, superseded by the next assistant_text event. */
   | { kind: 'delta'; sessionId: string; text: string }
   | { kind: 'sessions_changed' };

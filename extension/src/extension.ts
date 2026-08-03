@@ -1,11 +1,12 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { SessionInfo } from '@claude-persist/shared';
+import type { RateLimits, SessionInfo } from '@claude-persist/shared';
 import { DaemonClient } from './daemonClient';
 import { ChatPanelManager, VIEW_TYPE } from './chatPanel';
 import { SessionsProvider } from './sessionsView';
 import { sessionTitleFromInput } from './sessionTitle';
+import { formatStatusBarText, formatTooltip, pickNextLimit, severityFor, type Severity } from './rateLimits';
 
 let client: DaemonClient | null = null;
 let panels: ChatPanelManager;
@@ -13,6 +14,28 @@ let sessionsProvider: SessionsProvider;
 let statusItem: vscode.StatusBarItem;
 let reconnectTimer: NodeJS.Timeout | undefined;
 let connecting: Promise<DaemonClient> | null = null;
+/**
+ * Account-wide, not per-session — the daemon broadcasts one shared snapshot
+ * to every client (see the 'rateLimits' push in daemonClient.ts).
+ * subscription_type is never populated: it lives on the SDK's experimental
+ * usage_EXPERIMENTAL_… response, not on anything this extension has verified
+ * fires (see the comment on the 'rate_limit_event' case in daemon/session.ts).
+ */
+let latestRateLimits: RateLimits = {};
+
+function severityColor(sev: Severity): vscode.ThemeColor | undefined {
+  if (sev === 'error') return new vscode.ThemeColor('statusBarItem.errorBackground');
+  if (sev === 'warning') return new vscode.ThemeColor('statusBarItem.warningBackground');
+  return undefined;
+}
+
+/** Repaint the status bar item from latestRateLimits; connect/disconnect own their own text otherwise. */
+function refreshRateLimitDisplay(): void {
+  const next = pickNextLimit(latestRateLimits);
+  statusItem.text = formatStatusBarText(next);
+  statusItem.tooltip = formatTooltip(latestRateLimits, null);
+  statusItem.backgroundColor = severityColor(severityFor(next));
+}
 
 /** Background reconnect with backoff after a daemon disconnect. */
 function scheduleReconnect(context: vscode.ExtensionContext, delayMs = 1000): void {
@@ -54,20 +77,35 @@ async function doConnect(context: vscode.ExtensionContext): Promise<DaemonClient
     onDelta: (sessionId, text) => panels.handleDelta(sessionId, text),
     onSessionsChanged: () => sessionsProvider.refresh(),
     onModels: (models) => panels.handleModels(models),
+    onRateLimits: (windows) => {
+      latestRateLimits = windows;
+      refreshRateLimitDisplay();
+    },
     onDisconnect: () => {
       client = null;
       statusItem.text = '$(debug-disconnect) Claude Persist';
       statusItem.tooltip = 'Daemon disconnected — reconnecting…';
+      statusItem.backgroundColor = undefined;
       sessionsProvider.refresh();
       scheduleReconnect(context);
     },
   });
   await fresh.connect();
   client = fresh;
-  statusItem.text = '$(sparkle) Claude Persist';
-  statusItem.tooltip = 'Connected to claude-persist daemon';
+  refreshRateLimitDisplay();
   sessionsProvider.refresh();
   await panels.reattachAll();
+  // Rate limits are account-wide and may already be known from before this
+  // client connected (or reconnected); pull the daemon's current snapshot
+  // instead of waiting for the next live push, mirroring how each chat panel
+  // pulls listModels() on attach rather than relying on the broadcast alone.
+  void fresh
+    .listRateLimits()
+    .then((windows) => {
+      latestRateLimits = windows;
+      refreshRateLimitDisplay();
+    })
+    .catch(() => undefined);
   return fresh;
 }
 

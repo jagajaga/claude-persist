@@ -10,6 +10,7 @@ import type {
   ModelDescriptor,
   PermissionMode,
   PersistedEvent,
+  RateLimits,
   Request,
   ServerMessage,
   SessionInfo,
@@ -20,7 +21,7 @@ const socketPath = path.join(baseDir, 'daemon.sock');
 
 // Keep in sync with PROTOCOL_VERSION in shared/src/protocol.ts (the shared
 // package is ESM, so the constant can't be require()d from this CJS module).
-const EXPECTED_PROTOCOL = 16;
+const EXPECTED_PROTOCOL = 17;
 
 /** Omit that distributes over a union (plain Omit collapses union members). */
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
@@ -37,6 +38,7 @@ type PushHandler = {
   onDelta(sessionId: string, text: string): void;
   onSessionsChanged(): void;
   onModels(models: ModelDescriptor[]): void;
+  onRateLimits(windows: RateLimits): void;
   onDisconnect(): void;
 };
 
@@ -180,6 +182,9 @@ export class DaemonClient {
       case 'models':
         this.handler.onModels(message.models);
         break;
+      case 'rateLimits':
+        this.handler.onRateLimits(message.windows);
+        break;
     }
   }
 
@@ -251,6 +256,10 @@ export class DaemonClient {
 
   listModels(): Promise<ModelDescriptor[]> {
     return this.request({ op: 'listModels' });
+  }
+
+  listRateLimits(): Promise<RateLimits> {
+    return this.request({ op: 'listRateLimits' });
   }
 
   listClaudeSessions(): Promise<ClaudeSessionCandidate[]> {

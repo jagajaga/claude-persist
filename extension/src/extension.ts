@@ -81,6 +81,7 @@ async function doConnect(context: vscode.ExtensionContext): Promise<DaemonClient
       latestRateLimits = windows;
       refreshRateLimitDisplay();
     },
+    onAccounts: (accounts) => panels.handleAccounts(accounts),
     onDisconnect: () => {
       client = null;
       statusItem.text = '$(debug-disconnect) Claude Persist';

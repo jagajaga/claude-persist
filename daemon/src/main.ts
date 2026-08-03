@@ -16,6 +16,7 @@ import { ensureDirs, socketPath, sessionLogPath, logPath } from './paths.js';
 import { Registry } from './registry.js';
 import { DaemonSession } from './session.js';
 import { importClaudeSession, listClaudeSessions } from './importer.js';
+import { accountsStore } from './accounts.js';
 
 ensureDirs();
 const log = fs.createWriteStream(logPath, { flags: 'a' });
@@ -272,6 +273,18 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
       }
       broadcastAll({ kind: 'sessions_changed' });
       return null;
+    }
+    case 'listAccounts':
+      return accountsStore.list();
+    case 'setAccount': {
+      const accounts = accountsStore.setActive(req.configDir);
+      // Live queries were launched with the previous account's env (or none);
+      // tear them down so the next message spawns fresh under the new one.
+      // Sessions and transcripts are untouched — only the in-flight SDK query.
+      for (const session of sessions.values()) session.disposeActiveQuery();
+      broadcastAll({ kind: 'accounts', accounts });
+      broadcastAll({ kind: 'sessions_changed' });
+      return accounts;
     }
     default:
       throw new Error(`Unknown op: ${(req as { op: string }).op}`);

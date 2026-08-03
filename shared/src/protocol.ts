@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 17;
+export const PROTOCOL_VERSION = 18;
 
 export type SessionStatus = 'idle' | 'running' | 'error';
 
@@ -115,6 +115,17 @@ export interface ClaudeSessionCandidate {
   mtimeMs: number;
 }
 
+/**
+ * A Claude credentials/config directory the daemon can point the SDK at via
+ * CLAUDE_CONFIG_DIR. `configDir: null` is the default account: env left
+ * unset, so the SDK falls back to ~/.claude.
+ */
+export interface AccountInfo {
+  name: string;
+  configDir: string | null;
+  active: boolean;
+}
+
 export type Request =
   | { id: number; op: 'hello'; protocolVersion: number }
   | { id: number; op: 'listSessions' }
@@ -137,7 +148,10 @@ export type Request =
   | { id: number; op: 'listRateLimits' }
   | { id: number; op: 'listClaudeSessions' }
   | { id: number; op: 'importClaudeSession'; file: string }
-  | { id: number; op: 'deleteSession'; sessionId: string };
+  | { id: number; op: 'deleteSession'; sessionId: string }
+  | { id: number; op: 'listAccounts' }
+  /** `configDir: null` switches back to the default account. */
+  | { id: number; op: 'setAccount'; configDir: string | null };
 
 export type Push =
   | { kind: 'event'; sessionId: string; event: PersistedEvent }
@@ -147,7 +161,9 @@ export type Push =
   | { kind: 'rateLimits'; windows: RateLimits }
   /** Live-only streaming text; not persisted, superseded by the next assistant_text event. */
   | { kind: 'delta'; sessionId: string; text: string }
-  | { kind: 'sessions_changed' };
+  | { kind: 'sessions_changed' }
+  /** Broadcast whenever the active account or the set of known accounts changes. */
+  | { kind: 'accounts'; accounts: AccountInfo[] };
 
 export type ServerMessage =
   | { kind: 'response'; id: number; ok: true; result?: unknown }

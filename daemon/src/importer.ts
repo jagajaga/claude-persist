@@ -11,6 +11,18 @@ import { sessionLogPath } from './paths.js';
 
 const projectsDir = path.join(os.homedir(), '.claude', 'projects');
 
+/**
+ * Claude Code's directory name for a project's transcripts: every
+ * non-alphanumeric character of the cwd becomes a literal '-' (verified
+ * against real ~/.claude/projects entries, e.g. ".../blooper2.0/.claude-worktrees/x"
+ * -> "...-blooper2-0--claude-worktrees-x" — no collapsing of runs). Shared
+ * with accounts.ts, which needs the same encoding to relocate a transcript
+ * between config dirs when switching accounts.
+ */
+export function projectDirName(cwd: string): string {
+  return cwd.replace(/[^a-zA-Z0-9]/g, '-');
+}
+
 interface TranscriptLine {
   type?: string;
   isMeta?: boolean;

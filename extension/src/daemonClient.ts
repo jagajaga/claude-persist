@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import type {
+  AccountInfo,
   Attachment,
   ClaudeSessionCandidate,
   EffortLevel,
@@ -21,7 +22,7 @@ const socketPath = path.join(baseDir, 'daemon.sock');
 
 // Keep in sync with PROTOCOL_VERSION in shared/src/protocol.ts (the shared
 // package is ESM, so the constant can't be require()d from this CJS module).
-const EXPECTED_PROTOCOL = 17;
+const EXPECTED_PROTOCOL = 18;
 
 /** Omit that distributes over a union (plain Omit collapses union members). */
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
@@ -39,6 +40,7 @@ type PushHandler = {
   onSessionsChanged(): void;
   onModels(models: ModelDescriptor[]): void;
   onRateLimits(windows: RateLimits): void;
+  onAccounts(accounts: AccountInfo[]): void;
   onDisconnect(): void;
 };
 
@@ -98,6 +100,15 @@ export class DaemonClient {
     if (info.protocolVersion === EXPECTED_PROTOCOL) return;
     this.socket?.destroy();
     this.socket = null;
+    // Newest wins. Killing on ANY mismatch made two windows on different
+    // extension versions murder each other's daemon in a loop (observed at
+    // sub-second cadence in the daemon log) — and while they fought, nothing
+    // could connect to the socket at all.
+    if (info.protocolVersion > EXPECTED_PROTOCOL) {
+      throw new Error(
+        `Daemon is newer (protocol ${info.protocolVersion} > ${EXPECTED_PROTOCOL}) — update this window's extension and reload`,
+      );
+    }
     try {
       process.kill(info.pid, 'SIGTERM');
     } catch {
@@ -184,6 +195,9 @@ export class DaemonClient {
         break;
       case 'rateLimits':
         this.handler.onRateLimits(message.windows);
+        break;
+      case 'accounts':
+        this.handler.onAccounts(message.accounts);
         break;
     }
   }
@@ -272,6 +286,14 @@ export class DaemonClient {
 
   deleteSession(sessionId: string): Promise<void> {
     return this.request({ op: 'deleteSession', sessionId });
+  }
+
+  listAccounts(): Promise<AccountInfo[]> {
+    return this.request({ op: 'listAccounts' });
+  }
+
+  setAccount(configDir: string | null): Promise<AccountInfo[]> {
+    return this.request({ op: 'setAccount', configDir });
   }
 
   dispose(): void {

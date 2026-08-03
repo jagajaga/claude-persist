@@ -10,6 +10,7 @@ import type {
 import type { SessionMeta } from './registry.js';
 import { sessionLogPath } from './paths.js';
 import { ROTATE_THRESHOLD, allLogFiles, loadTailAndCount, readRange, rotateActiveLog } from './logStore.js';
+import { accountsStore, ensureSdkTranscript } from './accounts.js';
 
 /**
  * Recent events kept resident per session. Larger than
@@ -306,8 +307,35 @@ export class DaemonSession {
     }
   }
 
+  /**
+   * Tear down the live query only — unlike dispose(), the session (its
+   * transcript, log file, meta) stays fully alive. Used when the active
+   * account changes: the next sendMessage() spawns a fresh query under the
+   * new account's env and resumes the same sdkSessionId.
+   */
+  disposeActiveQuery(): void {
+    this.input?.close();
+    this.input = null;
+    try {
+      this.activeQuery?.close();
+    } catch {
+      // already closed/gone
+    }
+    this.activeQuery = null;
+  }
+
   private ensureQuery(): void {
     if (this.activeQuery) return;
+    // null = default account, env stays untouched (SDK falls back to ~/.claude).
+    const activeAccountDir = accountsStore.active;
+    if (activeAccountDir) {
+      ensureSdkTranscript(
+        this.meta.sdkSessionId,
+        this.meta.cwd,
+        activeAccountDir,
+        accountsStore.allConcreteDirs(),
+      );
+    }
     this.input = new InputQueue();
     const q = query({
       // The SDK accepts an AsyncIterable of user messages for multi-turn
@@ -324,6 +352,9 @@ export class DaemonSession {
         // mid-session; actual behavior is still governed by permissionMode.
         allowDangerouslySkipPermissions: true,
         canUseTool: this.canUseTool,
+        // Don't replace the whole env — CLAUDE_CONFIG_DIR is the only thing
+        // that changes between accounts.
+        ...(activeAccountDir ? { env: { ...process.env, CLAUDE_CONFIG_DIR: activeAccountDir } } : {}),
       },
     });
     this.activeQuery = q;

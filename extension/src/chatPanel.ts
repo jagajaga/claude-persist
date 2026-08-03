@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type {
+  AccountInfo,
   Attachment,
   ModelDescriptor,
   PersistedEvent,
@@ -113,6 +114,17 @@ export class ChatPanelManager {
 
   /** Last SDK-probed model list, before extraModels merging. */
   private lastModels: ModelDescriptor[] = [];
+
+  /** Broadcast from the daemon whenever the active/known accounts change. */
+  handleAccounts(accounts: AccountInfo[]): void {
+    this.lastAccounts = accounts;
+    for (const entry of this.panels.values()) {
+      this.post(entry, { type: 'accounts', accounts });
+    }
+  }
+
+  /** Last known account list, account-wide like the model list. */
+  private lastAccounts: AccountInfo[] = [];
 
   private mergedModels(): ModelDescriptor[] {
     const extras = vscode.workspace
@@ -236,6 +248,33 @@ export class ChatPanelManager {
           daemon: this.client()?.connected === true,
           indicator: connectionIndicatorEnabled(),
         });
+        return;
+      }
+      if (msg.type === 'addAccount') {
+        const name = await vscode.window.showInputBox({
+          title: 'Log in to another account',
+          prompt: 'Name for this account (used as its config folder name)',
+          placeHolder: 'work',
+          validateInput: (value) =>
+            /^[a-z0-9-]+$/.test(value) ? undefined : 'Use lowercase letters, digits, and hyphens only',
+        });
+        if (!name) return;
+        const configDir = path.join(os.homedir(), '.claude-accounts', name);
+        const bundledClaudeBin = path.join(
+          this.context.extensionPath,
+          'daemon',
+          'node_modules',
+          '@anthropic-ai',
+          'claude-agent-sdk-linux-x64',
+          'claude',
+        );
+        const claudeBin = fs.existsSync(bundledClaudeBin) ? bundledClaudeBin : 'claude';
+        const terminal = vscode.window.createTerminal({ name: `Claude login: ${name}` });
+        terminal.sendText(`CLAUDE_CONFIG_DIR=${configDir} ${claudeBin} /login`);
+        terminal.show();
+        void vscode.window.showInformationMessage(
+          'After logging in, pick the account from the model menu.',
+        );
         return;
       }
       if (msg.type === 'switchTab') {
@@ -362,6 +401,12 @@ export class ChatPanelManager {
                 : {}),
             });
             break;
+          case 'setAccount': {
+            const configDir = typeof msg.configDir === 'string' ? msg.configDir : null;
+            const accounts = await client.setAccount(configDir);
+            this.handleAccounts(accounts);
+            break;
+          }
         }
       } catch (err) {
         void vscode.window.showErrorMessage(
@@ -444,6 +489,14 @@ export class ChatPanelManager {
       .then((models) => {
         this.lastModels = models;
         this.post(entry, { type: 'models', models: this.mergedModels() });
+      })
+      .catch(() => undefined);
+    // Same for the account list — fetched lazily rather than on every push.
+    void client
+      .listAccounts()
+      .then((accounts) => {
+        this.lastAccounts = accounts;
+        this.post(entry, { type: 'accounts', accounts });
       })
       .catch(() => undefined);
   }

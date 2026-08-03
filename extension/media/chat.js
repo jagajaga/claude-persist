@@ -719,6 +719,7 @@
   let modelInfos = [];
   let currentModel = '';
   let currentEffort = '';
+  let accountInfos = [];
 
   const modelMenu = el('div', 'attach-menu model-menu');
   modelMenu.hidden = true;
@@ -800,6 +801,21 @@
         }),
       );
     }
+    modelMenu.appendChild(el('div', 'menu-title', 'Account'));
+    for (const account of accountInfos) {
+      modelMenu.appendChild(
+        menuChoice(account.name, account.active, () => {
+          vscode.postMessage({ type: 'setAccount', configDir: account.configDir });
+          modelMenu.hidden = true;
+        }),
+      );
+    }
+    modelMenu.appendChild(
+      menuChoice('Log in to another account…', false, () => {
+        vscode.postMessage({ type: 'addAccount' });
+        modelMenu.hidden = true;
+      }),
+    );
   }
 
   // Where this conversation is working — not the window's repo, and not
@@ -966,6 +982,10 @@
       case 'models':
         modelInfos = msg.models ?? [];
         renderPill(); // display names may only now be known
+        if (!modelMenu.hidden) renderModelMenu();
+        break;
+      case 'accounts':
+        accountInfos = msg.accounts ?? [];
         if (!modelMenu.hidden) renderModelMenu();
         break;
       case 'branch':

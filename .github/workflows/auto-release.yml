@@ -84,6 +84,22 @@ jobs:
       # Open VSX is the marketplace code-server uses by default, so publishing
       # here is what makes the Extensions view show a normal "Update" button
       # instead of the extension having to notify about itself.
+      # Open VSX is a third-party service that returns 5xx from time to time.
+      # The GitHub release is already published by this point, so a marketplace
+      # hiccup must not mark the whole release failed — retry, then warn.
       - name: Publish to Open VSX
         if: env.OVSX_TOKEN != ''
-        run: npx --yes ovsx publish "${{ steps.vsix.outputs.file }}" -p "$OVSX_TOKEN"
+        continue-on-error: true
+        id: ovsx
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            if npx --yes ovsx publish "${{ steps.vsix.outputs.file }}" -p "$OVSX_TOKEN"; then
+              echo "published on attempt $attempt"
+              exit 0
+            fi
+            echo "::warning::Open VSX publish attempt $attempt failed"
+            sleep $((attempt * 30))
+          done
+          echo "::error::Open VSX publish failed after 3 attempts; the GitHub release is live. Re-run with scripts/publish-ovsx.sh once the service recovers."
+          exit 1

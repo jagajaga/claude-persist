@@ -140,6 +140,13 @@ export function formatRelativeReset(resetsAtMs: number | null, now: number): str
   const totalMinutes = Math.round(diffMs / 60000);
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
+  // Seven-day windows are the common case, and "resets in 72h" is arithmetic
+  // the reader should not have to do. Past a day, say days.
+  if (hours >= 24) {
+    const days = Math.floor(hours / 24);
+    const restHours = hours % 24;
+    return restHours > 0 ? `resets in ${days}d ${restHours}h` : `resets in ${days}d`;
+  }
   if (hours > 0 && minutes > 0) return `resets in ${hours}h ${minutes}m`;
   if (hours > 0) return `resets in ${hours}h`;
   return `resets in ${minutes}m`;

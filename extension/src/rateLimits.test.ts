@@ -220,3 +220,13 @@ test('formatTooltip: windows with null utilization are skipped', () => {
   );
   assert.equal(text, '7d: 5% — resets at an unknown time');
 });
+
+test('formatRelativeReset: long windows read in days, not dozens of hours', () => {
+  const now = Date.UTC(2026, 7, 3, 12, 0, 0);
+  const hours = (n: number) => now + n * 3600_000;
+  assert.equal(formatRelativeReset(hours(72), now), 'resets in 3d');
+  assert.equal(formatRelativeReset(hours(50), now), 'resets in 2d 2h');
+  assert.equal(formatRelativeReset(hours(24), now), 'resets in 1d');
+  // Below a day the hour/minute form still reads best.
+  assert.equal(formatRelativeReset(hours(23), now), 'resets in 23h');
+});

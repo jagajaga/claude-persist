@@ -25,14 +25,69 @@ const IMAGE_TYPES: Record<string, string> = {
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const IMAGE_MIMES = new Set(Object.values(IMAGE_TYPES));
 const uploadsDir = path.join(os.homedir(), '.claude-persist', 'uploads');
+
+/** Extensions we will render a preview for. */
+const PREVIEWABLE = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
+/** Absolute POSIX-ish paths inside chat text, e.g. /home/me/shot.png */
+const PATH_IN_TEXT = /(?:^|[\s"'`(\[<])(\/[^\s"'`)\]>:]+\.[A-Za-z0-9]+)/g;
+/** Don't inline a huge file as a preview. */
+const MAX_PREVIEW_BYTES = 12 * 1024 * 1024;
+
+/**
+ * Absolute image paths mentioned anywhere in a payload.
+ *
+ * Covers both attachment refs and paths that merely appear in message text or a
+ * tool result, because "here's the screenshot at /tmp/x.png" should preview too.
+ */
+function collectImagePaths(value: unknown, into = new Set<string>()): Set<string> {
+  if (typeof value === 'string') {
+    if (path.isAbsolute(value) && PREVIEWABLE.test(value)) into.add(value);
+    for (const m of value.matchAll(PATH_IN_TEXT)) {
+      if (PREVIEWABLE.test(m[1])) into.add(m[1]);
+    }
+    return into;
+  }
+  if (Array.isArray(value)) {
+    for (const v of value) collectImagePaths(v, into);
+    return into;
+  }
+  if (value && typeof value === 'object') {
+    for (const v of Object.values(value)) collectImagePaths(v, into);
+  }
+  return into;
+}
 /** Matches the daemon's default; "Load earlier" multiplies it. */
 const REPLAY_LIMIT = 400;
+
+/**
+ * Where the webview may load images from. Images referenced in a chat live
+ * wherever the user put them, so this spans the workspace, home, temp and our
+ * own uploads — but not all of `/`, which would let any rendered path be read.
+ */
+function resourceRoots(): vscode.Uri[] {
+  const roots = [uploadsDir, os.homedir(), os.tmpdir()].map((p) => vscode.Uri.file(p));
+  for (const folder of vscode.workspace.workspaceFolders ?? []) roots.push(folder.uri);
+  return roots;
+}
 
 /** Whether the panel should flag a broken connection at all. */
 function connectionIndicatorEnabled(): boolean {
   return vscode.workspace
     .getConfiguration('claudePersist')
     .get<boolean>('connectionIndicator', true);
+}
+
+/** Persist an upload beside the session; returns null if it can't be written. */
+function saveUpload(sessionId: string, name: string, bytes: Buffer): string | null {
+  try {
+    const dir = path.join(uploadsDir, sessionId);
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${Date.now()}-${name.replace(/[/\\]/g, '_')}`);
+    fs.writeFileSync(file, bytes);
+    return file;
+  } catch {
+    return null; // preview is a nicety; never fail the send over it
+  }
 }
 
 interface PanelEntry {
@@ -160,7 +215,7 @@ export class ChatPanelManager {
       VIEW_TYPE,
       info.title,
       vscode.ViewColumn.Active,
-      { enableScripts: true, retainContextWhenHidden: true },
+      { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: resourceRoots() },
     );
     this.bindPanel(panel, info.id, info.title);
   }
@@ -221,11 +276,16 @@ export class ChatPanelManager {
         const data = up.chunks.join('');
         const bytes = Buffer.from(data, 'base64');
         if (IMAGE_MIMES.has(up.mediaType) && bytes.byteLength <= MAX_IMAGE_BYTES) {
+          // Save a copy too: the base64 goes to the model but is never
+          // persisted, so without a file on disk the thumbnail would vanish on
+          // the next reload.
+          const savedPath = saveUpload(sessionId, up.name, bytes);
           entry.pendingAttachments.push({
             kind: 'image',
             name: up.name,
             mediaType: up.mediaType,
             data,
+            ...(savedPath ? { path: savedPath } : {}),
           });
         } else {
           const dir = path.join(uploadsDir, sessionId);
@@ -570,8 +630,36 @@ export class ChatPanelManager {
   }
 
   private post(entry: PanelEntry, message: unknown): void {
-    if (entry.ready) void entry.panel.webview.postMessage(message);
-    else entry.queue.push(message);
+    const enriched = this.withImageUris(entry, message);
+    if (entry.ready) void entry.panel.webview.postMessage(enriched);
+    else entry.queue.push(enriched);
+  }
+
+  /**
+   * Attach a path -> webview-URI map for any previewable image in this message.
+   *
+   * Done here rather than at each call site because a missed site would break
+   * previews only on replay — i.e. only after a reload, the case users actually
+   * hit. The webview cannot build these URIs itself (asWebviewUri is host-side),
+   * and only paths that exist and are within a permitted root get an entry, so
+   * the renderer can treat "present in the map" as "safe to show".
+   */
+  private withImageUris(entry: PanelEntry, message: unknown): unknown {
+    if (!message || typeof message !== 'object') return message;
+    const paths = collectImagePaths(message);
+    if (paths.size === 0) return message;
+    const imageUris: Record<string, string> = {};
+    for (const p of paths) {
+      try {
+        const stat = fs.statSync(p);
+        if (!stat.isFile() || stat.size > MAX_PREVIEW_BYTES) continue;
+        imageUris[p] = entry.panel.webview.asWebviewUri(vscode.Uri.file(p)).toString();
+      } catch {
+        // not readable from here (or gone) — simply no preview
+      }
+    }
+    if (Object.keys(imageUris).length === 0) return message;
+    return { ...(message as Record<string, unknown>), imageUris };
   }
 
   private html(webview: vscode.Webview, sessionId: string): string {

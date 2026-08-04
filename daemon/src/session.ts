@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
   Attachment,
+  AttachmentRef,
   ChatEvent,
   PersistedEvent,
   RateLimits,
@@ -212,10 +213,18 @@ export class DaemonSession {
   }
 
   sendMessage(text: string, attachments: Attachment[] = []): void {
-    const labels = attachments.map((a) => ({
-      kind: a.kind,
-      label: a.kind === 'image' ? a.name : a.path,
-    }));
+    // Keep the path and media type so the panel can render a thumbnail on
+    // replay; the base64 itself is deliberately never persisted.
+    const labels: AttachmentRef[] = attachments.map((a) =>
+      a.kind === 'image'
+        ? {
+            kind: 'image',
+            label: a.name,
+            ...(a.path ? { path: a.path } : {}),
+            mediaType: a.mediaType,
+          }
+        : { kind: 'file', label: a.path, path: a.path },
+    );
     this.appendEvent({
       type: 'user_message',
       text,

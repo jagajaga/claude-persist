@@ -141,7 +141,64 @@
     return text;
   }
 
-  function fileLink(pathText, display) {
+  /**
+   * path -> webview URI for previewable images, sent by the host alongside any
+   * message that mentions one. Only paths that exist and sit under a permitted
+   * resource root appear here, so presence in this map means "safe to render".
+   */
+  const imageUris = new Map();
+  function absorbImageUris(msg) {
+    if (!msg || !msg.imageUris) return;
+    for (const [p, uri] of Object.entries(msg.imageUris)) imageUris.set(p, uri);
+  }
+
+  /** Full-size overlay. Click anywhere (or Escape) to dismiss. */
+  function openLightbox(uri, caption) {
+    const overlay = el('div', 'lightbox');
+    const img = el('img');
+    img.src = uri;
+    img.alt = caption || '';
+    overlay.appendChild(img);
+    if (caption) overlay.appendChild(el('div', 'lightbox-caption', caption));
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKey);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') close();
+    };
+    overlay.addEventListener('click', close);
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(overlay);
+  }
+
+  /**
+   * A clickable thumbnail, or null when this path has no preview available
+   * (not an image, missing, too large, or outside a permitted root).
+   */
+  function imageThumb(pathText, label) {
+    const uri = imageUris.get(pathText);
+    if (!uri) return null;
+    const wrap = el('span', 'img-thumb');
+    const img = el('img');
+    img.src = uri;
+    img.alt = label || pathText;
+    img.title = `${pathText} — click to view`;
+    // A file that disappears between send and render shouldn't leave a broken
+    // icon; fall back to the plain link.
+    img.addEventListener('error', () => {
+      wrap.replaceWith(rawFileLink(pathText, label));
+    });
+    wrap.appendChild(img);
+    wrap.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openLightbox(uri, label || pathText);
+    });
+    return wrap;
+  }
+
+  function rawFileLink(pathText, display) {
     const link = el('a', 'file-link', display ?? pathText);
     link.href = '#';
     link.title = pathText;
@@ -153,9 +210,72 @@
     return link;
   }
 
+  /**
+   * A path in the chat: a thumbnail when it is a previewable image, else the
+   * usual open-in-editor link. Single entry point so chips, tool results and
+   * attachments all behave the same.
+   */
+  function fileLink(pathText, display) {
+    return imageThumb(pathText, display) ?? rawFileLink(pathText, display);
+  }
+
   // ---------- markdown (marked + DOMPurify, vendored) ------------------------
 
   let markedConfigured = false;
+  /**
+   * Turn any linkified image path in a rendered block into a thumbnail.
+   *
+   * Runs after markdown/DOMPurify so it only ever touches anchors the renderer
+   * already produced, and only paths the host vouched for via imageUris.
+   */
+  function upgradeImageLinks(root) {
+    for (const link of Array.from(root.querySelectorAll('a.file-link'))) {
+      const p = link.getAttribute('title') || link.textContent || '';
+      const thumb = imageThumb(p, p.split('/').pop());
+      if (thumb) link.replaceWith(thumb);
+    }
+    if (imageUris.size) upgradeImagePathsInText(root);
+  }
+
+  /**
+   * Replace bare image paths in rendered text with thumbnails.
+   *
+   * Markdown leaves a path like /tmp/shot.png as plain text, so there is no
+   * anchor to upgrade — yet "saved to /tmp/shot.png" is exactly where a preview
+   * is wanted. Only exact matches against paths the host vouched for are
+   * touched, so this can never mangle unrelated prose, and <pre> blocks are left
+   * alone: a path quoted in a code listing is being shown as text on purpose.
+   */
+  function upgradeImagePathsInText(root) {
+    const paths = Array.from(imageUris.keys()).sort((a, b) => b.length - a.length);
+    const walk = (node) => {
+      for (const child of Array.from(node.childNodes)) {
+        if (child.nodeType === 1) {
+          if (child.tagName === 'PRE' || child.classList.contains('img-thumb')) continue;
+          walk(child);
+          continue;
+        }
+        if (child.nodeType !== 3) continue;
+        const text = child.nodeValue;
+        const hit = paths.find((p) => text.includes(p));
+        if (!hit) continue;
+        const thumb = imageThumb(hit, hit.split('/').pop());
+        if (!thumb) continue;
+        const at = text.indexOf(hit);
+        const frag = document.createDocumentFragment();
+        if (at > 0) frag.appendChild(document.createTextNode(text.slice(0, at)));
+        frag.appendChild(thumb);
+        const rest = text.slice(at + hit.length);
+        if (rest) frag.appendChild(document.createTextNode(rest));
+        child.replaceWith(frag);
+        // The remainder may hold further paths; re-walk the parent to catch them.
+        walk(node);
+        return;
+      }
+    };
+    walk(root);
+  }
+
   function renderMarkdown(md) {
     const root = el('div', 'md');
     if (window.marked && window.DOMPurify) {
@@ -175,6 +295,7 @@
       pre.appendChild(el('code', null, md));
       root.appendChild(pre);
     }
+    upgradeImageLinks(root);
     return root;
   }
 
@@ -598,11 +719,18 @@
       case 'user_message': {
         endStreaming();
         const box = el('div', 'user-msg');
-        box.appendChild(el('div', null, displayUserText(event.text)));
+        const textEl = el('div', null, displayUserText(event.text));
+        // User text is plain, not markdown, so it never passes through
+        // renderMarkdown — upgrade it here or a path the user typed never previews.
+        if (imageUris.size) upgradeImagePathsInText(textEl);
+        box.appendChild(textEl);
         if (Array.isArray(event.attachments) && event.attachments.length) {
           const row = el('div', 'user-chips');
           for (const a of event.attachments) {
-            if (a.kind === 'file') {
+            const thumb = a.path ? imageThumb(a.path, a.label) : null;
+            if (thumb) {
+              row.appendChild(thumb);
+            } else if (a.kind === 'file') {
               const chip = el('span', 'chip');
               chip.appendChild(fileLink(a.label));
               row.appendChild(chip);
@@ -894,6 +1022,9 @@
 
   window.addEventListener('message', (e) => {
     const msg = e.data;
+    // Must run before any rendering below: the renderer looks paths up in this
+    // map, and replay delivers events in the same message that carries it.
+    absorbImageUris(msg);
     switch (msg.type) {
       case 'replay': {
         // A widened window re-sends from the top, so clear what is there.

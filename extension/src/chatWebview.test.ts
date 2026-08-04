@@ -27,6 +27,8 @@ interface JsdomWindow {
   document: DomNode;
   Element: { prototype: { scrollIntoView: (...args: unknown[]) => void } };
   MessageEvent: new (type: string, init: { data: unknown }) => DomNode;
+  MouseEvent: new (type: string, init?: Record<string, unknown>) => DomNode;
+  KeyboardEvent: new (type: string, init?: Record<string, unknown>) => DomNode;
   setTimeout: (cb: () => void, ms: number) => unknown;
   dispatchEvent: (event: DomNode) => boolean;
   acquireVsCodeApi?: () => unknown;
@@ -565,4 +567,141 @@ test('connection: the setting suppresses the perimeter entirely', () => {
     'opting out must win even when genuinely disconnected',
   );
   h.close();
+});
+
+// ---------- image previews --------------------------------------------------
+
+/**
+ * The host vouches for a path by putting it in `imageUris`; only paths that
+ * exist and sit under a permitted localResourceRoot get an entry. So the
+ * renderer treats "in the map" as "safe to show" and everything else stays a
+ * plain link — these tests pin both halves of that contract.
+ */
+const SHOT = '/tmp/shot.png';
+const SHOT_URI = 'https://file%2B.vscode-resource/tmp/shot.png';
+
+test('image attachment renders a clickable thumbnail, not a text chip', () => {
+  const h = createHarness();
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    imageUris: { [SHOT]: SHOT_URI },
+    events: [
+      persisted({
+        type: 'user_message',
+        text: 'look at this',
+        attachments: [{ kind: 'image', label: 'shot.png', path: SHOT, mediaType: 'image/png' }],
+      }),
+    ],
+  });
+  const img = h.document.querySelector('#thread .img-thumb img');
+  assert.ok(img, 'expected a thumbnail for an image attachment');
+  assert.equal(img.getAttribute('src'), SHOT_URI);
+});
+
+test('an image path mentioned in message text becomes a thumbnail', () => {
+  const h = createHarness();
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    imageUris: { [SHOT]: SHOT_URI },
+    events: [persisted({ type: 'user_message', text: `look at ${SHOT} please` })],
+  });
+  const img = h.document.querySelector('#thread .img-thumb img');
+  assert.ok(img, 'expected an inline preview for an image path in text');
+  assert.equal(img.getAttribute('src'), SHOT_URI);
+  // The surrounding words survive; only the path itself is replaced.
+  assert.match(h.document.querySelector('#thread .user-msg').textContent, /look at/);
+});
+
+/**
+ * Deliberate: a path inside a code block is being displayed as text on purpose,
+ * and swapping it for an image would mangle the listing. (This harness renders
+ * without marked, so all markdown text lands in a <pre> — which is exactly the
+ * node type this exclusion targets.)
+ */
+test('an image path inside a code block is left as text', () => {
+  const h = createHarness();
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    imageUris: { [SHOT]: SHOT_URI },
+    events: [persisted({ type: 'assistant_text', text: `cp ${SHOT} /backup/` })],
+  });
+  assert.equal(h.document.querySelector('#thread .img-thumb'), null);
+  assert.match(h.document.querySelector('#thread pre').textContent, /shot\.png/);
+});
+
+test('a path the host did not vouch for stays a plain link', () => {
+  const h = createHarness();
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    // No imageUris at all: unreadable, too large, or outside a permitted root.
+    events: [
+      persisted({
+        type: 'user_message',
+        text: 'x',
+        attachments: [{ kind: 'file', label: '/tmp/secret.png', path: '/tmp/secret.png' }],
+      }),
+    ],
+  });
+  assert.equal(h.document.querySelector('#thread .img-thumb'), null);
+  assert.ok(h.document.querySelector('#thread .chip'), 'expected the usual chip fallback');
+});
+
+test('non-image attachments are unaffected', () => {
+  const h = createHarness();
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    imageUris: { [SHOT]: SHOT_URI },
+    events: [
+      persisted({
+        type: 'user_message',
+        text: 'x',
+        attachments: [{ kind: 'file', label: '/tmp/notes.txt', path: '/tmp/notes.txt' }],
+      }),
+    ],
+  });
+  assert.equal(h.document.querySelector('#thread .img-thumb'), null);
+});
+
+test('clicking a thumbnail opens a lightbox, and Escape closes it', () => {
+  const h = createHarness();
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    imageUris: { [SHOT]: SHOT_URI },
+    events: [
+      persisted({
+        type: 'user_message',
+        text: 'x',
+        attachments: [{ kind: 'image', label: 'shot.png', path: SHOT, mediaType: 'image/png' }],
+      }),
+    ],
+  });
+  const thumb = h.document.querySelector('#thread .img-thumb');
+  assert.ok(thumb);
+  assert.equal(h.document.querySelector('.lightbox'), null);
+
+  thumb.dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  const box = h.document.querySelector('.lightbox');
+  assert.ok(box, 'clicking a thumbnail should open the lightbox');
+  assert.equal(box.querySelector('img').getAttribute('src'), SHOT_URI);
+
+  h.document.dispatchEvent(new h.window.KeyboardEvent('keydown', { key: 'Escape' }));
+  assert.equal(h.document.querySelector('.lightbox'), null, 'Escape should dismiss it');
 });

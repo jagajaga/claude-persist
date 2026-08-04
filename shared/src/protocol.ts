@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 21;
+export const PROTOCOL_VERSION = 22;
 
 /**
  * Reply to `hello`. `entry` is the module path the daemon was launched from;
@@ -50,12 +50,27 @@ export interface SessionInfo {
 
 /** Something the user attaches to a message via the composer's + button. */
 export type Attachment =
-  | { kind: 'image'; name: string; mediaType: string; data: string }
+  /**
+   * `data` is what the model sees. `path` is where the extension saved a copy,
+   * so the transcript can still show a preview after a reload — the base64 is
+   * never persisted (it would bloat every replay) and the original file may be
+   * moved or deleted.
+   */
+  | { kind: 'image'; name: string; mediaType: string; data: string; path?: string }
   | { kind: 'file'; path: string };
+
+/** An attachment as persisted in the transcript: no bytes, just a reference. */
+export interface AttachmentRef {
+  kind: 'image' | 'file';
+  label: string;
+  /** Absolute path on the daemon host, rewritten to a webview URI before render. */
+  path?: string;
+  mediaType?: string;
+}
 
 /** A single chat-visible event. Persisted events replay after reconnect. */
 export type ChatEvent =
-  | { type: 'user_message'; text: string; attachments?: Array<{ kind: 'image' | 'file'; label: string }> }
+  | { type: 'user_message'; text: string; attachments?: AttachmentRef[] }
   | { type: 'assistant_text'; text: string }
   | { type: 'tool_use'; toolUseId?: string; toolName: string; input: unknown }
   | { type: 'tool_result'; toolUseId?: string; summary: string; isError: boolean }

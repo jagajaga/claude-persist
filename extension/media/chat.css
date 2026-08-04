@@ -606,3 +606,60 @@ button.secondary {
 @media (prefers-reduced-motion: reduce) {
   .offline-veil { animation: none; opacity: 0.9; }
 }
+
+
+/* ---------- image previews ------------------------------------------------ */
+
+.img-thumb {
+  display: inline-block;
+  cursor: zoom-in;
+  line-height: 0;
+  vertical-align: middle;
+  margin: 2px 4px 2px 0;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-radius: 4px;
+  overflow: hidden;
+  max-width: 100%;
+}
+
+.img-thumb img {
+  display: block;
+  /* Bounded so a tall screenshot can't push the whole transcript around. */
+  max-width: min(320px, 100%);
+  max-height: 220px;
+  width: auto;
+  height: auto;
+  background: var(--vscode-editor-background);
+}
+
+.img-thumb:hover {
+  border-color: var(--vscode-focusBorder, #007fd4);
+}
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.82);
+  cursor: zoom-out;
+}
+
+.lightbox img {
+  max-width: 100%;
+  max-height: calc(100% - 2em);
+  object-fit: contain;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+}
+
+.lightbox-caption {
+  color: #ddd;
+  font-size: 12px;
+  text-align: center;
+  word-break: break-all;
+}

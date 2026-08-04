@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { resourceRootPaths } from './resourceRoots';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -65,9 +66,8 @@ const REPLAY_LIMIT = 400;
  * own uploads — but not all of `/`, which would let any rendered path be read.
  */
 function resourceRoots(): vscode.Uri[] {
-  const roots = [uploadsDir, os.homedir(), os.tmpdir()].map((p) => vscode.Uri.file(p));
-  for (const folder of vscode.workspace.workspaceFolders ?? []) roots.push(folder.uri);
-  return roots;
+  const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+  return resourceRootPaths(uploadsDir, folders).map((p) => vscode.Uri.file(p));
 }
 
 /** Whether the panel should flag a broken connection at all. */
@@ -223,6 +223,15 @@ export class ChatPanelManager {
   /** Called both for fresh panels and for panels restored by the serializer. */
   bindPanel(panel: vscode.WebviewPanel, sessionId: string, title?: string): void {
     if (title) panel.title = title;
+    // Set here, not only at creation: this method also runs for panels restored
+    // by the serializer, which keep whatever options they were serialized with.
+    // Since surviving a reload is this extension's whole point, nearly every
+    // panel is a restored one — so setting localResourceRoots only in
+    // createWebviewPanel left image previews blocked for essentially everyone.
+    panel.webview.options = {
+      enableScripts: true,
+      localResourceRoots: resourceRoots(),
+    };
     const entry: PanelEntry = {
       panel,
       sessionId,
@@ -421,9 +430,18 @@ export class ChatPanelManager {
               ? raw
               : path.join(entry.cwd ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '', raw);
             try {
-              await vscode.window.showTextDocument(vscode.Uri.file(abs), { preview: true });
+              // vscode.open picks the right editor for the file type; images and
+              // other binaries are not text documents and showTextDocument
+              // rejects them outright ("cannot open /tmp/shot.png").
+              await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(abs), {
+                preview: true,
+              });
             } catch {
-              void vscode.window.showWarningMessage(`Claude Persist: cannot open ${abs}`);
+              try {
+                await vscode.window.showTextDocument(vscode.Uri.file(abs), { preview: true });
+              } catch {
+                void vscode.window.showWarningMessage(`Claude Persist: cannot open ${abs}`);
+              }
             }
             break;
           }

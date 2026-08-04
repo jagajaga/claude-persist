@@ -5,12 +5,14 @@ import type {
   Attachment,
   ChatEvent,
   PersistedEvent,
+  RateLimits,
   SessionStatus,
 } from '@claude-persist/shared';
 import type { SessionMeta } from './registry.js';
-import { sessionLogPath } from './paths.js';
+import { pendingTurnPath, sessionLogPath } from './paths.js';
 import { ROTATE_THRESHOLD, allLogFiles, loadTailAndCount, readRange, rotateActiveLog } from './logStore.js';
 import { accountsStore, ensureSdkTranscript, sdkTranscriptExists } from './accounts.js';
+import { isRateLimitResult, planRetry } from './limits.js';
 
 /**
  * Recent events kept resident per session. Larger than
@@ -72,6 +74,20 @@ export interface SessionCallbacks {
   onRateLimit(info: Record<string, unknown>): void;
   /** Raw SDKControlGetUsageResponse from the experimental usage control call. */
   onUsage(usage: Record<string, unknown>): void;
+  /** Current plan windows, for scheduling a retry off the real reset instant. */
+  rateLimitWindows(): RateLimits;
+  /** Lifecycle logging (parked/retrying), so a stuck turn is diagnosable. */
+  log(message: string): void;
+}
+
+/** A turn the plan limit rejected, held until the window resets. */
+interface PendingTurn {
+  /** The exact SDK envelope we pushed, replayed verbatim on retry. */
+  envelope: unknown;
+  retryAt: number;
+  attempts: number;
+  /** For the UI notice. */
+  text: string;
 }
 
 /** Truncate long tool payloads before persisting/rendering. */
@@ -91,6 +107,9 @@ function summarize(value: unknown, max = 2000): string {
 export class DaemonSession {
   readonly meta: SessionMeta;
   status: SessionStatus = 'idle';
+  /** Set while a turn is parked waiting for a rate limit to reset. */
+  private pending: PendingTurn | null = null;
+  private retryTimer: NodeJS.Timeout | null = null;
   /** Newest events, oldest first, capped at MAX_TAIL — never the full transcript. */
   private tail: PersistedEvent[] = [];
   /** Total valid events ever appended (this session's next seq number). */
@@ -218,17 +237,147 @@ export class DaemonSession {
       : text;
     content.push({ type: 'text', text: fullText });
 
+    // A new message supersedes anything parked: the user is driving now, and
+    // silently sending an old turn first would be a surprise.
+    if (this.pending) this.cancelPendingRetry('superseded by a new message');
+
     this.ensureQuery();
-    this.input!.push({
+    const envelope = {
       type: 'user',
       message: { role: 'user', content },
       parent_tool_use_id: null,
       session_id: this.meta.sdkSessionId ?? '',
-    });
+    };
+    this.lastEnvelope = { envelope, text };
+    this.input!.push(envelope);
     this.setStatus('running');
   }
 
+  /** The turn most recently submitted, kept so a rate-limited one can be replayed. */
+  private lastEnvelope: { envelope: unknown; text: string } | null = null;
+
+  /** Epoch ms a parked turn will be retried, or null. Surfaced in SessionInfo. */
+  get retryAt(): number | null {
+    return this.pending?.retryAt ?? null;
+  }
+
+  /**
+   * Hold a turn the plan limit rejected and schedule a retry.
+   *
+   * The limit arrives as a normal `result` message, not an exception, so the
+   * turn just ends with no answer — which is exactly why nothing used to retry.
+   */
+  private parkForLimit(text: string): void {
+    const envelope = this.lastEnvelope;
+    if (!envelope) return; // nothing to replay (e.g. limit hit on a resumed probe)
+    const attempts = (this.pending?.attempts ?? 0) + 1;
+    const plan = planRetry({
+      windows: this.callbacks.rateLimitWindows(),
+      text,
+      now: Date.now(),
+      attempts,
+      sessionId: this.meta.id,
+    });
+    this.pending = { envelope: envelope.envelope, text: envelope.text, retryAt: plan.at, attempts };
+    this.persistPending();
+    this.callbacks.log(
+      `session ${this.meta.id} rate limited; retry #${attempts} at ${new Date(plan.at).toISOString()} (from ${plan.source})`,
+    );
+    this.appendEvent({
+      type: 'status',
+      status: 'error',
+      detail: `Rate limit reached. Your message is queued and will be sent automatically at ${new Date(plan.at).toISOString()} — you don't need to come back.`,
+    });
+    this.scheduleRetry();
+  }
+
+  /** (Re)arm the retry timer from this.pending. Safe to call repeatedly. */
+  scheduleRetry(): void {
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    if (!this.pending) return;
+    const delay = Math.max(0, this.pending.retryAt - Date.now());
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.runPendingRetry();
+    }, delay);
+    // Don't hold the daemon open solely for a retry; it is a long-lived process
+    // anyway, and an unref'd timer still fires while it runs.
+    this.retryTimer.unref();
+  }
+
+  private runPendingRetry(): void {
+    const pending = this.pending;
+    if (!pending) return;
+    this.callbacks.log(`session ${this.meta.id} retrying rate-limited turn (attempt ${pending.attempts})`);
+    // Start a fresh query rather than trusting one that has been idle for hours;
+    // it resumes the same sdkSessionId, so no context is lost.
+    this.disposeActiveQuery();
+    this.ensureQuery();
+    this.appendEvent({
+      type: 'status',
+      status: 'running',
+      detail: 'Rate limit reset — resending your queued message…',
+    });
+    this.status = 'running';
+    this.input!.push(pending.envelope);
+  }
+
+  private cancelPendingRetry(reason: string): void {
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    if (!this.pending) return;
+    this.pending = null;
+    this.clearPersistedPending();
+    this.callbacks.log(`session ${this.meta.id} queued retry cancelled: ${reason}`);
+    this.appendEvent({
+      type: 'status',
+      status: 'error',
+      detail: `Queued retry cancelled (${reason}).`,
+    });
+  }
+
+  /** Called by the daemon at startup for sessions with a parked turn on disk. */
+  restorePending(): void {
+    try {
+      const raw = JSON.parse(fs.readFileSync(pendingTurnPath(this.meta.id), 'utf8')) as PendingTurn;
+      if (!raw || typeof raw.retryAt !== 'number' || raw.envelope === undefined) return;
+      this.pending = raw;
+      this.status = 'running';
+      this.scheduleRetry();
+      this.callbacks.log(
+        `session ${this.meta.id} has a queued turn; retry at ${new Date(raw.retryAt).toISOString()}`,
+      );
+    } catch {
+      this.clearPersistedPending();
+    }
+  }
+
+  private persistPending(): void {
+    if (!this.pending) return;
+    try {
+      fs.writeFileSync(pendingTurnPath(this.meta.id), JSON.stringify(this.pending));
+    } catch {
+      // A parked turn that can't be persisted still retries in-process; it just
+      // won't survive a daemon restart. Not worth failing the session over.
+    }
+  }
+
+  private clearPersistedPending(): void {
+    try {
+      fs.unlinkSync(pendingTurnPath(this.meta.id));
+    } catch {
+      // already gone
+    }
+  }
+
   async interrupt(): Promise<void> {
+    // Also drop a queued retry — "stop" must mean stop, including hours from now.
+    if (this.pending) this.cancelPendingRetry('interrupted');
     await this.activeQuery?.interrupt();
   }
 
@@ -308,6 +457,10 @@ export class DaemonSession {
    * and could outlive the daemon that spawned it.
    */
   async dispose(): Promise<void> {
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
     this.input?.close();
     this.input = null;
     const active = this.activeQuery;
@@ -607,7 +760,23 @@ export class DaemonSession {
           ...(contextWindow ? { contextWindow } : {}),
           ...(turnTokens ? { turnTokens } : {}),
         });
-        this.setStatus('idle');
+        // A plan limit comes back as an ordinary result, so decide here whether
+        // this turn actually finished or was refused.
+        if (isRateLimitResult(summaryText)) {
+          this.status = 'error';
+          this.parkForLimit(summaryText);
+        } else {
+          // A real answer: whatever was parked has now been superseded.
+          if (this.pending) {
+            this.pending = null;
+            this.clearPersistedPending();
+            if (this.retryTimer) {
+              clearTimeout(this.retryTimer);
+              this.retryTimer = null;
+            }
+          }
+          this.setStatus('idle');
+        }
         break;
       }
       case 'rate_limit_event': {

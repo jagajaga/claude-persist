@@ -17,3 +17,26 @@ export function ensureDirs(): void {
 export function sessionLogPath(sessionId: string): string {
   return path.join(sessionsDir, `${sessionId}.jsonl`);
 }
+
+/**
+ * A turn parked waiting for a rate limit to reset.
+ *
+ * Deliberately NOT in registry.json: the payload can carry base64 image
+ * attachments, and the registry is rewritten in full on every single message.
+ * One parked screenshot would bloat every subsequent write.
+ */
+export function pendingTurnPath(sessionId: string): string {
+  return path.join(sessionsDir, `${sessionId}.pending.json`);
+}
+
+/** Session ids that have a parked turn on disk, for rescheduling at startup. */
+export function pendingTurnSessionIds(): string[] {
+  try {
+    return fs
+      .readdirSync(sessionsDir)
+      .filter((f) => f.endsWith('.pending.json'))
+      .map((f) => f.slice(0, -'.pending.json'.length));
+  } catch {
+    return [];
+  }
+}

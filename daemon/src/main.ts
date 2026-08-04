@@ -5,6 +5,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
   ModelDescriptor,
   PersistedEvent,
+  RateLimits,
   Request,
   ServerMessage,
   SessionInfo,
@@ -12,7 +13,7 @@ import type {
 } from '@claude-persist/shared';
 import type { HelloResult } from '@claude-persist/shared';
 import { PROTOCOL_VERSION } from '@claude-persist/shared';
-import { ensureDirs, socketPath, lockPath, sessionLogPath, logPath } from './paths.js';
+import { ensureDirs, socketPath, lockPath, sessionLogPath, logPath, pendingTurnSessionIds, pendingTurnPath } from './paths.js';
 import { releaseLock } from './lock.js';
 import { claimOwnership } from './ownership.js';
 import { Registry } from './registry.js';
@@ -197,6 +198,12 @@ const callbacks = {
   onMetaChanged(): void {
     registry.save();
   },
+  rateLimitWindows(): RateLimits {
+    return usage.windows;
+  },
+  log(message: string): void {
+    logLine(message);
+  },
 };
 
 function getSession(id: string): DaemonSession {
@@ -224,6 +231,7 @@ function sessionInfo(id: string): SessionInfo {
     createdAt: meta.createdAt,
     lastActivityAt: meta.lastActivityAt,
     eventCount: live?.eventCount ?? 0,
+    ...(live?.retryAt ? { retryAt: live.retryAt } : {}),
   };
 }
 
@@ -483,6 +491,26 @@ async function start(): Promise<void> {
     process.exit(0);
   }, SOCKET_WATCH_MS);
   socketWatch.unref();
+
+  // Re-arm any turn parked by a rate limit before this daemon restarted. These
+  // sessions are constructed eagerly (normally they load lazily on attach),
+  // because nothing would otherwise touch them until the user came back — which
+  // is precisely the waiting-around this feature exists to remove.
+  for (const sessionId of pendingTurnSessionIds()) {
+    if (!registry.get(sessionId)) {
+      try {
+        fs.unlinkSync(pendingTurnPath(sessionId));
+      } catch {
+        // session was deleted; drop its orphaned parked turn
+      }
+      continue;
+    }
+    try {
+      getSession(sessionId).restorePending();
+    } catch (err) {
+      logLine(`could not restore queued turn for ${sessionId}: ${String(err)}`);
+    }
+  }
 
   let finished = false;
   const finish = (): void => {

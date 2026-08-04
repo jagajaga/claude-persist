@@ -673,7 +673,7 @@
         break;
       }
       case 'status': {
-        if (event.status === 'running') setRunning(true, undefined, ts);
+        if (event.status === 'running') setRunning(true, event.detail, ts);
         else {
           settlePreviews();
           setRunning(false);

@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 20;
+export const PROTOCOL_VERSION = 21;
 
 /**
  * Reply to `hello`. `entry` is the module path the daemon was launched from;
@@ -41,6 +41,11 @@ export interface SessionInfo {
   createdAt: number;
   lastActivityAt: number;
   eventCount: number;
+  /**
+   * Epoch ms when a turn parked by a plan rate limit will be resent
+   * automatically. Absent when nothing is queued.
+   */
+  retryAt?: number;
 }
 
 /** Something the user attaches to a message via the composer's + button. */

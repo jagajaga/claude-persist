@@ -338,3 +338,38 @@ test('ensureSdkTranscript: brings the subagent and task sidecars along', () => {
   );
   assert.equal(fs.existsSync(path.join(newDir, 'tasks', sdkSessionId, 'state.json')), true);
 });
+
+/**
+ * What the daemon's account poller detects.
+ *
+ * `claude /login` writes .credentials.json *inside* an existing account
+ * directory, so the transition that matters is dir-without-credentials ->
+ * dir-with-credentials. Nothing used to notice it: the list was only rescanned
+ * on request, so a freshly logged-in account stayed missing from the model menu
+ * until the window was reloaded.
+ */
+test('scanAccounts: a reserved directory appears only once login writes credentials', () => {
+  const root = tmpDir();
+  const claudeDir = path.join(root, 'claude');
+  const accountsDir = path.join(root, 'claude-accounts');
+  // The extension creates the directory when you add an account, before login.
+  fs.mkdirSync(path.join(accountsDir, 'work'), { recursive: true });
+
+  const before = scanAccounts(claudeDir, accountsDir);
+  assert.deepEqual(
+    before.map((a) => a.name),
+    ['default'],
+    'a reserved-but-not-logged-in account is not offered',
+  );
+
+  // Now log in.
+  fs.writeFileSync(path.join(accountsDir, 'work', '.credentials.json'), '{}');
+
+  const after = scanAccounts(claudeDir, accountsDir);
+  assert.deepEqual(after.map((a) => a.name), ['default', 'work']);
+  assert.notEqual(
+    JSON.stringify(before),
+    JSON.stringify(after),
+    'the change must be visible to a poller comparing successive scans',
+  );
+});

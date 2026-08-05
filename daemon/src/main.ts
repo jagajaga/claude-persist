@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
+  AccountInfo,
   ModelDescriptor,
   PersistedEvent,
   RateLimits,
@@ -144,6 +145,40 @@ function probeModels(): Promise<ModelDescriptor[]> {
     return modelCache ?? [];
   })();
   return modelProbe;
+}
+
+// ---------- accounts -------------------------------------------------------
+
+/**
+ * How often to notice an account appearing or being logged into.
+ *
+ * Polled rather than watched: logging in writes `.credentials.json` *inside* an
+ * existing account directory, which a non-recursive fs.watch on the parent never
+ * sees, and recursive watch is not dependable across platforms. The scan is a
+ * readdir plus one existsSync per account, so at this interval the cost is
+ * nothing next to keeping a watcher per directory correct.
+ */
+const ACCOUNTS_POLL_MS = 5000;
+
+let lastAccountsJson = '';
+
+/** Broadcast the account list, remembering it so the poller only fires on change. */
+function broadcastAccounts(accounts: AccountInfo[]): void {
+  lastAccountsJson = JSON.stringify(accounts);
+  broadcastAll({ kind: 'accounts', accounts });
+}
+
+/**
+ * Notice accounts added or logged into outside the extension.
+ *
+ * Without this the daemon only rescanned when asked, so an account you had just
+ * logged into via `claude /login` stayed missing from the model menu until the
+ * window was reloaded.
+ */
+function pollAccounts(): void {
+  const accounts = accountsStore.list();
+  if (JSON.stringify(accounts) === lastAccountsJson) return;
+  broadcastAccounts(accounts);
 }
 
 // ---------- plan rate limits (account-wide, learned from the live SDK push) -
@@ -338,7 +373,7 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
       // tear them down so the next message spawns fresh under the new one.
       // Sessions and transcripts are untouched — only the in-flight SDK query.
       for (const session of sessions.values()) session.disposeActiveQuery();
-      broadcastAll({ kind: 'accounts', accounts });
+      broadcastAccounts(accounts);
       broadcastAll({ kind: 'sessions_changed' });
       return accounts;
     }
@@ -512,6 +547,11 @@ async function start(): Promise<void> {
     }
   }
 
+  // Seed the cache, then keep watching for logins.
+  lastAccountsJson = JSON.stringify(accountsStore.list());
+  const accountsTimer = setInterval(pollAccounts, ACCOUNTS_POLL_MS);
+  accountsTimer.unref();
+
   let finished = false;
   const finish = (): void => {
     if (finished) return;
@@ -523,6 +563,7 @@ async function start(): Promise<void> {
     if (shuttingDown) return; // a second SIGTERM must not re-enter teardown
     shuttingDown = true;
     clearInterval(socketWatch);
+    clearInterval(accountsTimer);
     logLine(`daemon shutting down (${signal})`);
     for (const server of servers) server.close();
     // Only remove the socket if it is still the one we bound. Unconditional

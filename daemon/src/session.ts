@@ -13,7 +13,14 @@ import type { SessionMeta } from './registry.js';
 import { pendingTurnPath, sessionLogPath } from './paths.js';
 import { ROTATE_THRESHOLD, allLogFiles, loadTailAndCount, readRange, rotateActiveLog } from './logStore.js';
 import { accountsStore, ensureSdkTranscript, sdkTranscriptExists } from './accounts.js';
-import { MAX_ATTEMPTS, buildRetryEnvelope, isRateLimitResult, planRetry } from './limits.js';
+import {
+  MAX_ATTEMPTS,
+  STALL_MS,
+  STALL_RETRY_MS,
+  buildRetryEnvelope,
+  isRateLimitResult,
+  planRetry,
+} from './limits.js';
 
 /**
  * Recent events kept resident per session. Larger than
@@ -118,6 +125,9 @@ export class DaemonSession {
   private retryTimer: NodeJS.Timeout | null = null;
   /** Did the current turn get anywhere before it was interrupted? */
   private turnProducedOutput = false;
+  /** Last time the SDK said anything at all, for the stall watchdog. */
+  private lastSdkActivityAt = 0;
+  private stallTimer: NodeJS.Timeout | null = null;
   /** Newest events, oldest first, capped at MAX_TAIL — never the full transcript. */
   private tail: PersistedEvent[] = [];
   /** Total valid events ever appended (this session's next seq number). */
@@ -275,6 +285,7 @@ export class DaemonSession {
     this.turnProducedOutput = false;
     this.input!.push(envelope);
     this.setStatus('running');
+    this.armStallWatchdog();
   }
 
   /** The turn most recently submitted, kept so a rate-limited one can be replayed. */
@@ -291,7 +302,7 @@ export class DaemonSession {
    * The limit arrives as a normal `result` message, not an exception, so the
    * turn just ends with no answer — which is exactly why nothing used to retry.
    */
-  private parkForLimit(text: string): void {
+  private parkForLimit(text: string, opts: { stalled?: boolean } = {}): void {
     const envelope = this.lastEnvelope;
     if (!envelope) return; // nothing to replay (e.g. limit hit on a resumed probe)
     const attempts = (this.pending?.attempts ?? 0) + 1;
@@ -309,13 +320,17 @@ export class DaemonSession {
       });
       return;
     }
-    const plan = planRetry({
-      windows: this.callbacks.rateLimitWindows(),
-      text,
-      now: Date.now(),
-      attempts,
-      sessionId: this.meta.id,
-    });
+    // A stall is not evidence of a limit, so don't wait for a window reset that
+    // may not be the cause; retry soon and let the outcome tell us.
+    const plan = opts.stalled
+      ? { at: Date.now() + STALL_RETRY_MS, source: 'stall' as const }
+      : planRetry({
+          windows: this.callbacks.rateLimitWindows(),
+          text,
+          now: Date.now(),
+          attempts,
+          sessionId: this.meta.id,
+        });
     this.pending = {
       envelope: envelope.envelope,
       text: envelope.text,
@@ -330,11 +345,47 @@ export class DaemonSession {
     this.appendEvent({
       type: 'status',
       status: 'error',
-      detail: this.turnProducedOutput
-        ? `Rate limit reached partway through. This will continue automatically at ${new Date(plan.at).toISOString()} — you don't need to come back.`
-        : `Rate limit reached. Your message is queued and will be sent automatically at ${new Date(plan.at).toISOString()} — you don't need to come back.`,
+      detail: opts.stalled
+        ? `This turn stopped responding. Retrying automatically at ${new Date(plan.at).toISOString()} — you don't need to come back.`
+        : this.turnProducedOutput
+          ? `Rate limit reached partway through. This will continue automatically at ${new Date(plan.at).toISOString()} — you don't need to come back.`
+          : `Rate limit reached. Your message is queued and will be sent automatically at ${new Date(plan.at).toISOString()} — you don't need to come back.`,
     });
     this.scheduleRetry();
+  }
+
+  /**
+   * Watch for a turn that has gone silent.
+   *
+   * The daemon had no turn timeout at all, so a query that hung left the session
+   * "running" indefinitely: no result, no error, nothing in the panel to say it
+   * had stopped. Parking a stalled turn turns that into a retry that continues
+   * the work, and MAX_ATTEMPTS bounds it.
+   */
+  private armStallWatchdog(): void {
+    this.clearStallWatchdog();
+    this.lastSdkActivityAt = Date.now();
+    this.stallTimer = setInterval(() => {
+      if (this.status !== 'running') {
+        this.clearStallWatchdog();
+        return;
+      }
+      const silent = Date.now() - this.lastSdkActivityAt;
+      if (silent < STALL_MS) return;
+      this.clearStallWatchdog();
+      this.callbacks.log(
+        `session ${this.meta.id} stalled: no SDK activity for ${Math.round(silent / 60000)}m — queueing a retry`,
+      );
+      this.parkForLimit('', { stalled: true });
+    }, 60_000);
+    this.stallTimer.unref();
+  }
+
+  private clearStallWatchdog(): void {
+    if (this.stallTimer) {
+      clearInterval(this.stallTimer);
+      this.stallTimer = null;
+    }
   }
 
   /** (Re)arm the retry timer from this.pending. Safe to call repeatedly. */
@@ -371,6 +422,7 @@ export class DaemonSession {
     });
     this.status = 'running';
     this.input!.push(buildRetryEnvelope(pending, this.meta.sdkSessionId ?? ''));
+    this.armStallWatchdog();
   }
 
   private cancelPendingRetry(reason: string): void {
@@ -505,6 +557,7 @@ export class DaemonSession {
    * and could outlive the daemon that spawned it.
    */
   async dispose(): Promise<void> {
+    this.clearStallWatchdog();
     if (this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
@@ -694,16 +747,27 @@ export class DaemonSession {
       for await (const raw of q) {
         this.handleSdkMessage(raw as Record<string, unknown>);
       }
-      this.setStatus('idle');
+      // Only speak for the *current* query. A query disposed by a retry finishes
+      // its loop afterwards, and setting idle here overwrote the running status
+      // the retry had just set — so a resumed turn showed as idle in the sidebar.
+      if (this.activeQuery === q) this.setStatus('idle');
     } catch (err) {
-      this.setStatus('error', err instanceof Error ? err.message : String(err));
+      if (this.activeQuery === q) {
+        this.setStatus('error', err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      this.activeQuery = null;
-      this.input = null;
+      // Same reasoning as above, and this one is worse: clearing
+      // unconditionally would drop the reference to the *replacement* query a
+      // retry had already installed, leaving the session unable to send.
+      if (this.activeQuery === q) {
+        this.activeQuery = null;
+        this.input = null;
+      }
     }
   }
 
   private handleSdkMessage(msg: Record<string, unknown>): void {
+    this.lastSdkActivityAt = Date.now();
     switch (msg.type) {
       case 'system': {
         if (msg.subtype === 'init' && typeof msg.session_id === 'string') {

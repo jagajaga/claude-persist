@@ -4,6 +4,8 @@ import type { RateLimits } from '@claude-persist/shared';
 import {
   MAX_WAIT_MS,
   MIN_WAIT_MS,
+  STALL_MS,
+  STALL_RETRY_MS,
   buildRetryEnvelope,
   isRateLimitResult,
   parseResetTime,
@@ -259,4 +261,27 @@ test('buildRetryEnvelope: continuation carries the current sdk session id', () =
     'sdk-changed-after-restart',
   ) as { session_id: string };
   assert.equal(env.session_id, 'sdk-changed-after-restart');
+});
+
+// ------------------------------------------------------------ stall handling
+
+/**
+ * The failure the user actually hit: a turn's last recorded event was a
+ * `tool_use` and then nothing — no result, no error, no status change — and it
+ * sat overnight. Nothing in the retry machinery fired, because detection only
+ * hooked the `result` message. These constants define the watchdog that covers
+ * a turn going silent instead of failing.
+ */
+test('STALL_MS is generous enough not to interrupt a long-running tool', () => {
+  assert.ok(STALL_MS >= 15 * 60_000, 'a long test suite emits no SDK messages while it runs');
+});
+
+/**
+ * A stall is not evidence of a rate limit, so it must not wait for a window
+ * reset that may have nothing to do with it. Retry soon; if a limit really was
+ * the cause, the retry returns a limit result and re-parks with the real timing.
+ */
+test('STALL_RETRY_MS retries soon rather than waiting out a window', () => {
+  assert.ok(STALL_RETRY_MS <= 5 * 60_000);
+  assert.ok(STALL_RETRY_MS < MAX_WAIT_MS);
 });

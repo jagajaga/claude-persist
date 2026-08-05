@@ -29,6 +29,25 @@ const RESET_BUFFER_MS = 30_000;
  */
 export const MAX_ATTEMPTS = 5;
 
+/**
+ * Silence from the SDK that means a turn has died rather than gone quiet.
+ *
+ * Generous on purpose: a turn running a long test suite produces no SDK messages
+ * while the tool executes, so a short threshold would interrupt real work. But
+ * without any threshold a turn can hang forever, which is what happened — a
+ * session's last recorded event was a `tool_use` and it sat there overnight, with
+ * no result, no error, and no status change to show anything was wrong.
+ */
+export const STALL_MS = 20 * 60 * 1000;
+
+/**
+ * How soon to retry a stalled turn. Short, because a stall is not evidence of a
+ * rate limit: if the cause *was* a limit, the retry produces a limit result and
+ * re-parks with the real reset time; if it was a transient hang, the work resumes
+ * in a couple of minutes instead of never.
+ */
+export const STALL_RETRY_MS = 2 * 60 * 1000;
+
 const LIMIT_PATTERNS = [
   /\brate[- ]limited\b/i,
   /\b(usage|session|weekly|spend)[- ]limits?\b/i,

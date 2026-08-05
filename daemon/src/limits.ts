@@ -19,8 +19,8 @@ import type { RateLimits } from '@claude-persist/shared';
 export const MAX_WAIT_MS = 6 * 60 * 60 * 1000;
 /** Never retry instantly, even if the reset is already in the past. */
 export const MIN_WAIT_MS = 30_000;
-/** Buffer past the reset instant, so we don't miss by a second. */
-const RESET_BUFFER_MS = 30_000;
+/** Wait a minute past the reset before sending, so we can't miss it by seconds. */
+const RESET_BUFFER_MS = 60_000;
 
 /**
  * Give up re-parking after this many attempts and surface the failure instead.
@@ -58,22 +58,42 @@ const LIMIT_PATTERNS = [
 ];
 
 /**
- * Was this turn refused by a plan rate limit?
- *
- * `isError` is the load-bearing half, and it is not optional. Matching on text
- * alone is fundamentally unsafe here: a *successful* answer discussing rate
- * limits — quoting "You've hit your session limit · resets 8:20pm (UTC)", say —
- * reads exactly like a rejection. That really happened: an assistant reply about
- * this very feature was misclassified, re-parked, and resent five hours later,
- * then again, in a loop that no window ever justified (five_hour sat at 0%,
- * status allowed). A completed turn must never be treated as limited, whatever
- * its prose says, so the patterns below only ever apply to an errored result.
+ * A real limit notice is short and stands alone — it *is* the whole result, e.g.
+ * "You've hit your session limit · resets 8:20pm (UTC)". Anything longer is a
+ * reply that merely mentions limits.
  */
-export function isRateLimitResult(text: unknown, isError: boolean): boolean {
-  if (!isError) return false;
+const MAX_NOTICE_LENGTH = 300;
+
+/**
+ * Is this result nothing but a plan rate-limit notice?
+ *
+ * The length rule is what makes this safe, and it replaces two signals that both
+ * proved untrustworthy. Matching patterns anywhere in the text misfired on an
+ * assistant reply *about* rate limits, which quotes the notice verbatim — that
+ * caused a five-hour resend loop. Requiring the SDK's `is_error`/`subtype` to
+ * agree misfired too: they reported failure for a turn that plainly succeeded,
+ * with five_hour at 23% and status allowed.
+ *
+ * Both false positives were long replies. A rejection replaces the answer rather
+ * than appearing inside one, so "the entire result is a short limit notice" is
+ * the discriminator that actually separates them, and it needs no flags at all.
+ */
+export function isLimitNotice(text: unknown): boolean {
   if (typeof text !== 'string') return false;
-  return LIMIT_PATTERNS.some((re) => re.test(text));
+  const trimmed = text.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_NOTICE_LENGTH) return false;
+  return LIMIT_PATTERNS.some((re) => re.test(trimmed));
 }
+
+/**
+ * What gets sent when the window reopens: exactly what a human types.
+ *
+ * Sending this as an ordinary user message means the transcript shows it, the
+ * normal send path handles it, and the model continues from the conversation it
+ * can already see. That replaces replaying the original envelope (which made the
+ * work start over) and a bespoke continuation prompt.
+ */
+export const RESUME_MESSAGE = 'restart and continue';
 
 /**
  * Do the plan windows corroborate a rate-limit rejection?
@@ -200,39 +220,3 @@ export function planRetry(opts: {
   at = Math.max(at, now + MIN_WAIT_MS);
   return { at, source };
 }
-
-/**
- * What to send when a parked turn resumes.
- *
- * Replaying the user's original message makes the model start the work over,
- * which is not resuming — it is repeating. The SDK transcript already holds
- * everything the interrupted turn produced (partial replies, tool calls and
- * their results), and `resume` puts all of it back in context, so the useful
- * thing to send is an instruction to carry on from there.
- *
- * Only when the limit struck before the turn produced anything is replaying the
- * original message correct: there is nothing to continue, and a bare "carry on"
- * would leave the model with no task.
- */
-export function buildRetryEnvelope(
-  pending: { envelope: unknown; producedOutput: boolean },
-  sdkSessionId: string,
-): unknown {
-  if (!pending.producedOutput) return pending.envelope;
-  return {
-    type: 'user',
-    message: {
-      role: 'user',
-      content: [{ type: 'text', text: CONTINUATION_PROMPT }],
-    },
-    parent_tool_use_id: null,
-    session_id: sdkSessionId,
-  };
-}
-
-export const CONTINUATION_PROMPT =
-  '[claude-persist] Your previous turn was cut off partway through by a plan rate limit, ' +
-  'which has now reset. The conversation above is your own work up to the moment it stopped, ' +
-  'including any tool calls that already ran. Continue from exactly where you left off: ' +
-  'finish what remained, and do not redo work that is already complete or start over. ' +
-  'If the work was already finished, just say so briefly.';

@@ -17,8 +17,8 @@ import {
   MAX_ATTEMPTS,
   STALL_MS,
   STALL_RETRY_MS,
-  buildRetryEnvelope,
-  isRateLimitResult,
+  RESUME_MESSAGE,
+  isLimitNotice,
   planRetry,
   windowsLookLimited,
 } from './limits.js';
@@ -91,17 +91,10 @@ export interface SessionCallbacks {
 
 /** A turn the plan limit rejected, held until the window resets. */
 interface PendingTurn {
-  /** The exact SDK envelope we pushed, replayed verbatim on retry. */
-  envelope: unknown;
   retryAt: number;
   attempts: number;
-  /** For the UI notice. */
+  /** The limit notice itself, for the panel message and for parsing the reset. */
   text: string;
-  /**
-   * Whether the interrupted turn had already produced work. Decides between
-   * continuing and replaying — see buildRetryEnvelope.
-   */
-  producedOutput: boolean;
 }
 
 /** Truncate long tool payloads before persisting/rendering. */
@@ -124,8 +117,6 @@ export class DaemonSession {
   /** Set while a turn is parked waiting for a rate limit to reset. */
   private pending: PendingTurn | null = null;
   private retryTimer: NodeJS.Timeout | null = null;
-  /** Did the current turn get anywhere before it was interrupted? */
-  private turnProducedOutput = false;
   /** Last time the SDK said anything at all, for the stall watchdog. */
   private lastSdkActivityAt = 0;
   private stallTimer: NodeJS.Timeout | null = null;
@@ -211,13 +202,6 @@ export class DaemonSession {
   }
 
   private appendEvent(event: ChatEvent): void {
-    if (
-      event.type === 'assistant_text' ||
-      event.type === 'tool_use' ||
-      event.type === 'tool_result'
-    ) {
-      this.turnProducedOutput = true;
-    }
     const persisted: PersistedEvent = { seq: this.totalCount, ts: Date.now(), event };
     this.totalCount++;
     this.tail.push(persisted);
@@ -282,15 +266,10 @@ export class DaemonSession {
       parent_tool_use_id: null,
       session_id: this.meta.sdkSessionId ?? '',
     };
-    this.lastEnvelope = { envelope, text };
-    this.turnProducedOutput = false;
     this.input!.push(envelope);
     this.setStatus('running');
     this.armStallWatchdog();
   }
-
-  /** The turn most recently submitted, kept so a rate-limited one can be replayed. */
-  private lastEnvelope: { envelope: unknown; text: string } | null = null;
 
   /** Epoch ms a parked turn will be retried, or null. Surfaced in SessionInfo. */
   get retryAt(): number | null {
@@ -304,8 +283,6 @@ export class DaemonSession {
    * turn just ends with no answer — which is exactly why nothing used to retry.
    */
   private parkForLimit(text: string, opts: { stalled?: boolean } = {}): void {
-    const envelope = this.lastEnvelope;
-    if (!envelope) return; // nothing to replay (e.g. limit hit on a resumed probe)
     const attempts = (this.pending?.attempts ?? 0) + 1;
     if (attempts > MAX_ATTEMPTS) {
       // Stop rather than loop: whatever keeps failing is not clearing on its own.
@@ -332,13 +309,7 @@ export class DaemonSession {
           attempts,
           sessionId: this.meta.id,
         });
-    this.pending = {
-      envelope: envelope.envelope,
-      text: envelope.text,
-      retryAt: plan.at,
-      attempts,
-      producedOutput: this.turnProducedOutput,
-    };
+    this.pending = { text, retryAt: plan.at, attempts };
     this.persistPending();
     this.callbacks.log(
       `session ${this.meta.id} rate limited; retry #${attempts} at ${new Date(plan.at).toISOString()} (from ${plan.source})`,
@@ -347,10 +318,8 @@ export class DaemonSession {
       type: 'status',
       status: 'error',
       detail: opts.stalled
-        ? `This turn stopped responding. Retrying automatically at ${new Date(plan.at).toISOString()} — you don't need to come back.`
-        : this.turnProducedOutput
-          ? `Rate limit reached partway through. This will continue automatically at ${new Date(plan.at).toISOString()} — you don't need to come back.`
-          : `Rate limit reached. Your message is queued and will be sent automatically at ${new Date(plan.at).toISOString()} — you don't need to come back.`,
+        ? `This turn stopped responding. "${RESUME_MESSAGE}" will be sent automatically at ${new Date(plan.at).toISOString()} — you don't need to come back.`
+        : `Rate limit reached. "${RESUME_MESSAGE}" will be sent automatically at ${new Date(plan.at).toISOString()} — you don't need to come back.`,
     });
     this.scheduleRetry();
   }
@@ -406,24 +375,26 @@ export class DaemonSession {
     this.retryTimer.unref();
   }
 
+  /**
+   * Send "restart and continue" as an ordinary message.
+   *
+   * This is exactly what the user did by hand, and going through sendMessage
+   * means the transcript records it, the SDK query is created the usual way, and
+   * the model continues from the conversation it can already see. It replaced a
+   * bespoke path that replayed the original envelope — which made the work start
+   * over rather than continue — and a hand-written continuation prompt.
+   */
   private runPendingRetry(): void {
     const pending = this.pending;
     if (!pending) return;
-    this.callbacks.log(`session ${this.meta.id} retrying rate-limited turn (attempt ${pending.attempts})`);
-    // Start a fresh query rather than trusting one that has been idle for hours;
-    // it resumes the same sdkSessionId, so no context is lost.
-    this.disposeActiveQuery();
-    this.ensureQuery();
-    this.appendEvent({
-      type: 'status',
-      status: 'running',
-      detail: pending.producedOutput
-        ? 'Rate limit reset — continuing where it stopped…'
-        : 'Rate limit reset — resending your queued message…',
-    });
-    this.status = 'running';
-    this.input!.push(buildRetryEnvelope(pending, this.meta.sdkSessionId ?? ''));
-    this.armStallWatchdog();
+    this.callbacks.log(
+      `session ${this.meta.id} sending "${RESUME_MESSAGE}" (attempt ${pending.attempts})`,
+    );
+    // Clear first: sendMessage cancels anything pending, and that cancellation
+    // would otherwise announce itself in the panel as if the user had intervened.
+    this.pending = null;
+    this.clearPersistedPending();
+    this.sendMessage(RESUME_MESSAGE);
   }
 
   private cancelPendingRetry(reason: string): void {
@@ -446,7 +417,7 @@ export class DaemonSession {
   restorePending(): void {
     try {
       const raw = JSON.parse(fs.readFileSync(pendingTurnPath(this.meta.id), 'utf8')) as PendingTurn;
-      if (!raw || typeof raw.retryAt !== 'number' || raw.envelope === undefined) return;
+      if (!raw || typeof raw.retryAt !== 'number') return;
       this.pending = raw;
       this.status = 'running';
       this.scheduleRetry();
@@ -878,9 +849,7 @@ export class DaemonSession {
         // Only an errored turn can be a rate-limit rejection. `subtype` is
         // 'success' on a normal answer; anything else, or is_error, means the
         // turn did not complete.
-        const turnFailed =
-          msg.is_error === true || (msg.subtype !== undefined && msg.subtype !== 'success');
-        const textLooksLimited = isRateLimitResult(summaryText, turnFailed);
+        const textLooksLimited = isLimitNotice(summaryText);
         // Corroborate against measured usage before parking. Prose and the
         // result's own error flags have both produced false positives; the
         // windows are data.

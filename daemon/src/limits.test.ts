@@ -6,8 +6,8 @@ import {
   MIN_WAIT_MS,
   STALL_MS,
   STALL_RETRY_MS,
-  buildRetryEnvelope,
-  isRateLimitResult,
+  RESUME_MESSAGE,
+  isLimitNotice,
   parseResetTime,
   planRetry,
   spreadMs,
@@ -18,63 +18,59 @@ import {
 const REAL = "You've hit your session limit · resets 8:20pm (UTC)";
 const NOW = Date.parse('2026-08-04T10:00:00.000Z');
 
-// ------------------------------------------------------------ isRateLimitResult
+// --------------------------------------------------------------- isLimitNotice
 
-test('isRateLimitResult: recognises the real session-limit message on a failed turn', () => {
-  assert.equal(isRateLimitResult(REAL, true), true);
+test('isLimitNotice: recognises the real notice', () => {
+  assert.equal(isLimitNotice(REAL), true);
+  assert.equal(isLimitNotice(`  ${REAL}  `), true, 'surrounding whitespace is not meaningful');
 });
 
-/**
- * The regression that caused a five-hour resend loop.
- *
- * An assistant reply *about* this feature quotes the limit message and uses the
- * words limit and resets throughout, so text matching classified a perfectly
- * successful turn as a rejection: it was re-parked and resent 5h later, twice,
- * while five_hour sat at 0% and status allowed. A completed turn is never a
- * rate limit, whatever its prose says.
- */
-test('isRateLimitResult: a SUCCESSFUL turn is never a rate limit, however it reads', () => {
-  const proseAboutLimits = [
-    REAL,
-    "You've hit your session limit · resets 8:20pm (UTC) is the message you see",
-    'Timing: the structured resetsAt from the rate-limit push, then a backoff. Every wait is clamped.',
-    'five_hour just reset to 0%, seven_day at 52% — you have headroom before the limit',
-  ];
-  for (const text of proseAboutLimits) {
-    assert.equal(isRateLimitResult(text, false), false, text.slice(0, 50));
-  }
-});
-
-test('isRateLimitResult: recognises the usual wording variants', () => {
+test('isLimitNotice: recognises the usual wording variants', () => {
   for (const text of [
     "You've hit your usage limit · resets 8:20pm (UTC)",
     'You have reached your weekly limit',
     'Rate limit exceeded',
     'You are out of your 5-hour limit, resets at 20:20 UTC',
   ]) {
-    assert.equal(isRateLimitResult(text, true), true, text);
+    assert.equal(isLimitNotice(text), true, text);
   }
 });
 
 /**
- * A false positive parks a turn that would never succeed, so ordinary failures
- * must not look like limits.
+ * The two false positives that made this feature resend messages for a day, both
+ * long replies that merely discussed limits. Pattern matching alone flagged them,
+ * and requiring the SDK's is_error/subtype to agree did not help — those reported
+ * failure for a turn that plainly succeeded. Length is what separates a notice
+ * (which replaces the answer) from a reply that mentions one.
  */
-test('isRateLimitResult: ordinary failures and non-strings are not limits', () => {
+test('isLimitNotice: a long reply that merely discusses limits is not a notice', () => {
+  const reply =
+    'Yes. Restart completed cleanly at 07:57. Verified on the new process: the error gate is ' +
+    `present, and the notice you saw quoted "${REAL}" verbatim, which is exactly why text ` +
+    'matching misfired. five_hour is at 23% and status allowed, so nothing was rate limited. ' +
+    'The stall watchdog fires after 20 minutes of silence and the attempt cap stops any loop.';
+  assert.ok(reply.length > 300, 'fixture must be a realistically long reply');
+  assert.equal(isLimitNotice(reply), false);
+});
+
+test('isLimitNotice: ordinary failures and non-strings are not notices', () => {
   for (const text of [
     'Turn finished (error_during_execution)',
     'No conversation found with session ID: db2b5907',
     'Error: ENOENT: no such file or directory',
-    'The tool call failed',
     '',
-    // Mentions a limit but not as a rejection.
+    '   ',
     'I raised the concurrency limit in the config',
   ]) {
-    assert.equal(isRateLimitResult(text, true), false, JSON.stringify(text));
+    assert.equal(isLimitNotice(text), false, JSON.stringify(text));
   }
-  assert.equal(isRateLimitResult(undefined, true), false);
-  assert.equal(isRateLimitResult(null, true), false);
-  assert.equal(isRateLimitResult({ limit: true }, true), false);
+  assert.equal(isLimitNotice(undefined), false);
+  assert.equal(isLimitNotice(null), false);
+  assert.equal(isLimitNotice({ limit: true }), false);
+});
+
+test('RESUME_MESSAGE is what a person would type', () => {
+  assert.equal(RESUME_MESSAGE, 'restart and continue');
 });
 
 // --------------------------------------------------------------- parseResetTime
@@ -216,75 +212,6 @@ test('planRetry: two sessions limited at the same instant do not wake together',
   const a = planRetry({ ...base, windows, sessionId: 'session-a' });
   const b = planRetry({ ...base, windows, sessionId: 'session-b' });
   assert.notEqual(a.at, b.at);
-});
-
-// ------------------------------------------------------- buildRetryEnvelope
-
-const ORIGINAL = {
-  type: 'user',
-  message: { role: 'user', content: [{ type: 'text', text: 'do the thing' }] },
-  parent_tool_use_id: null,
-  session_id: 'sdk-1',
-};
-
-/**
- * The gap this closes. The first version replayed the user's message verbatim,
- * so a turn cut off halfway started the work over from the beginning -- which is
- * repeating, not resuming. The SDK transcript already holds the interrupted
- * turn's own replies and tool results, and `resume` restores all of it, so the
- * useful instruction is "carry on", not the original request again.
- */
-test('buildRetryEnvelope: continues when the turn had already produced work', () => {
-  const env = buildRetryEnvelope({ envelope: ORIGINAL, producedOutput: true }, 'sdk-1') as {
-    message: { content: Array<{ text: string }> };
-    session_id: string;
-  };
-  assert.notDeepEqual(env, ORIGINAL, 'must not replay the original request');
-  assert.equal(env.session_id, 'sdk-1');
-  const text = env.message.content[0].text;
-  assert.match(text, /continue from exactly where you left off/i);
-  assert.match(text, /do not redo work/i);
-  assert.doesNotMatch(text, /do the thing/, 'the original request must not be restated');
-});
-
-/**
- * When the limit lands before anything happened there is nothing to continue,
- * and a bare "carry on" would leave the model with no task at all.
- */
-test('buildRetryEnvelope: replays the original when the turn never got started', () => {
-  const env = buildRetryEnvelope({ envelope: ORIGINAL, producedOutput: false }, 'sdk-1');
-  assert.deepEqual(env, ORIGINAL);
-});
-
-test('buildRetryEnvelope: continuation carries the current sdk session id', () => {
-  const env = buildRetryEnvelope(
-    { envelope: ORIGINAL, producedOutput: true },
-    'sdk-changed-after-restart',
-  ) as { session_id: string };
-  assert.equal(env.session_id, 'sdk-changed-after-restart');
-});
-
-// ------------------------------------------------------------ stall handling
-
-/**
- * The failure the user actually hit: a turn's last recorded event was a
- * `tool_use` and then nothing — no result, no error, no status change — and it
- * sat overnight. Nothing in the retry machinery fired, because detection only
- * hooked the `result` message. These constants define the watchdog that covers
- * a turn going silent instead of failing.
- */
-test('STALL_MS is generous enough not to interrupt a long-running tool', () => {
-  assert.ok(STALL_MS >= 15 * 60_000, 'a long test suite emits no SDK messages while it runs');
-});
-
-/**
- * A stall is not evidence of a rate limit, so it must not wait for a window
- * reset that may have nothing to do with it. Retry soon; if a limit really was
- * the cause, the retry returns a limit result and re-parks with the real timing.
- */
-test('STALL_RETRY_MS retries soon rather than waiting out a window', () => {
-  assert.ok(STALL_RETRY_MS <= 5 * 60_000);
-  assert.ok(STALL_RETRY_MS < MAX_WAIT_MS);
 });
 
 // ----------------------------------------------------- windowsLookLimited

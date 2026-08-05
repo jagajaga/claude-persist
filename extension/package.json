@@ -143,6 +143,11 @@
           "default": [],
           "description": "Extra model ids merged into the model dropdown (e.g. claude-opus-5) — for models the SDK's probed list doesn't include yet. Entries the SDK already lists are ignored."
         },
+        "claudePersist.switchAccountOnLimit": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "When a plan rate limit is hit, switch to the next logged-in account (the list wraps) and continue automatically. When every account is limited, wait for whichever limit ends soonest and continue then.\n\nSwitching is daemon-wide, so it moves **every** session to the new account. Each switch also copies the session transcript into the new account's directory and starts with a cold prompt cache, so the first turn after a switch costs more.\n\nTurn this off to keep work on one account and simply wait for its limit to reset."
+        },
         "claudePersist.connectionIndicator": {
           "type": "boolean",
           "default": true,

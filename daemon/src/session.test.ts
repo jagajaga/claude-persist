@@ -28,6 +28,8 @@ const noopCallbacks = {
   onUsage(): void {},
   rateLimitWindows: () => ({}),
   log(): void {},
+  onLimited: (at: number) => ({ retryAt: at, switchedTo: null }),
+  beforeRetry: () => null,
 };
 
 function makeSession(id: string): InstanceType<typeof DaemonSession> {

@@ -25,7 +25,7 @@ const socketPath = path.join(baseDir, 'daemon.sock');
 // package is ESM, so the constant can't be require()d from this CJS module).
 // protocolVersion.test.ts asserts the two stay equal — desyncing them makes
 // the extension kill every daemon it spawns.
-const EXPECTED_PROTOCOL = 22;
+const EXPECTED_PROTOCOL = 23;
 
 /** How long to wait for a reply before treating the daemon as wedged. */
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -440,6 +440,11 @@ export class DaemonClient {
 
   deleteSession(sessionId: string): Promise<void> {
     return this.request({ op: 'deleteSession', sessionId });
+  }
+
+  /** Push VS Code settings the daemon acts on but cannot read for itself. */
+  setOptions(opts: { switchAccountOnLimit?: boolean }): Promise<unknown> {
+    return this.request({ op: 'setOptions', ...opts });
   }
 
   listAccounts(): Promise<AccountInfo[]> {

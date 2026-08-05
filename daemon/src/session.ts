@@ -87,6 +87,14 @@ export interface SessionCallbacks {
   rateLimitWindows(): RateLimits;
   /** Lifecycle logging (parked/retrying), so a stuck turn is diagnosable. */
   log(message: string): void;
+  /**
+   * The active account was refused at `ownResetAt`. The daemon records it and
+   * may move to an account with room; the reply says when to retry and which
+   * account we ended up on.
+   */
+  onLimited(ownResetAt: number): { retryAt: number; switchedTo: string | null };
+  /** About to fire a queued retry; may switch to an account whose limit ended. */
+  beforeRetry(): string | null;
 }
 
 /** A turn the plan limit rejected, held until the window resets. */
@@ -309,17 +317,24 @@ export class DaemonSession {
           attempts,
           sessionId: this.meta.id,
         });
-    this.pending = { text, retryAt: plan.at, attempts };
+    // A stall is not a limit, so it must not mark the account spent or rotate.
+    const decision = opts.stalled
+      ? { retryAt: plan.at, switchedTo: null as string | null }
+      : this.callbacks.onLimited(plan.at);
+    this.pending = { text, retryAt: decision.retryAt, attempts };
     this.persistPending();
     this.callbacks.log(
-      `session ${this.meta.id} rate limited; retry #${attempts} at ${new Date(plan.at).toISOString()} (from ${plan.source})`,
+      `session ${this.meta.id} rate limited; retry #${attempts} at ${new Date(decision.retryAt).toISOString()} ` +
+        `(reset ${plan.source}${decision.switchedTo ? `, switched to ${decision.switchedTo}` : ''})`,
     );
     this.appendEvent({
       type: 'status',
       status: 'error',
       detail: opts.stalled
-        ? `This turn stopped responding. "${RESUME_MESSAGE}" will be sent automatically at ${new Date(plan.at).toISOString()} — you don't need to come back.`
-        : `Rate limit reached. "${RESUME_MESSAGE}" will be sent automatically at ${new Date(plan.at).toISOString()} — you don't need to come back.`,
+        ? `This turn stopped responding. "${RESUME_MESSAGE}" will be sent automatically at ${new Date(decision.retryAt).toISOString()} — you don't need to come back.`
+        : decision.switchedTo
+          ? `Rate limit reached. Switched to account "${decision.switchedTo}" and continuing — you don't need to come back.`
+          : `Rate limit reached on every account. "${RESUME_MESSAGE}" will be sent automatically at ${new Date(decision.retryAt).toISOString()} — you don't need to come back.`,
     });
     this.scheduleRetry();
   }
@@ -387,8 +402,10 @@ export class DaemonSession {
   private runPendingRetry(): void {
     const pending = this.pending;
     if (!pending) return;
+    const switched = this.callbacks.beforeRetry();
     this.callbacks.log(
-      `session ${this.meta.id} sending "${RESUME_MESSAGE}" (attempt ${pending.attempts})`,
+      `session ${this.meta.id} sending "${RESUME_MESSAGE}" (attempt ${pending.attempts}` +
+        `${switched ? `, on account ${switched}` : ''})`,
     );
     // Clear first: sendMessage cancels anything pending, and that cancellation
     // would otherwise announce itself in the panel as if the user had intervened.

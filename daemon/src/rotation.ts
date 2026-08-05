@@ -1,0 +1,129 @@
+// Deciding what to do when the active account is refused by a plan limit:
+// move to the next account that still has room, or — when every account is
+// spent — wait for whichever limit ends soonest.
+//
+// Pure functions. The daemon holds the state (which accounts are limited, when
+// we last switched); everything decided here is a function of that state, so the
+// wrap-around, the cooldown and the all-limited fallback are testable without a
+// daemon, an account, or a rate limit.
+import type { AccountInfo } from '@claude-persist/shared';
+
+/**
+ * Accounts are keyed by config dir, but the default account's is null. One
+ * function so the map key and the lookups can never disagree.
+ */
+export function accountKey(configDir: string | null): string {
+  return configDir ?? '';
+}
+
+/**
+ * How long after a switch to ignore further limit reports.
+ *
+ * Sessions hit the limit seconds apart, so without this three concurrent
+ * sessions would each rotate and cycle the account three times for one wall of
+ * limits. The first switch serves everyone; the rest simply retry on the account
+ * that is now active.
+ */
+export const SWITCH_COOLDOWN_MS = 30_000;
+
+/** Small pause after switching, so the previous query finishes tearing down. */
+export const SWITCH_SETTLE_MS = 5_000;
+
+export interface RotationState {
+  /** accountKey -> epoch ms its limit ends. Entries in the past are ignored. */
+  limited: Map<string, number>;
+  /** When the daemon last changed account, for the cooldown. */
+  lastSwitchAt: number;
+}
+
+export interface RotationPlan {
+  /** The account to activate, or null to stay put. */
+  switchTo: AccountInfo | null;
+  /** When the session should send "restart and continue". */
+  retryAt: number;
+  why: 'switched' | 'cooldown' | 'all-limited' | 'disabled' | 'single-account';
+}
+
+function usable(account: AccountInfo, state: RotationState, now: number): boolean {
+  const until = state.limited.get(accountKey(account.configDir));
+  return until === undefined || until <= now;
+}
+
+/**
+ * The next account after `current`, wrapping, that is not currently limited.
+ *
+ * Order is the list's own order — the same order the model menu shows — so
+ * rotation is predictable rather than dependent on which account happened to
+ * fail. Returns null when every other account is limited too.
+ */
+export function nextUsableAccount(
+  accounts: AccountInfo[],
+  current: string | null,
+  state: RotationState,
+  now: number,
+): AccountInfo | null {
+  if (accounts.length < 2) return null;
+  const currentKey = accountKey(current);
+  const start = accounts.findIndex((a) => accountKey(a.configDir) === currentKey);
+  // An unknown current account (just deleted, say) still rotates: start at 0.
+  const from = start >= 0 ? start : -1;
+  for (let step = 1; step <= accounts.length; step++) {
+    const candidate = accounts[(from + step + accounts.length) % accounts.length];
+    if (accountKey(candidate.configDir) === currentKey) continue;
+    if (usable(candidate, state, now)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * What to do now that the active account has been refused.
+ *
+ * `ownResetAt` is when *this* account's limit ends — the fallback when there is
+ * nowhere else to go.
+ */
+export function planAfterLimit(opts: {
+  accounts: AccountInfo[];
+  current: string | null;
+  state: RotationState;
+  now: number;
+  ownResetAt: number;
+  enabled: boolean;
+}): RotationPlan {
+  const { accounts, current, state, now, ownResetAt, enabled } = opts;
+  if (!enabled) return { switchTo: null, retryAt: ownResetAt, why: 'disabled' };
+  if (accounts.length < 2) return { switchTo: null, retryAt: ownResetAt, why: 'single-account' };
+
+  // Another session just switched us; don't cycle again, just try where we are.
+  if (now - state.lastSwitchAt < SWITCH_COOLDOWN_MS) {
+    return { switchTo: null, retryAt: now + SWITCH_SETTLE_MS, why: 'cooldown' };
+  }
+
+  const next = nextUsableAccount(accounts, current, state, now);
+  if (next) return { switchTo: next, retryAt: now + SWITCH_SETTLE_MS, why: 'switched' };
+
+  // Everything is spent: wait for whichever limit ends first, including ours.
+  const ends = [ownResetAt];
+  for (const [, until] of state.limited) if (until > now) ends.push(until);
+  return { switchTo: null, retryAt: Math.min(...ends), why: 'all-limited' };
+}
+
+/**
+ * Which account to be on when a queued retry finally fires.
+ *
+ * Called at wake rather than decided at park time: by then a limit has ended,
+ * and the account to use is the one that ended — not whichever account we
+ * happened to stop on when everything was exhausted.
+ */
+export function accountForRetry(
+  accounts: AccountInfo[],
+  current: string | null,
+  state: RotationState,
+  now: number,
+  enabled: boolean,
+): AccountInfo | null {
+  if (!enabled || accounts.length < 2) return null;
+  const currentAccount = accounts.find((a) => accountKey(a.configDir) === accountKey(current));
+  // Already on an account with room — nothing to do.
+  if (currentAccount && usable(currentAccount, state, now)) return null;
+  return nextUsableAccount(accounts, current, state, now);
+}

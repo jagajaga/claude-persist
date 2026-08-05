@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 22;
+export const PROTOCOL_VERSION = 23;
 
 /**
  * Reply to `hello`. `entry` is the module path the daemon was launched from;
@@ -201,6 +201,11 @@ export type Request =
   | { id: number; op: 'importClaudeSession'; file: string }
   | { id: number; op: 'deleteSession'; sessionId: string }
   | { id: number; op: 'listAccounts' }
+  /**
+   * Daemon-side preferences owned by VS Code settings. The daemon cannot read
+   * them itself, so the extension pushes them on connect and on change.
+   */
+  | { id: number; op: 'setOptions'; switchAccountOnLimit?: boolean }
   /** `configDir: null` switches back to the default account. */
   | { id: number; op: 'setAccount'; configDir: string | null };
 

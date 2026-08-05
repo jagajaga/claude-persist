@@ -31,6 +31,13 @@ let latestRateLimits: RateLimits = {};
 /** From the SDK usage call: 'pro' | 'max' | ... or null for API-key sessions. */
 let latestSubscriptionType: string | null = null;
 
+/** Whether a rate limit should move work to the next logged-in account. */
+function switchAccountOnLimitSetting(): boolean {
+  return vscode.workspace
+    .getConfiguration('claudePersist')
+    .get<boolean>('switchAccountOnLimit', true);
+}
+
 function severityColor(sev: Severity): vscode.ThemeColor | undefined {
   if (sev === 'error') return new vscode.ThemeColor('statusBarItem.errorBackground');
   if (sev === 'warning') return new vscode.ThemeColor('statusBarItem.warningBackground');
@@ -107,6 +114,10 @@ async function doConnect(context: vscode.ExtensionContext): Promise<DaemonClient
   });
   await fresh.connect();
   client = fresh;
+  // The daemon has no access to VS Code settings, so anything it acts on has to
+  // be pushed — on every connect, since a daemon that outlived this window (or
+  // was started by another one) may never have been told.
+  void fresh.setOptions({ switchAccountOnLimit: switchAccountOnLimitSetting() }).catch(() => undefined);
   refreshRateLimitDisplay();
   sessionsProvider.refresh();
   await panels.reattachAll();
@@ -375,6 +386,11 @@ export function activate(context: vscode.ExtensionContext): void {
       if (e.affectsConfiguration('claudePersist.extraModels')) panels.refreshModels();
       if (e.affectsConfiguration('claudePersist.connectionIndicator')) {
         panels.refreshConnectionIndicator();
+      }
+      if (e.affectsConfiguration('claudePersist.switchAccountOnLimit')) {
+        void client
+          ?.setOptions({ switchAccountOnLimit: switchAccountOnLimitSetting() })
+          .catch(() => undefined);
       }
     }),
   );

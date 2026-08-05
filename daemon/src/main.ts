@@ -22,6 +22,12 @@ import { DaemonSession } from './session.js';
 import { importClaudeSession, listClaudeSessions } from './importer.js';
 import { accountsStore } from './accounts.js';
 import { applyRateLimitEvent, applyUsageResponse } from './usage.js';
+import {
+  type RotationState,
+  accountForRetry,
+  accountKey,
+  planAfterLimit,
+} from './rotation.js';
 
 /**
  * Logging comes first and degrades rather than failing, because a crash during
@@ -181,6 +187,26 @@ function pollAccounts(): void {
   broadcastAccounts(accounts);
 }
 
+/**
+ * Preferences pushed from VS Code settings. Defaults match the contributed
+ * defaults, so a daemon that never hears from a client still behaves correctly.
+ */
+const options = { switchAccountOnLimit: true };
+
+/** Which accounts are known spent, and when we last rotated. */
+const rotation: RotationState = { limited: new Map(), lastSwitchAt: 0 };
+
+/** Activate an account and tear down live queries, as a user switch would. */
+function activateAccount(configDir: string | null, reason: string): void {
+  const accounts = accountsStore.setActive(configDir);
+  rotation.lastSwitchAt = Date.now();
+  for (const session of sessions.values()) session.disposeActiveQuery();
+  broadcastAccounts(accounts);
+  broadcastAll({ kind: 'sessions_changed' });
+  const name = accounts.find((a) => a.active)?.name ?? String(configDir);
+  logLine(`switched to account ${name} (${reason})`);
+}
+
 // ---------- plan rate limits (account-wide, learned from the live SDK push) -
 
 let usage: UsageSnapshot = { windows: {}, subscriptionType: null, available: true };
@@ -235,6 +261,47 @@ const callbacks = {
   },
   rateLimitWindows(): RateLimits {
     return usage.windows;
+  },
+  /**
+   * The active account was refused. Record it, move to one with room if that is
+   * enabled and one exists, and say when the session should try again.
+   */
+  onLimited(ownResetAt: number): { retryAt: number; switchedTo: string | null } {
+    const now = Date.now();
+    const current = accountsStore.active;
+    rotation.limited.set(accountKey(current), ownResetAt);
+    const plan = planAfterLimit({
+      accounts: accountsStore.list(),
+      current,
+      state: rotation,
+      now,
+      ownResetAt,
+      enabled: options.switchAccountOnLimit,
+    });
+    if (plan.switchTo) {
+      activateAccount(plan.switchTo.configDir, 'rate limit on the previous account');
+      return { retryAt: plan.retryAt, switchedTo: plan.switchTo.name };
+    }
+    logLine(`limit handling: ${plan.why}; retry at ${new Date(plan.retryAt).toISOString()}`);
+    return { retryAt: plan.retryAt, switchedTo: null };
+  },
+  /**
+   * A queued retry is about to fire. Decided here rather than at park time so we
+   * land on the account whose limit has actually ended.
+   */
+  beforeRetry(): string | null {
+    const now = Date.now();
+    for (const [key, until] of rotation.limited) if (until <= now) rotation.limited.delete(key);
+    const target = accountForRetry(
+      accountsStore.list(),
+      accountsStore.active,
+      rotation,
+      now,
+      options.switchAccountOnLimit,
+    );
+    if (!target) return null;
+    activateAccount(target.configDir, 'its limit has ended');
+    return target.name;
   },
   log(message: string): void {
     logLine(message);
@@ -364,6 +431,12 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
       }
       broadcastAll({ kind: 'sessions_changed' });
       return null;
+    }
+    case 'setOptions': {
+      if (typeof req.switchAccountOnLimit === 'boolean') {
+        options.switchAccountOnLimit = req.switchAccountOnLimit;
+      }
+      return options;
     }
     case 'listAccounts':
       return accountsStore.list();

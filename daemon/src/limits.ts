@@ -48,6 +48,13 @@ export const STALL_MS = 20 * 60 * 1000;
  */
 export const STALL_RETRY_MS = 2 * 60 * 1000;
 
+/**
+ * How long after the daemon comes back to resume a turn its restart interrupted.
+ * Long enough for startup to finish binding and loading, short enough that the
+ * work carries on rather than waiting on anything.
+ */
+export const RESTART_RESUME_MS = 5_000;
+
 const LIMIT_PATTERNS = [
   /\brate[- ]limited\b/i,
   /\b(usage|session|weekly|spend)[- ]limits?\b/i,

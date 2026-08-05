@@ -668,6 +668,11 @@ async function start(): Promise<void> {
       // already gone
     }
     releaseLock();
+    // Queue whatever was mid-turn BEFORE disposing, or closing the query
+    // destroys the only evidence that work was in progress.
+    let parked = 0;
+    for (const session of sessions.values()) if (session.parkForRestart()) parked++;
+    if (parked) logLine(`queued ${parked} in-flight turn(s) to continue after restart`);
     // Give SDK teardown a bounded moment: exiting immediately after dispose()
     // skipped it entirely and orphaned `claude` children on every kill cycle.
     void Promise.allSettled([...sessions.values()].map((s) => s.dispose())).then(finish);

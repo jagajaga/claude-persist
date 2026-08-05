@@ -149,3 +149,53 @@ test('appending past ROTATE_THRESHOLD rotates the active log without losing or r
     Array.from({ length: 50 }, (_, i) => n - 50 + i),
   );
 });
+
+/**
+ * A daemon restart used to kill whatever was mid-turn: shutdown() disposes every
+ * session, closing the SDK query, and nothing recorded that work had been in
+ * progress. A long agentic turn simply stopped — no result, no error, nothing to
+ * resume from. Restarts are routine (upgrades, protocol bumps, crashes), so the
+ * turn has to be queued the same way a rate-limited one is.
+ */
+test('parkForRestart: queues a running turn so it continues after the restart', () => {
+  const id = `restart-${Date.now()}`;
+  const session = makeSession(id);
+  session.status = 'running';
+
+  assert.equal(session.parkForRestart(), true);
+
+  const pendingFile = path.join(sessionsDir(), `${id}.pending.json`);
+  assert.equal(fs.existsSync(pendingFile), true, 'the queued turn must survive the process');
+  const pending = JSON.parse(fs.readFileSync(pendingFile, 'utf8')) as {
+    retryAt: number;
+    attempts: number;
+  };
+  assert.ok(pending.retryAt > Date.now(), 'scheduled for after the daemon is back');
+  assert.ok(pending.retryAt < Date.now() + 60_000, 'and soon, not parked for a limit window');
+  assert.equal(pending.attempts, 0, 'a restart is not a rate-limit attempt');
+
+  // And the panel is told, rather than the turn vanishing silently.
+  const { events } = session.eventsSince(0, 10);
+  const notice = events.at(-1)?.event;
+  assert.equal(notice?.type, 'status');
+  assert.match((notice as { detail?: string }).detail ?? '', /restarted mid-turn/);
+});
+
+test('parkForRestart: an idle session has nothing to queue', () => {
+  const session = makeSession(`idle-restart-${Date.now()}`);
+  assert.equal(session.parkForRestart(), false);
+  assert.equal(session.eventCount, 0, 'and says nothing about it');
+});
+
+test('parkForRestart: does not overwrite a turn already queued for a limit', () => {
+  const id = `already-${Date.now()}`;
+  const session = makeSession(id);
+  session.status = 'running';
+  const pendingFile = path.join(sessionsDir(), `${id}.pending.json`);
+  fs.writeFileSync(pendingFile, JSON.stringify({ text: 'limit', retryAt: 4102444800000, attempts: 3 }));
+  (session as unknown as { pending: unknown }).pending = { text: 'limit', retryAt: 4102444800000, attempts: 3 };
+
+  assert.equal(session.parkForRestart(), true);
+  const pending = JSON.parse(fs.readFileSync(pendingFile, 'utf8')) as { attempts: number };
+  assert.equal(pending.attempts, 3, 'the limit-driven schedule wins');
+});

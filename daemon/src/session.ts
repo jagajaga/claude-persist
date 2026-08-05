@@ -15,6 +15,7 @@ import { ROTATE_THRESHOLD, allLogFiles, loadTailAndCount, readRange, rotateActiv
 import { accountsStore, ensureSdkTranscript, sdkTranscriptExists } from './accounts.js';
 import {
   MAX_ATTEMPTS,
+  RESTART_RESUME_MS,
   STALL_MS,
   STALL_RETRY_MS,
   RESUME_MESSAGE,
@@ -428,6 +429,36 @@ export class DaemonSession {
       status: 'error',
       detail: `Queued retry cancelled (${reason}).`,
     });
+  }
+
+  /**
+   * Queue an in-flight turn so a daemon restart continues it instead of losing it.
+   *
+   * shutdown() disposes every session, which closes the SDK query and aborts
+   * whatever it was doing. Nothing used to record that: a long agentic turn
+   * simply stopped, with no result, no error and nothing to resume from — the
+   * work looked dead, because it was. Restarts are routine (upgrades, protocol
+   * bumps, crashes), so this is the common case, not an edge one.
+   *
+   * Reuses the same pending-turn file the rate-limit path writes, so startup
+   * re-arms it exactly as it re-arms a limited turn. Returns whether anything
+   * was queued.
+   */
+  parkForRestart(): boolean {
+    if (this.status !== 'running') return false;
+    if (this.pending) return true; // already queued for a limit or a stall
+    this.pending = {
+      text: 'daemon restart',
+      retryAt: Date.now() + RESTART_RESUME_MS,
+      attempts: 0,
+    };
+    this.persistPending();
+    this.appendEvent({
+      type: 'status',
+      status: 'error',
+      detail: `The daemon restarted mid-turn. "${RESUME_MESSAGE}" will be sent automatically once it is back — you don't need to come back.`,
+    });
+    return true;
   }
 
   /** Called by the daemon at startup for sessions with a parked turn on disk. */

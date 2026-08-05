@@ -13,7 +13,7 @@ import type { SessionMeta } from './registry.js';
 import { pendingTurnPath, sessionLogPath } from './paths.js';
 import { ROTATE_THRESHOLD, allLogFiles, loadTailAndCount, readRange, rotateActiveLog } from './logStore.js';
 import { accountsStore, ensureSdkTranscript, sdkTranscriptExists } from './accounts.js';
-import { isRateLimitResult, planRetry } from './limits.js';
+import { MAX_ATTEMPTS, isRateLimitResult, planRetry } from './limits.js';
 
 /**
  * Recent events kept resident per session. Larger than
@@ -280,6 +280,20 @@ export class DaemonSession {
     const envelope = this.lastEnvelope;
     if (!envelope) return; // nothing to replay (e.g. limit hit on a resumed probe)
     const attempts = (this.pending?.attempts ?? 0) + 1;
+    if (attempts > MAX_ATTEMPTS) {
+      // Stop rather than loop: whatever keeps failing is not clearing on its own.
+      this.callbacks.log(
+        `session ${this.meta.id} giving up after ${MAX_ATTEMPTS} rate-limit retries`,
+      );
+      this.pending = null;
+      this.clearPersistedPending();
+      this.appendEvent({
+        type: 'status',
+        status: 'error',
+        detail: `Still rate limited after ${MAX_ATTEMPTS} automatic retries — giving up. Send the message again when you're ready.`,
+      });
+      return;
+    }
     const plan = planRetry({
       windows: this.callbacks.rateLimitWindows(),
       text,
@@ -771,7 +785,12 @@ export class DaemonSession {
         });
         // A plan limit comes back as an ordinary result, so decide here whether
         // this turn actually finished or was refused.
-        if (isRateLimitResult(summaryText)) {
+        // Only an errored turn can be a rate-limit rejection. `subtype` is
+        // 'success' on a normal answer; anything else, or is_error, means the
+        // turn did not complete.
+        const turnFailed =
+          msg.is_error === true || (msg.subtype !== undefined && msg.subtype !== 'success');
+        if (isRateLimitResult(summaryText, turnFailed)) {
           this.status = 'error';
           this.parkForLimit(summaryText);
         } else {

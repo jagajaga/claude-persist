@@ -1,7 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RateLimits } from '@claude-persist/shared';
-import { MAX_WAIT_MS, MIN_WAIT_MS, isRateLimitResult, parseResetTime, planRetry, spreadMs } from './limits.js';
+import {
+  MAX_WAIT_MS,
+  MIN_WAIT_MS,
+  isRateLimitResult,
+  parseResetTime,
+  planRetry,
+  spreadMs,
+} from './limits.js';
 
 /** The message the user actually reports seeing. */
 const REAL = "You've hit your session limit · resets 8:20pm (UTC)";
@@ -9,8 +16,29 @@ const NOW = Date.parse('2026-08-04T10:00:00.000Z');
 
 // ------------------------------------------------------------ isRateLimitResult
 
-test('isRateLimitResult: recognises the real session-limit message', () => {
-  assert.equal(isRateLimitResult(REAL), true);
+test('isRateLimitResult: recognises the real session-limit message on a failed turn', () => {
+  assert.equal(isRateLimitResult(REAL, true), true);
+});
+
+/**
+ * The regression that caused a five-hour resend loop.
+ *
+ * An assistant reply *about* this feature quotes the limit message and uses the
+ * words limit and resets throughout, so text matching classified a perfectly
+ * successful turn as a rejection: it was re-parked and resent 5h later, twice,
+ * while five_hour sat at 0% and status allowed. A completed turn is never a
+ * rate limit, whatever its prose says.
+ */
+test('isRateLimitResult: a SUCCESSFUL turn is never a rate limit, however it reads', () => {
+  const proseAboutLimits = [
+    REAL,
+    "You've hit your session limit · resets 8:20pm (UTC) is the message you see",
+    'Timing: the structured resetsAt from the rate-limit push, then a backoff. Every wait is clamped.',
+    'five_hour just reset to 0%, seven_day at 52% — you have headroom before the limit',
+  ];
+  for (const text of proseAboutLimits) {
+    assert.equal(isRateLimitResult(text, false), false, text.slice(0, 50));
+  }
 });
 
 test('isRateLimitResult: recognises the usual wording variants', () => {
@@ -20,7 +48,7 @@ test('isRateLimitResult: recognises the usual wording variants', () => {
     'Rate limit exceeded',
     'You are out of your 5-hour limit, resets at 20:20 UTC',
   ]) {
-    assert.equal(isRateLimitResult(text), true, text);
+    assert.equal(isRateLimitResult(text, true), true, text);
   }
 });
 
@@ -35,12 +63,14 @@ test('isRateLimitResult: ordinary failures and non-strings are not limits', () =
     'Error: ENOENT: no such file or directory',
     'The tool call failed',
     '',
+    // Mentions a limit but not as a rejection.
+    'I raised the concurrency limit in the config',
   ]) {
-    assert.equal(isRateLimitResult(text), false, JSON.stringify(text));
+    assert.equal(isRateLimitResult(text, true), false, JSON.stringify(text));
   }
-  assert.equal(isRateLimitResult(undefined), false);
-  assert.equal(isRateLimitResult(null), false);
-  assert.equal(isRateLimitResult({ limit: true }), false);
+  assert.equal(isRateLimitResult(undefined, true), false);
+  assert.equal(isRateLimitResult(null, true), false);
+  assert.equal(isRateLimitResult({ limit: true }, true), false);
 });
 
 // --------------------------------------------------------------- parseResetTime

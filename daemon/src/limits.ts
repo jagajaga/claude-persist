@@ -23,18 +23,37 @@ export const MIN_WAIT_MS = 30_000;
 const RESET_BUFFER_MS = 30_000;
 
 /**
- * Does this `result` text describe a rate limit rather than a real failure?
- *
- * Deliberately broad on wording ("session limit", "usage limit", "weekly
- * limit") but anchored on the two things every variant has: the word limit, and
- * either "hit/reached/exceeded" or a reset time. A false positive parks a turn
- * that would never succeed — but the MAX_WAIT clamp bounds that, and the retry
- * surfaces the real error.
+ * Give up re-parking after this many attempts and surface the failure instead.
+ * A safety net: without it, any misdetection loops for as long as the session
+ * lives, burning a turn's worth of tokens per cycle.
  */
-export function isRateLimitResult(text: unknown): boolean {
+export const MAX_ATTEMPTS = 5;
+
+const LIMIT_PATTERNS = [
+  /\brate[- ]limited\b/i,
+  /\b(usage|session|weekly|spend)[- ]limits?\b/i,
+  /\bhit\b[^.!?]{0,40}\blimits?\b/i,
+  /\b(reached|exceeded)\b[^.!?]{0,40}\blimits?\b/i,
+  /\blimits?\b[^.!?]{0,25}\b(reached|exceeded)\b/i,
+  /\bout of\b[^.!?]{0,40}\blimits?\b/i,
+];
+
+/**
+ * Was this turn refused by a plan rate limit?
+ *
+ * `isError` is the load-bearing half, and it is not optional. Matching on text
+ * alone is fundamentally unsafe here: a *successful* answer discussing rate
+ * limits — quoting "You've hit your session limit · resets 8:20pm (UTC)", say —
+ * reads exactly like a rejection. That really happened: an assistant reply about
+ * this very feature was misclassified, re-parked, and resent five hours later,
+ * then again, in a loop that no window ever justified (five_hour sat at 0%,
+ * status allowed). A completed turn must never be treated as limited, whatever
+ * its prose says, so the patterns below only ever apply to an errored result.
+ */
+export function isRateLimitResult(text: unknown, isError: boolean): boolean {
+  if (!isError) return false;
   if (typeof text !== 'string') return false;
-  if (!/\blimits?\b/i.test(text)) return false;
-  return /\b(hit|reached|exceeded|out of)\b/i.test(text) || /\bresets?\b/i.test(text);
+  return LIMIT_PATTERNS.some((re) => re.test(text));
 }
 
 /**

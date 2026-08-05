@@ -11,6 +11,7 @@ import {
   parseResetTime,
   planRetry,
   spreadMs,
+  windowsLookLimited,
 } from './limits.js';
 
 /** The message the user actually reports seeing. */
@@ -284,4 +285,54 @@ test('STALL_MS is generous enough not to interrupt a long-running tool', () => {
 test('STALL_RETRY_MS retries soon rather than waiting out a window', () => {
   assert.ok(STALL_RETRY_MS <= 5 * 60_000);
   assert.ok(STALL_RETRY_MS < MAX_WAIT_MS);
+});
+
+// ----------------------------------------------------- windowsLookLimited
+
+/**
+ * The check that finally stopped the false positives. Both other signals failed:
+ * the result text is prose (an answer about limits reads like a rejection), and
+ * the result's own error flags reported "failed" for a turn that plainly
+ * succeeded — a successful reply was parked `(from window)` on a build that
+ * already required turnFailed. Utilization and status are measured, so they
+ * cannot be fooled by wording.
+ */
+test('windowsLookLimited: false when the windows have real headroom', () => {
+  // The exact state during the false positive: claude.ai agreed with this.
+  assert.equal(
+    windowsLookLimited({
+      five_hour: { utilization: 23, resetsAt: null, status: 'allowed' },
+      seven_day: { utilization: 55, resetsAt: null, status: 'allowed' },
+    }),
+    false,
+  );
+});
+
+test('windowsLookLimited: true when a window is rejected', () => {
+  assert.equal(
+    windowsLookLimited({
+      five_hour: { utilization: 40, resetsAt: null, status: 'rejected' },
+    }),
+    true,
+  );
+});
+
+test('windowsLookLimited: true when a window is effectively exhausted', () => {
+  assert.equal(
+    windowsLookLimited({ five_hour: { utilization: 100, resetsAt: null, status: 'allowed' } }),
+    true,
+  );
+  assert.equal(
+    windowsLookLimited({ seven_day: { utilization: 95, resetsAt: null, status: 'allowed' } }),
+    true,
+  );
+});
+
+/**
+ * No measurement yet is not evidence of headroom — refusing to park here would
+ * lose a genuine rejection on a daemon that has not yet heard from the usage API.
+ */
+test('windowsLookLimited: true when nothing has been measured', () => {
+  assert.equal(windowsLookLimited({}), true);
+  assert.equal(windowsLookLimited({ five_hour: undefined }), true);
 });

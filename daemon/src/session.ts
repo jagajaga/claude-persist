@@ -20,6 +20,7 @@ import {
   buildRetryEnvelope,
   isRateLimitResult,
   planRetry,
+  windowsLookLimited,
 } from './limits.js';
 
 /**
@@ -879,7 +880,20 @@ export class DaemonSession {
         // turn did not complete.
         const turnFailed =
           msg.is_error === true || (msg.subtype !== undefined && msg.subtype !== 'success');
-        if (isRateLimitResult(summaryText, turnFailed)) {
+        const textLooksLimited = isRateLimitResult(summaryText, turnFailed);
+        // Corroborate against measured usage before parking. Prose and the
+        // result's own error flags have both produced false positives; the
+        // windows are data.
+        const corroborated = textLooksLimited && windowsLookLimited(this.callbacks.rateLimitWindows());
+        if (textLooksLimited && !corroborated) {
+          // Record enough to diagnose the flags, since they are demonstrably
+          // not reliable and this is the only place their values are visible.
+          this.callbacks.log(
+            `session ${this.meta.id} looked rate limited but no window agrees ` +
+              `(is_error=${String(msg.is_error)} subtype=${String(msg.subtype)}) — treating as a normal turn`,
+          );
+        }
+        if (corroborated) {
           this.status = 'error';
           this.parkForLimit(summaryText);
         } else {

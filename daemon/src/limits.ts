@@ -76,6 +76,29 @@ export function isRateLimitResult(text: unknown, isError: boolean): boolean {
 }
 
 /**
+ * Do the plan windows corroborate a rate-limit rejection?
+ *
+ * This is the authoritative check, and it exists because neither of the other
+ * two signals turned out to be trustworthy. The result text is prose, and an
+ * answer *about* rate limits reads exactly like a rejection. The result's
+ * error flags proved unreliable too: a successful turn was parked with
+ * `(from window)` on a build that already required the turn to have failed, so
+ * `is_error`/`subtype` said "failed" for a turn that plainly succeeded.
+ *
+ * Utilization and status are measured data from the usage endpoint and the
+ * rate-limit push, so they cannot be fooled by wording. When no window is known
+ * at all, return true: an errored turn whose text names a limit is the best
+ * evidence available, and refusing to park would lose a genuine rejection.
+ */
+export function windowsLookLimited(windows: RateLimits): boolean {
+  const known = Object.values(windows).filter((w): w is NonNullable<typeof w> => !!w);
+  if (known.length === 0) return true; // nothing measured yet — trust the turn
+  return known.some(
+    (w) => w.status === 'rejected' || (typeof w.utilization === 'number' && w.utilization >= 95),
+  );
+}
+
+/**
  * Pull an absolute reset instant out of text like "resets 8:20pm (UTC)".
  *
  * Only trusted when the text names UTC. Without a timezone the same string

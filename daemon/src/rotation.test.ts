@@ -7,6 +7,7 @@ import {
   type RotationState,
   accountForRetry,
   accountKey,
+  byConfigDir,
   nextUsableAccount,
   planAfterLimit,
 } from './rotation.js';
@@ -218,4 +219,58 @@ test('accountForRetry: null when nothing anywhere has room yet', () => {
 test('accountKey: the default account (null configDir) has a stable key', () => {
   assert.equal(accountKey(null), accountKey(null));
   assert.notEqual(accountKey(null), accountKey('/acc/senia00'));
+});
+
+// -------------------------------------------------- accounts that share a login
+
+/**
+ * default and senia00 were both logged into accountUuid c67b076f — one Claude
+ * account, one quota. Rotating from one to the other burns a step and is refused
+ * by the identical limit, so they must count as a single account here.
+ */
+const sameLogin = (a: AccountInfo): string =>
+  a.name === 'default' || a.name === 'senia00' ? 'shared-account' : accountKey(a.configDir);
+
+test('nextUsableAccount: skips an account that shares the current login', () => {
+  const next = nextUsableAccount(accounts(null), null, state(), NOW, sameLogin);
+  assert.equal(next?.name, 'serokell', 'senia00 is the same account as default');
+});
+
+test('nextUsableAccount: limiting one directory limits every directory sharing that login', () => {
+  // Refused on default; senia00 shares its identity, so only serokell remains.
+  const afterLimit = state([[null, NOW + HOUR]]);
+  const next = nextUsableAccount(accounts('/acc/senia00'), '/acc/senia00', afterLimit, NOW, sameLogin);
+  assert.equal(next?.name, 'serokell');
+});
+
+test('planAfterLimit: with only a duplicate left, waits instead of pretending it can switch', () => {
+  const twoDirsOneAccount = accounts(null).filter((a) => a.name !== 'serokell');
+  const plan = planAfterLimit({
+    accounts: twoDirsOneAccount,
+    current: null,
+    state: state(),
+    now: NOW,
+    ownResetAt: NOW + 3 * HOUR,
+    enabled: true,
+    identityOf: sameLogin,
+  });
+  assert.equal(plan.why, 'all-limited');
+  assert.equal(plan.switchTo, null);
+  assert.equal(plan.retryAt, NOW + 3 * HOUR);
+});
+
+test('accountForRetry: a duplicate of the spent account is not a way out', () => {
+  const target = accountForRetry(
+    accounts(null),
+    null,
+    state([['', NOW + HOUR], ['shared-account', NOW + HOUR]]),
+    NOW,
+    true,
+    sameLogin,
+  );
+  assert.equal(target?.name, 'serokell');
+});
+
+test('byConfigDir: the default identity keeps distinct directories distinct', () => {
+  assert.notEqual(byConfigDir(accounts()[0]), byConfigDir(accounts()[1]));
 });

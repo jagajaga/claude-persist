@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   AccountsStore,
+  accountIdentity,
   ensureSdkTranscript,
   scanAccounts,
   sdkTranscriptExists,
@@ -372,4 +373,62 @@ test('scanAccounts: a reserved directory appears only once login writes credenti
     JSON.stringify(after),
     'the change must be visible to a poller comparing successive scans',
   );
+});
+
+// ---------------------------------------------------------------- accountIdentity
+
+function writeConfig(file: string, accountUuid?: string, organizationUuid?: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    JSON.stringify({ oauthAccount: { ...(accountUuid ? { accountUuid } : {}), ...(organizationUuid ? { organizationUuid } : {}) } }),
+  );
+}
+
+/**
+ * Two config dirs can hold different credentials for the *same* Claude account,
+ * and then share one quota — observed with ~/.claude and
+ * ~/.claude-accounts/senia00 both reporting accountUuid c67b076f. Rotating
+ * between them on a rate limit wastes a step and hits the identical limit.
+ */
+test('accountIdentity: two directories logged into the same account match', () => {
+  const home = tmpDir();
+  writeConfig(path.join(home, '.claude.json'), 'acct-1', 'org-1');
+  writeConfig(path.join(home, '.claude-accounts', 'copy', '.claude.json'), 'acct-1', 'org-1');
+  writeConfig(path.join(home, '.claude-accounts', 'other', '.claude.json'), 'acct-2', 'org-2');
+
+  const def = accountIdentity(null, home);
+  assert.equal(def, 'acct-1');
+  assert.equal(accountIdentity(path.join(home, '.claude-accounts', 'copy'), home), def);
+  assert.notEqual(accountIdentity(path.join(home, '.claude-accounts', 'other'), home), def);
+});
+
+/**
+ * The default account's config lives at ~/.claude.json, *outside* ~/.claude/,
+ * unlike a named account's <configDir>/.claude.json. Reading the wrong place
+ * makes the default look identity-less and therefore distinct from everything.
+ */
+test('accountIdentity: the default account reads ~/.claude.json, not ~/.claude/.claude.json', () => {
+  const home = tmpDir();
+  writeConfig(path.join(home, '.claude.json'), 'the-real-one');
+  // A decoy in the place a named account would keep it.
+  writeConfig(path.join(home, '.claude', '.claude.json'), 'wrong-one');
+  assert.equal(accountIdentity(null, home), 'the-real-one');
+});
+
+test('accountIdentity: falls back to the organization when no accountUuid is written', () => {
+  const home = tmpDir();
+  const dir = path.join(home, '.claude-accounts', 'work');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '.credentials.json'), JSON.stringify({ organizationUuid: 'org-9' }));
+  assert.equal(accountIdentity(dir, home), 'org:org-9');
+});
+
+/** Unknown identity must never be treated as a match — callers keep such accounts distinct. */
+test('accountIdentity: null when nothing identifies the account', () => {
+  const home = tmpDir();
+  const dir = path.join(home, '.claude-accounts', 'fresh');
+  fs.mkdirSync(dir, { recursive: true });
+  assert.equal(accountIdentity(dir, home), null);
+  assert.equal(accountIdentity(null, home), null);
 });

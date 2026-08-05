@@ -234,6 +234,53 @@ export function ensureSdkTranscript(
   return { from: best.file, to: destFile };
 }
 
+/**
+ * Which Claude account a config dir actually logs into.
+ *
+ * Two directories can hold different credentials for the *same* account —
+ * ~/.claude and ~/.claude-accounts/senia00 were observed sharing accountUuid
+ * c67b076f — and they then share one quota. Rotating between them on a rate
+ * limit wastes a step and hits the identical limit, so the rotation has to group
+ * by this rather than by directory.
+ *
+ * The token files cannot be compared instead: they refresh independently, so the
+ * same account yields different bytes over time.
+ *
+ * Note the asymmetry — a named account keeps its config at
+ * `<configDir>/.claude.json`, but the default account's lives at
+ * `~/.claude.json`, *outside* `~/.claude/`.
+ *
+ * Returns null when identity is unknowable (never logged in, config not written
+ * yet); callers must treat null as "distinct from everything", never as a match.
+ */
+export function accountIdentity(configDir: string | null, homeDir = os.homedir()): string | null {
+  const configFile = configDir
+    ? path.join(configDir, '.claude.json')
+    : path.join(homeDir, '.claude.json');
+  try {
+    const raw = JSON.parse(fs.readFileSync(configFile, 'utf8')) as {
+      oauthAccount?: { accountUuid?: unknown; organizationUuid?: unknown };
+    };
+    const uuid = raw.oauthAccount?.accountUuid;
+    if (typeof uuid === 'string' && uuid) return uuid;
+    const org = raw.oauthAccount?.organizationUuid;
+    if (typeof org === 'string' && org) return `org:${org}`;
+  } catch {
+    // no config written yet — fall through to the credentials file
+  }
+  try {
+    const credsDir = configDir ?? path.join(homeDir, '.claude');
+    const creds = JSON.parse(
+      fs.readFileSync(path.join(credsDir, '.credentials.json'), 'utf8'),
+    ) as { organizationUuid?: unknown };
+    const org = creds.organizationUuid;
+    if (typeof org === 'string' && org) return `org:${org}`;
+  } catch {
+    // unreadable or absent
+  }
+  return null;
+}
+
 export interface AccountsStoreOptions {
   /** Defaults to ~/.claude. */
   claudeDir?: string;

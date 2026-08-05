@@ -44,8 +44,23 @@ export interface RotationPlan {
   why: 'switched' | 'cooldown' | 'all-limited' | 'disabled' | 'single-account';
 }
 
-function usable(account: AccountInfo, state: RotationState, now: number): boolean {
-  const until = state.limited.get(accountKey(account.configDir));
+/**
+ * How an account is identified for rotation purposes: the Claude account it logs
+ * into, so two directories sharing one login share one quota and count as one.
+ * Falls back to the directory when identity is unknown, which keeps unknowns
+ * distinct from each other rather than accidentally merging them.
+ */
+export type IdentityOf = (account: AccountInfo) => string;
+
+export const byConfigDir: IdentityOf = (a) => accountKey(a.configDir);
+
+function usable(
+  account: AccountInfo,
+  state: RotationState,
+  now: number,
+  identityOf: IdentityOf,
+): boolean {
+  const until = state.limited.get(identityOf(account));
   return until === undefined || until <= now;
 }
 
@@ -61,16 +76,21 @@ export function nextUsableAccount(
   current: string | null,
   state: RotationState,
   now: number,
+  identityOf: IdentityOf = byConfigDir,
 ): AccountInfo | null {
   if (accounts.length < 2) return null;
   const currentKey = accountKey(current);
   const start = accounts.findIndex((a) => accountKey(a.configDir) === currentKey);
   // An unknown current account (just deleted, say) still rotates: start at 0.
   const from = start >= 0 ? start : -1;
+  const currentAccount = start >= 0 ? accounts[start] : null;
+  const currentIdentity = currentAccount ? identityOf(currentAccount) : null;
   for (let step = 1; step <= accounts.length; step++) {
     const candidate = accounts[(from + step + accounts.length) % accounts.length];
     if (accountKey(candidate.configDir) === currentKey) continue;
-    if (usable(candidate, state, now)) return candidate;
+    // Same login as the account that was just refused: same quota, same limit.
+    if (currentIdentity !== null && identityOf(candidate) === currentIdentity) continue;
+    if (usable(candidate, state, now, identityOf)) return candidate;
   }
   return null;
 }
@@ -88,8 +108,10 @@ export function planAfterLimit(opts: {
   now: number;
   ownResetAt: number;
   enabled: boolean;
+  identityOf?: IdentityOf;
 }): RotationPlan {
   const { accounts, current, state, now, ownResetAt, enabled } = opts;
+  const identityOf = opts.identityOf ?? byConfigDir;
   if (!enabled) return { switchTo: null, retryAt: ownResetAt, why: 'disabled' };
   if (accounts.length < 2) return { switchTo: null, retryAt: ownResetAt, why: 'single-account' };
 
@@ -98,7 +120,7 @@ export function planAfterLimit(opts: {
     return { switchTo: null, retryAt: now + SWITCH_SETTLE_MS, why: 'cooldown' };
   }
 
-  const next = nextUsableAccount(accounts, current, state, now);
+  const next = nextUsableAccount(accounts, current, state, now, identityOf);
   if (next) return { switchTo: next, retryAt: now + SWITCH_SETTLE_MS, why: 'switched' };
 
   // Everything is spent: wait for whichever limit ends first, including ours.
@@ -120,10 +142,11 @@ export function accountForRetry(
   state: RotationState,
   now: number,
   enabled: boolean,
+  identityOf: IdentityOf = byConfigDir,
 ): AccountInfo | null {
   if (!enabled || accounts.length < 2) return null;
   const currentAccount = accounts.find((a) => accountKey(a.configDir) === accountKey(current));
   // Already on an account with room — nothing to do.
-  if (currentAccount && usable(currentAccount, state, now)) return null;
-  return nextUsableAccount(accounts, current, state, now);
+  if (currentAccount && usable(currentAccount, state, now, identityOf)) return null;
+  return nextUsableAccount(accounts, current, state, now, identityOf);
 }

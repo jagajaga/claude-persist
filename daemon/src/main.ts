@@ -20,14 +20,23 @@ import { claimOwnership } from './ownership.js';
 import { Registry } from './registry.js';
 import { DaemonSession } from './session.js';
 import { importClaudeSession, listClaudeSessions } from './importer.js';
-import { accountsStore } from './accounts.js';
+import { accountIdentity, accountsStore } from './accounts.js';
 import { applyRateLimitEvent, applyUsageResponse } from './usage.js';
 import {
+  type IdentityOf,
   type RotationState,
   accountForRetry,
   accountKey,
   planAfterLimit,
 } from './rotation.js';
+
+/**
+ * Group accounts by the login they share. Read fresh rather than cached: these
+ * decisions happen only on a rate limit, and a stale identity after a re-login
+ * would silently merge or split accounts.
+ */
+const identityOf: IdentityOf = (account) =>
+  accountIdentity(account.configDir) ?? accountKey(account.configDir);
 
 /**
  * Logging comes first and degrades rather than failing, because a crash during
@@ -269,7 +278,13 @@ const callbacks = {
   onLimited(ownResetAt: number): { retryAt: number; switchedTo: string | null } {
     const now = Date.now();
     const current = accountsStore.active;
-    rotation.limited.set(accountKey(current), ownResetAt);
+    // Key by identity: two directories logged into the same account share one
+    // quota, so refusing one means the other is spent too.
+    const currentAccount = accountsStore.list().find((a) => a.active);
+    rotation.limited.set(
+      currentAccount ? identityOf(currentAccount) : accountKey(current),
+      ownResetAt,
+    );
     const plan = planAfterLimit({
       accounts: accountsStore.list(),
       current,
@@ -277,6 +292,7 @@ const callbacks = {
       now,
       ownResetAt,
       enabled: options.switchAccountOnLimit,
+      identityOf,
     });
     if (plan.switchTo) {
       activateAccount(plan.switchTo.configDir, 'rate limit on the previous account');
@@ -298,6 +314,7 @@ const callbacks = {
       rotation,
       now,
       options.switchAccountOnLimit,
+      identityOf,
     );
     if (!target) return null;
     activateAccount(target.configDir, 'its limit has ended');

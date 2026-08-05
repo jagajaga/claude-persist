@@ -4,6 +4,7 @@ import type { RateLimits } from '@claude-persist/shared';
 import {
   MAX_WAIT_MS,
   MIN_WAIT_MS,
+  buildRetryEnvelope,
   isRateLimitResult,
   parseResetTime,
   planRetry,
@@ -212,4 +213,50 @@ test('planRetry: two sessions limited at the same instant do not wake together',
   const a = planRetry({ ...base, windows, sessionId: 'session-a' });
   const b = planRetry({ ...base, windows, sessionId: 'session-b' });
   assert.notEqual(a.at, b.at);
+});
+
+// ------------------------------------------------------- buildRetryEnvelope
+
+const ORIGINAL = {
+  type: 'user',
+  message: { role: 'user', content: [{ type: 'text', text: 'do the thing' }] },
+  parent_tool_use_id: null,
+  session_id: 'sdk-1',
+};
+
+/**
+ * The gap this closes. The first version replayed the user's message verbatim,
+ * so a turn cut off halfway started the work over from the beginning -- which is
+ * repeating, not resuming. The SDK transcript already holds the interrupted
+ * turn's own replies and tool results, and `resume` restores all of it, so the
+ * useful instruction is "carry on", not the original request again.
+ */
+test('buildRetryEnvelope: continues when the turn had already produced work', () => {
+  const env = buildRetryEnvelope({ envelope: ORIGINAL, producedOutput: true }, 'sdk-1') as {
+    message: { content: Array<{ text: string }> };
+    session_id: string;
+  };
+  assert.notDeepEqual(env, ORIGINAL, 'must not replay the original request');
+  assert.equal(env.session_id, 'sdk-1');
+  const text = env.message.content[0].text;
+  assert.match(text, /continue from exactly where you left off/i);
+  assert.match(text, /do not redo work/i);
+  assert.doesNotMatch(text, /do the thing/, 'the original request must not be restated');
+});
+
+/**
+ * When the limit lands before anything happened there is nothing to continue,
+ * and a bare "carry on" would leave the model with no task at all.
+ */
+test('buildRetryEnvelope: replays the original when the turn never got started', () => {
+  const env = buildRetryEnvelope({ envelope: ORIGINAL, producedOutput: false }, 'sdk-1');
+  assert.deepEqual(env, ORIGINAL);
+});
+
+test('buildRetryEnvelope: continuation carries the current sdk session id', () => {
+  const env = buildRetryEnvelope(
+    { envelope: ORIGINAL, producedOutput: true },
+    'sdk-changed-after-restart',
+  ) as { session_id: string };
+  assert.equal(env.session_id, 'sdk-changed-after-restart');
 });

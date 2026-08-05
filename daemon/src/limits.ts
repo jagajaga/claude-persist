@@ -158,3 +158,39 @@ export function planRetry(opts: {
   at = Math.max(at, now + MIN_WAIT_MS);
   return { at, source };
 }
+
+/**
+ * What to send when a parked turn resumes.
+ *
+ * Replaying the user's original message makes the model start the work over,
+ * which is not resuming — it is repeating. The SDK transcript already holds
+ * everything the interrupted turn produced (partial replies, tool calls and
+ * their results), and `resume` puts all of it back in context, so the useful
+ * thing to send is an instruction to carry on from there.
+ *
+ * Only when the limit struck before the turn produced anything is replaying the
+ * original message correct: there is nothing to continue, and a bare "carry on"
+ * would leave the model with no task.
+ */
+export function buildRetryEnvelope(
+  pending: { envelope: unknown; producedOutput: boolean },
+  sdkSessionId: string,
+): unknown {
+  if (!pending.producedOutput) return pending.envelope;
+  return {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [{ type: 'text', text: CONTINUATION_PROMPT }],
+    },
+    parent_tool_use_id: null,
+    session_id: sdkSessionId,
+  };
+}
+
+export const CONTINUATION_PROMPT =
+  '[claude-persist] Your previous turn was cut off partway through by a plan rate limit, ' +
+  'which has now reset. The conversation above is your own work up to the moment it stopped, ' +
+  'including any tool calls that already ran. Continue from exactly where you left off: ' +
+  'finish what remained, and do not redo work that is already complete or start over. ' +
+  'If the work was already finished, just say so briefly.';

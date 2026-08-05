@@ -13,7 +13,7 @@ import type { SessionMeta } from './registry.js';
 import { pendingTurnPath, sessionLogPath } from './paths.js';
 import { ROTATE_THRESHOLD, allLogFiles, loadTailAndCount, readRange, rotateActiveLog } from './logStore.js';
 import { accountsStore, ensureSdkTranscript, sdkTranscriptExists } from './accounts.js';
-import { MAX_ATTEMPTS, isRateLimitResult, planRetry } from './limits.js';
+import { MAX_ATTEMPTS, buildRetryEnvelope, isRateLimitResult, planRetry } from './limits.js';
 
 /**
  * Recent events kept resident per session. Larger than
@@ -89,6 +89,11 @@ interface PendingTurn {
   attempts: number;
   /** For the UI notice. */
   text: string;
+  /**
+   * Whether the interrupted turn had already produced work. Decides between
+   * continuing and replaying — see buildRetryEnvelope.
+   */
+  producedOutput: boolean;
 }
 
 /** Truncate long tool payloads before persisting/rendering. */
@@ -111,6 +116,8 @@ export class DaemonSession {
   /** Set while a turn is parked waiting for a rate limit to reset. */
   private pending: PendingTurn | null = null;
   private retryTimer: NodeJS.Timeout | null = null;
+  /** Did the current turn get anywhere before it was interrupted? */
+  private turnProducedOutput = false;
   /** Newest events, oldest first, capped at MAX_TAIL — never the full transcript. */
   private tail: PersistedEvent[] = [];
   /** Total valid events ever appended (this session's next seq number). */
@@ -193,6 +200,13 @@ export class DaemonSession {
   }
 
   private appendEvent(event: ChatEvent): void {
+    if (
+      event.type === 'assistant_text' ||
+      event.type === 'tool_use' ||
+      event.type === 'tool_result'
+    ) {
+      this.turnProducedOutput = true;
+    }
     const persisted: PersistedEvent = { seq: this.totalCount, ts: Date.now(), event };
     this.totalCount++;
     this.tail.push(persisted);
@@ -258,6 +272,7 @@ export class DaemonSession {
       session_id: this.meta.sdkSessionId ?? '',
     };
     this.lastEnvelope = { envelope, text };
+    this.turnProducedOutput = false;
     this.input!.push(envelope);
     this.setStatus('running');
   }
@@ -301,7 +316,13 @@ export class DaemonSession {
       attempts,
       sessionId: this.meta.id,
     });
-    this.pending = { envelope: envelope.envelope, text: envelope.text, retryAt: plan.at, attempts };
+    this.pending = {
+      envelope: envelope.envelope,
+      text: envelope.text,
+      retryAt: plan.at,
+      attempts,
+      producedOutput: this.turnProducedOutput,
+    };
     this.persistPending();
     this.callbacks.log(
       `session ${this.meta.id} rate limited; retry #${attempts} at ${new Date(plan.at).toISOString()} (from ${plan.source})`,
@@ -309,7 +330,9 @@ export class DaemonSession {
     this.appendEvent({
       type: 'status',
       status: 'error',
-      detail: `Rate limit reached. Your message is queued and will be sent automatically at ${new Date(plan.at).toISOString()} — you don't need to come back.`,
+      detail: this.turnProducedOutput
+        ? `Rate limit reached partway through. This will continue automatically at ${new Date(plan.at).toISOString()} — you don't need to come back.`
+        : `Rate limit reached. Your message is queued and will be sent automatically at ${new Date(plan.at).toISOString()} — you don't need to come back.`,
     });
     this.scheduleRetry();
   }
@@ -342,10 +365,12 @@ export class DaemonSession {
     this.appendEvent({
       type: 'status',
       status: 'running',
-      detail: 'Rate limit reset — resending your queued message…',
+      detail: pending.producedOutput
+        ? 'Rate limit reset — continuing where it stopped…'
+        : 'Rate limit reset — resending your queued message…',
     });
     this.status = 'running';
-    this.input!.push(pending.envelope);
+    this.input!.push(buildRetryEnvelope(pending, this.meta.sdkSessionId ?? ''));
   }
 
   private cancelPendingRetry(reason: string): void {

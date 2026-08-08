@@ -1,6 +1,7 @@
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
   AccountInfo,
@@ -21,6 +22,7 @@ import { Registry } from './registry.js';
 import { DaemonSession } from './session.js';
 import { importClaudeSession, listClaudeSessions } from './importer.js';
 import { accountIdentity, accountsStore } from './accounts.js';
+import { LoginManager } from './login.js';
 import { applyRateLimitEvent, applyUsageResponse } from './usage.js';
 import {
   type IdentityOf,
@@ -201,6 +203,29 @@ function pollAccounts(): void {
  * defaults, so a daemon that never hears from a client still behaves correctly.
  */
 const options = { switchAccountOnLimit: true };
+
+/**
+ * The `claude` binary bundled beside this daemon, used to drive sign-in. Falls
+ * back to PATH for a dev checkout that has no bundle.
+ */
+function claudeBinary(): string {
+  const entry = process.argv[1] ?? '';
+  const bundled = path.join(
+    path.dirname(entry),
+    '..',
+    'node_modules',
+    '@anthropic-ai',
+    'claude-agent-sdk-linux-x64',
+    'claude',
+  );
+  return fs.existsSync(bundled) ? bundled : 'claude';
+}
+
+const logins = new LoginManager(
+  claudeBinary(),
+  path.join(os.homedir(), '.claude-accounts'),
+  logLine,
+);
 
 /** Which accounts are known spent, and when we last rotated. */
 const rotation: RotationState = { limited: new Map(), lastSwitchAt: 0 };
@@ -454,6 +479,14 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
         options.switchAccountOnLimit = req.switchAccountOnLimit;
       }
       return options;
+    }
+    case 'startLogin':
+      return logins.start(req.name);
+    case 'submitLoginCode':
+      return logins.submitCode(req.loginId, req.code);
+    case 'cancelLogin': {
+      logins.cancel(req.loginId);
+      return null;
     }
     case 'listAccounts':
       return accountsStore.list();

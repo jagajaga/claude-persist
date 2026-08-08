@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 23;
+export const PROTOCOL_VERSION = 24;
 
 /**
  * Reply to `hello`. `entry` is the module path the daemon was launched from;
@@ -157,6 +157,12 @@ export interface UsageSnapshot {
   available: boolean;
 }
 
+/** Reply to `startLogin`: open `url`, then send back the code it shows. */
+export interface LoginStarted {
+  loginId: string;
+  url: string;
+}
+
 /** An existing Claude Code (CLI / official extension) session on this machine. */
 export interface ClaudeSessionCandidate {
   file: string;
@@ -206,6 +212,15 @@ export type Request =
    * them itself, so the extension pushes them on connect and on change.
    */
   | { id: number; op: 'setOptions'; switchAccountOnLimit?: boolean }
+  /**
+   * Sign in to a new account without a terminal. The daemon drives the CLI with
+   * piped stdio, which selects the hosted-callback flow rather than the
+   * localhost one the TTY path assumes — wrong whenever the browser is not on
+   * the same machine as the daemon.
+   */
+  | { id: number; op: 'startLogin'; name: string }
+  | { id: number; op: 'submitLoginCode'; loginId: string; code: string }
+  | { id: number; op: 'cancelLogin'; loginId: string }
   /** `configDir: null` switches back to the default account. */
   | { id: number; op: 'setAccount'; configDir: string | null };
 

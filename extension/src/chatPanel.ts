@@ -320,30 +320,7 @@ export class ChatPanelManager {
         return;
       }
       if (msg.type === 'addAccount') {
-        const name = await vscode.window.showInputBox({
-          title: 'Log in to another account',
-          prompt: 'Name for this account (used as its config folder name)',
-          placeHolder: 'work',
-          validateInput: (value) =>
-            /^[a-z0-9-]+$/.test(value) ? undefined : 'Use lowercase letters, digits, and hyphens only',
-        });
-        if (!name) return;
-        const configDir = path.join(os.homedir(), '.claude-accounts', name);
-        const bundledClaudeBin = path.join(
-          this.context.extensionPath,
-          'daemon',
-          'node_modules',
-          '@anthropic-ai',
-          'claude-agent-sdk-linux-x64',
-          'claude',
-        );
-        const claudeBin = fs.existsSync(bundledClaudeBin) ? bundledClaudeBin : 'claude';
-        const terminal = vscode.window.createTerminal({ name: `Claude login: ${name}` });
-        terminal.sendText(`CLAUDE_CONFIG_DIR=${configDir} ${claudeBin} /login`);
-        terminal.show();
-        void vscode.window.showInformationMessage(
-          'After logging in, pick the account from the model menu.',
-        );
+        await this.addAccountInteractively();
         return;
       }
       if (msg.type === 'switchTab') {
@@ -515,6 +492,73 @@ export class ChatPanelManager {
   async reattachAll(): Promise<void> {
     for (const entry of this.panels.values()) {
       if (entry.ready) await this.attach(entry).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Sign in to a new account without a terminal.
+   *
+   * The daemon drives the CLI with piped stdio, which is what selects the
+   * hosted-callback flow: the TTY path starts a loopback callback server and
+   * redirects to localhost, which is simply wrong under code-server, where the
+   * browser is on the user's machine and the CLI is on the server. So the user
+   * gets a link and a box to paste the code into, and never sees a shell.
+   */
+  private async addAccountInteractively(): Promise<void> {
+    const name = await vscode.window.showInputBox({
+      title: 'Log in to another account',
+      prompt: 'Name for this account (used as its config folder name)',
+      placeHolder: 'work',
+      validateInput: (value) =>
+        /^[a-z0-9-]+$/.test(value) ? undefined : 'Use lowercase letters, digits, and hyphens only',
+    });
+    if (!name) return;
+
+    const client = await this.requireClient();
+    if (!client) {
+      void vscode.window.showWarningMessage('Claude Persist: daemon not reachable — try again in a moment.');
+      return;
+    }
+
+    let login: { loginId: string; url: string };
+    try {
+      login = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Preparing sign-in for "${name}"…` },
+        () => client.startLogin(name),
+      );
+    } catch (err) {
+      void vscode.window.showErrorMessage(
+        `Could not start sign-in: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+
+    // openExternal goes through the remote's port/URI forwarding, so it opens on
+    // the machine the user is actually sitting at.
+    await vscode.env.openExternal(vscode.Uri.parse(login.url));
+
+    const code = await vscode.window.showInputBox({
+      title: `Finish signing in to "${name}"`,
+      prompt: 'Approve the sign-in in your browser, then paste the code it shows here',
+      placeHolder: 'Paste the authorization code',
+      ignoreFocusOut: true, // the user is switching to a browser and back
+      password: true,
+    });
+    if (!code) {
+      void client.cancelLogin(login.loginId).catch(() => undefined);
+      return;
+    }
+
+    const result = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Signing in to "${name}"…` },
+      () => client.submitLoginCode(login.loginId, code),
+    );
+    if (result.ok) {
+      // The daemon's account poller broadcasts the new account within seconds,
+      // so the model menu updates itself.
+      void vscode.window.showInformationMessage(`Signed in as "${name}" — pick it from the model menu.`);
+    } else {
+      void vscode.window.showErrorMessage(result.error ?? 'Sign-in did not complete.');
     }
   }
 

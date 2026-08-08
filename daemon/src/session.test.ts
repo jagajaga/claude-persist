@@ -199,3 +199,43 @@ test('parkForRestart: does not overwrite a turn already queued for a limit', () 
   const pending = JSON.parse(fs.readFileSync(pendingFile, 'utf8')) as { attempts: number };
   assert.equal(pending.attempts, 3, 'the limit-driven schedule wins');
 });
+
+/**
+ * An account switch disposes the live query and a retry installs a replacement.
+ * The disposed query keeps draining, and its trailing messages used to be
+ * applied anyway: a final empty `result` arrived 3s after the resumed turn had
+ * started and set the session idle, so the panel showed "not working" while work
+ * was in fact running. Observed in session ac83b87e at 10:48:01.
+ */
+test('consume: messages from a replaced query are ignored', async () => {
+  const session = makeSession(`stale-query-${Date.now()}`);
+  const stale = (async function* () {
+    yield { type: 'assistant', message: { content: [{ type: 'text', text: 'from the old query' }] } };
+    yield { type: 'result', subtype: 'success', result: '' };
+  })();
+
+  // A replacement query is already installed, so `stale` is no longer current.
+  (session as unknown as { activeQuery: unknown }).activeQuery = { replacement: true };
+  session.status = 'running';
+
+  await (session as unknown as { consume(q: AsyncIterable<unknown>): Promise<void> }).consume(stale);
+
+  assert.equal(session.eventCount, 0, 'a replaced query must not append events');
+  assert.equal(session.status, 'running', 'nor flip the status of the turn that replaced it');
+});
+
+test('consume: messages from the current query are applied as usual', async () => {
+  const session = makeSession(`live-query-${Date.now()}`);
+  const live = (async function* () {
+    yield { type: 'assistant', message: { content: [{ type: 'text', text: 'hello' }] } };
+  })();
+  (session as unknown as { activeQuery: unknown }).activeQuery = live;
+
+  await (session as unknown as { consume(q: AsyncIterable<unknown>): Promise<void> }).consume(live);
+
+  const { events } = session.eventsSince(0, 10);
+  assert.ok(
+    events.some((e) => e.event.type === 'assistant_text'),
+    'the current query still drives the session',
+  );
+});

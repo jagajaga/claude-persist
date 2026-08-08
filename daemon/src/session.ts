@@ -765,6 +765,14 @@ export class DaemonSession {
   private async consume(q: AsyncIterable<unknown>): Promise<void> {
     try {
       for await (const raw of q) {
+        // A disposed query keeps draining after it is replaced, and its trailing
+        // messages must not be applied to a session a newer query now owns. The
+        // guards below cover the end of the loop; without this one the messages
+        // *inside* it still landed — an account switch left the old query to
+        // emit a final empty `result`, which set the session idle three seconds
+        // after the resumed turn had started. The work was running; the panel
+        // said it wasn't.
+        if (this.activeQuery !== q) return;
         this.handleSdkMessage(raw as Record<string, unknown>);
       }
       // Only speak for the *current* query. A query disposed by a retry finishes

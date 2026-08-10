@@ -320,7 +320,29 @@ export class ChatPanelManager {
         return;
       }
       if (msg.type === 'addAccount') {
-        await this.addAccountInteractively();
+        await this.addAccountInteractively(entry);
+        return;
+      }
+      if (msg.type === 'loginCode') {
+        const client = await this.requireClient();
+        if (!client) return;
+        const result = await client
+          .submitLoginCode(String(msg.loginId ?? ''), String(msg.code ?? ''))
+          .catch((err: unknown) => ({
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          }));
+        this.post(entry, { type: 'loginResult', ...result });
+        return;
+      }
+      if (msg.type === 'openExternal') {
+        const url = String(msg.url ?? '');
+        if (url.startsWith('https://')) await vscode.env.openExternal(vscode.Uri.parse(url));
+        return;
+      }
+      if (msg.type === 'loginCancel') {
+        const client = await this.requireClient();
+        void client?.cancelLogin(String(msg.loginId ?? '')).catch(() => undefined);
         return;
       }
       if (msg.type === 'switchTab') {
@@ -504,7 +526,7 @@ export class ChatPanelManager {
    * browser is on the user's machine and the CLI is on the server. So the user
    * gets a link and a box to paste the code into, and never sees a shell.
    */
-  private async addAccountInteractively(): Promise<void> {
+  private async addAccountInteractively(entry: PanelEntry): Promise<void> {
     const name = await vscode.window.showInputBox({
       title: 'Log in to another account',
       prompt: 'Name for this account (used as its config folder name)',
@@ -537,29 +559,14 @@ export class ChatPanelManager {
     // the machine the user is actually sitting at.
     await vscode.env.openExternal(vscode.Uri.parse(login.url));
 
-    const code = await vscode.window.showInputBox({
-      title: `Finish signing in to "${name}"`,
-      prompt: 'Approve the sign-in in your browser, then paste the code it shows here',
-      placeHolder: 'Paste the authorization code',
-      ignoreFocusOut: true, // the user is switching to a browser and back
-      password: true,
-    });
-    if (!code) {
-      void client.cancelLogin(login.loginId).catch(() => undefined);
-      return;
-    }
-
-    const result = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: `Signing in to "${name}"…` },
-      () => client.submitLoginCode(login.loginId, code),
-    );
-    if (result.ok) {
-      // The daemon's account poller broadcasts the new account within seconds,
-      // so the model menu updates itself.
-      void vscode.window.showInformationMessage(`Signed in as "${name}" — pick it from the model menu.`);
-    } else {
-      void vscode.window.showErrorMessage(result.error ?? 'Sign-in did not complete.');
-    }
+    // The code box lives in the panel rather than a QuickInput. VS Code binds
+    // Ctrl+V in its own inputs to a command that reads the clipboard through
+    // navigator.clipboard.readText(), which Firefox does not grant to web pages
+    // — so under code-server the paste silently did nothing and only
+    // Ctrl+Shift+V (the browser's native paste) worked. Inside a webview the
+    // keystroke is handled by the browser, exactly as it already is for pasting
+    // images into the composer.
+    this.post(entry, { type: 'loginPrompt', loginId: login.loginId, name, url: login.url });
   }
 
   private postChips(entry: PanelEntry): void {

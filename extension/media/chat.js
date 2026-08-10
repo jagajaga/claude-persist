@@ -1020,8 +1020,103 @@
     chipsEl.hidden = chipsEl.childElementCount === 0;
   }
 
+  /**
+   * The sign-in card: a link and a box for the code.
+   *
+   * Lives here rather than in a VS Code input box because Ctrl+V does not work
+   * in those under code-server — VS Code binds it to a command that reads the
+   * clipboard via navigator.clipboard.readText(), which Firefox refuses, so only
+   * Ctrl+Shift+V pasted. Inside the webview the browser handles the keystroke
+   * itself, the same way pasting an image into the composer already does.
+   */
+  let loginCard = null;
+  function showLoginPrompt(msg) {
+    dismissLoginPrompt();
+    const card = el('div', 'login-card');
+    card.appendChild(el('div', 'login-title', `Finish signing in to "${msg.name}"`));
+    const hint = el('div', 'login-hint');
+    hint.appendChild(document.createTextNode('Approve the sign-in in your browser, then paste the code below. '));
+    const again = el('a', null, 'Open the link again');
+    again.href = '#';
+    again.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      vscode.postMessage({ type: 'openExternal', url: msg.url });
+    });
+    hint.appendChild(again);
+    card.appendChild(hint);
+
+    const row = el('div', 'login-row');
+    const input = el('input', 'login-input');
+    input.type = 'password';
+    input.placeholder = 'Paste the authorization code';
+    input.autocomplete = 'off';
+    const submit = el('button', 'login-submit', 'Sign in');
+    const cancel = el('button', 'login-cancel', 'Cancel');
+    row.appendChild(input);
+    row.appendChild(submit);
+    row.appendChild(cancel);
+    card.appendChild(row);
+    const status = el('div', 'login-status');
+    card.appendChild(status);
+
+    const send = () => {
+      const code = input.value.trim();
+      if (!code) {
+        status.textContent = 'Enter the code first.';
+        return;
+      }
+      submit.disabled = true;
+      input.disabled = true;
+      status.textContent = 'Signing in…';
+      vscode.postMessage({ type: 'loginCode', loginId: msg.loginId, code });
+    };
+    submit.addEventListener('click', send);
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') send();
+    });
+    cancel.addEventListener('click', () => {
+      vscode.postMessage({ type: 'loginCancel', loginId: msg.loginId });
+      dismissLoginPrompt();
+    });
+
+    loginCard = { card, input, submit, status };
+    threadEl.appendChild(card);
+    card.scrollIntoView({ block: 'nearest' });
+    input.focus();
+  }
+
+  function dismissLoginPrompt() {
+    if (!loginCard) return;
+    loginCard.card.remove();
+    loginCard = null;
+  }
+
+  function showLoginResult(msg) {
+    if (!loginCard) return;
+    if (msg.ok) {
+      loginCard.card.replaceChildren(
+        el('div', 'login-title', 'Signed in — pick the account from the model menu.'),
+      );
+      setTimeout(dismissLoginPrompt, 6000);
+      return;
+    }
+    loginCard.submit.disabled = false;
+    loginCard.input.disabled = false;
+    loginCard.input.value = '';
+    loginCard.input.focus();
+    loginCard.status.textContent = msg.error || 'Sign-in did not complete.';
+  }
+
   window.addEventListener('message', (e) => {
     const msg = e.data;
+    if (msg.type === 'loginPrompt') {
+      showLoginPrompt(msg);
+      return;
+    }
+    if (msg.type === 'loginResult') {
+      showLoginResult(msg);
+      return;
+    }
     // Must run before any rendering below: the renderer looks paths up in this
     // map, and replay delivers events in the same message that carries it.
     absorbImageUris(msg);

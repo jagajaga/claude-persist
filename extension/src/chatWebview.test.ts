@@ -705,3 +705,82 @@ test('clicking a thumbnail opens a lightbox, and Escape closes it', () => {
   h.document.dispatchEvent(new h.window.KeyboardEvent('keydown', { key: 'Escape' }));
   assert.equal(h.document.querySelector('.lightbox'), null, 'Escape should dismiss it');
 });
+
+// ---------- sign-in card ----------------------------------------------------
+
+/**
+ * The code box is in the panel rather than a VS Code input box because Ctrl+V
+ * does not paste in those under code-server: VS Code binds it to a command that
+ * reads the clipboard through navigator.clipboard.readText(), which Firefox
+ * refuses for web pages, so only Ctrl+Shift+V worked. A webview input is handled
+ * by the browser itself.
+ */
+test('loginPrompt: renders a focusable code input in the panel', () => {
+  const h = createHarness();
+  h.send({ type: 'loginPrompt', loginId: 'abc', name: 'work', url: 'https://claude.com/x' });
+
+  const input = h.document.querySelector('#thread .login-card .login-input');
+  assert.ok(input, 'the code is entered in the webview, not a QuickInput');
+  assert.equal(input.getAttribute('type'), 'password', 'a credential should be masked');
+  assert.equal(h.document.activeElement, input, 'focused so the paste lands in it');
+  assert.match(h.document.querySelector('.login-card').textContent, /work/);
+});
+
+test('loginPrompt: submitting sends the code to the host', () => {
+  const h = createHarness();
+  h.send({ type: 'loginPrompt', loginId: 'abc', name: 'work', url: 'https://claude.com/x' });
+  const input = h.document.querySelector('.login-input');
+  input.value = '  pasted-code  ';
+  h.document.querySelector('.login-submit').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+
+  const sent = h.posted.find((m) => m.type === 'loginCode');
+  assert.ok(sent, 'the host must be told');
+  assert.equal(sent.code, 'pasted-code', 'trimmed — a pasted code often carries whitespace');
+  assert.equal(sent.loginId, 'abc');
+});
+
+test('loginPrompt: Enter submits too', () => {
+  const h = createHarness();
+  h.send({ type: 'loginPrompt', loginId: 'abc', name: 'work', url: 'https://claude.com/x' });
+  const input = h.document.querySelector('.login-input');
+  input.value = 'typed-code';
+  input.dispatchEvent(new h.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  assert.ok(h.posted.find((m) => m.type === 'loginCode'));
+});
+
+test('loginPrompt: an empty code is refused without bothering the daemon', () => {
+  const h = createHarness();
+  h.send({ type: 'loginPrompt', loginId: 'abc', name: 'work', url: 'https://claude.com/x' });
+  h.document.querySelector('.login-submit').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  assert.equal(h.posted.filter((m) => m.type === 'loginCode').length, 0);
+  assert.match(h.document.querySelector('.login-status').textContent, /Enter the code/i);
+});
+
+test('loginResult: a failure re-enables the box so the code can be retyped', () => {
+  const h = createHarness();
+  h.send({ type: 'loginPrompt', loginId: 'abc', name: 'work', url: 'https://claude.com/x' });
+  const input = h.document.querySelector('.login-input');
+  input.value = 'wrong';
+  h.document.querySelector('.login-submit').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  h.send({ type: 'loginResult', ok: false, error: 'That code was not accepted' });
+
+  assert.equal(input.disabled, false, 'a rejected code must not strand the user');
+  assert.equal(input.value, '', 'and the stale code is cleared');
+  assert.match(h.document.querySelector('.login-status').textContent, /not accepted/);
+});
+
+test('loginResult: success replaces the card with a confirmation', () => {
+  const h = createHarness();
+  h.send({ type: 'loginPrompt', loginId: 'abc', name: 'work', url: 'https://claude.com/x' });
+  h.send({ type: 'loginResult', ok: true });
+  assert.match(h.document.querySelector('.login-card').textContent, /Signed in/);
+  assert.equal(h.document.querySelector('.login-input'), null);
+});
+
+test('loginPrompt: cancelling tells the host so the child process is stopped', () => {
+  const h = createHarness();
+  h.send({ type: 'loginPrompt', loginId: 'abc', name: 'work', url: 'https://claude.com/x' });
+  h.document.querySelector('.login-cancel').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  assert.ok(h.posted.find((m) => m.type === 'loginCancel' && m.loginId === 'abc'));
+  assert.equal(h.document.querySelector('.login-card'), null);
+});

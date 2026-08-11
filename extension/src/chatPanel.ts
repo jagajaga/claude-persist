@@ -786,9 +786,9 @@ export class ChatPanelManager {
         </button>
         <span id="branch-chip" class="branch-chip" hidden></span>
         <span class="flex-spacer"></span>
-        <span id="agents-chip" class="agents-chip" hidden>
+        <button id="agents-chip" class="agents-chip" hidden title="Subagents working">
           <span class="agents-dot"></span><span id="agents-count">0</span>
-        </span>
+        </button>
         <button id="perm-toggle" class="pill" title="Toggle bypass permissions">
           <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 1 2.5 3v4.1c0 3.3 2.3 6.4 5.5 7.4 3.2-1 5.5-4.1 5.5-7.4V3L8 1zm0 1.6 4 1.5v3c0 2.6-1.7 5-4 5.9-2.3-.9-4-3.3-4-5.9v-3l4-1.5z"/></svg>
           <span>Bypass permissions</span>

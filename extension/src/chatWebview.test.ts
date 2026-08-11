@@ -101,7 +101,7 @@ function domHtml(sessionId: string): string {
           </svg>
         </button>
         <span id="branch-chip" hidden></span>
-        <span id="agents-chip" hidden><span id="agents-count">0</span></span><button id="perm-toggle"><span>Bypass permissions</span></button>
+        <button id="agents-chip" hidden><span id="agents-count">0</span></button><button id="perm-toggle"><span>Bypass permissions</span></button>
         <button id="send"></button>
       </div>
     </div>
@@ -896,7 +896,7 @@ test('agents: the chip is hidden when nothing is fanned out', () => {
   assert.equal(h.document.getElementById('agents-chip').hasAttribute('hidden'), true);
 });
 
-test('agents: shows the count and lists them in the tooltip', () => {
+test('agents: shows the count, and says the list is a click away', () => {
   const h = createHarness();
   h.send({
     type: 'agents',
@@ -909,8 +909,7 @@ test('agents: shows the count and lists them in the tooltip', () => {
   assert.equal(chip.hasAttribute('hidden'), false);
   assert.equal(h.document.getElementById('agents-count').textContent, '2');
   assert.match(chip.getAttribute('title'), /2 subagents working/);
-  assert.match(chip.getAttribute('title'), /Review PR 728/);
-  assert.match(chip.getAttribute('title'), /Run the migration audit/);
+  assert.match(chip.getAttribute('title'), /click to list/i);
 });
 
 test('agents: one agent reads in the singular', () => {
@@ -926,5 +925,49 @@ test('agents: the chip clears when the last one goes quiet', () => {
   h.send({ type: 'agents', agents: [{ id: 'a', description: 'x' }] });
   assert.equal(h.document.getElementById('agents-count').textContent, '1');
   h.send({ type: 'agents', agents: [] });
+  assert.equal(h.document.getElementById('agents-chip').hasAttribute('hidden'), true);
+});
+
+test('agents: clicking the chip lists what each one is doing', () => {
+  const h = createHarness();
+  h.send({
+    type: 'agents',
+    agents: [
+      { id: 'a', description: 'Review PR 728' },
+      { id: 'b', description: 'Run the migration audit' },
+    ],
+  });
+  assert.equal(h.document.querySelector('.agents-menu:not([hidden])'), null, 'closed until asked');
+
+  h.document.getElementById('agents-chip').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+
+  const menu = h.document.querySelector('.agents-menu');
+  assert.equal(menu.hasAttribute('hidden'), false);
+  const rows = [...menu.querySelectorAll('.agent-item')].map((r) => r.textContent);
+  assert.deepEqual(rows, ['Review PR 728', 'Run the migration audit']);
+  assert.match(menu.querySelector('.menu-title').textContent, /2 subagents working/);
+});
+
+test('agents: clicking again closes it', () => {
+  const h = createHarness();
+  h.send({ type: 'agents', agents: [{ id: 'a', description: 'x' }] });
+  const chip = h.document.getElementById('agents-chip');
+  chip.dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  chip.dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  assert.equal(h.document.querySelector('.agents-menu').hasAttribute('hidden'), true);
+});
+
+/** Agents come and go while you are reading the list. */
+test('agents: an open list follows agents appearing and finishing', () => {
+  const h = createHarness();
+  h.send({ type: 'agents', agents: [{ id: 'a', description: 'first' }] });
+  h.document.getElementById('agents-chip').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+
+  h.send({ type: 'agents', agents: [{ id: 'a', description: 'first' }, { id: 'b', description: 'second' }] });
+  assert.equal(h.document.querySelectorAll('.agents-menu .agent-item').length, 2, 'updates in place');
+
+  // The last one finishing takes the chip away, so the list must go with it.
+  h.send({ type: 'agents', agents: [] });
+  assert.equal(h.document.querySelector('.agents-menu').hasAttribute('hidden'), true);
   assert.equal(h.document.getElementById('agents-chip').hasAttribute('hidden'), true);
 });

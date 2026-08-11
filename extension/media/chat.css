@@ -781,6 +781,8 @@ button.secondary {
 /* ---------- subagent counter --------------------------------------------- */
 
 .agents-chip {
+  border: none;
+  cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -790,7 +792,6 @@ button.secondary {
   font-variant-numeric: tabular-nums;
   color: var(--vscode-badge-foreground);
   background: var(--vscode-badge-background);
-  cursor: default;
 }
 
 /*
@@ -813,4 +814,35 @@ button.secondary {
 /* Respect a reduced-motion preference; the count still conveys everything. */
 @media (prefers-reduced-motion: reduce) {
   .agents-dot { animation: none; opacity: 0.9; }
+}
+
+
+/* The list behind the chip; anchored right, under the chip it belongs to. */
+.agents-menu {
+  left: auto;
+  right: 18px;
+  max-width: min(28em, calc(100% - 36px));
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.agent-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.agent-item .agents-dot { flex: none; color: var(--vscode-badge-background); }
+
+.agent-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 520px) {
+  .agents-menu { left: 12px; right: 12px; max-width: none; }
 }

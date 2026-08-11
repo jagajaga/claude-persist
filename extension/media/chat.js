@@ -860,6 +860,21 @@
   modelMenu.hidden = true;
   document.getElementById('composer').appendChild(modelMenu);
 
+  // Anchored right, under the chip it belongs to, rather than left like the
+  // attachment and model menus.
+  const agentsMenu = el('div', 'attach-menu agents-menu');
+  agentsMenu.hidden = true;
+  document.getElementById('composer').appendChild(agentsMenu);
+  agentsChip.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (agentsMenu.hidden) {
+      renderAgentsMenu();
+      agentsMenu.hidden = false;
+    } else {
+      agentsMenu.hidden = true;
+    }
+  });
+
   function modelLabel(value) {
     if (!value) return 'default';
     const info = modelInfos.find((m) => m.value === value);
@@ -1174,17 +1189,41 @@
    * tool calls would always show zero. Hidden entirely at zero, so a session
    * that never fans out looks exactly as it did before.
    */
+  let currentAgents = [];
+
   function showAgents(agents) {
-    const list = Array.isArray(agents) ? agents : [];
-    if (list.length === 0) {
+    currentAgents = Array.isArray(agents) ? agents : [];
+    if (currentAgents.length === 0) {
       agentsChip.hidden = true;
+      agentsMenu.hidden = true; // nothing left to list
       return;
     }
     agentsChip.hidden = false;
-    agentsCount.textContent = String(list.length);
-    agentsChip.title =
-      `${list.length} subagent${list.length === 1 ? '' : 's'} working\n` +
-      list.map((a) => `• ${a.description}`).join('\n');
+    agentsCount.textContent = String(currentAgents.length);
+    agentsChip.title = `${currentAgents.length} subagent${currentAgents.length === 1 ? '' : 's'} working — click to list`;
+    if (!agentsMenu.hidden) renderAgentsMenu();
+  }
+
+  /**
+   * The list behind the chip.
+   *
+   * Each entry is what the agent was asked to do, taken from its dispatch —
+   * that is the only place a description appears, since a subagent's own
+   * messages carry just the parent id. Re-rendered while open so agents
+   * appearing or finishing are reflected without closing it.
+   */
+  function renderAgentsMenu() {
+    agentsMenu.replaceChildren();
+    agentsMenu.appendChild(
+      el('div', 'menu-title', `${currentAgents.length} subagent${currentAgents.length === 1 ? '' : 's'} working`),
+    );
+    for (const agent of currentAgents) {
+      const row = el('div', 'agent-item');
+      row.appendChild(el('span', 'agents-dot'));
+      row.appendChild(el('span', 'agent-desc', agent.description));
+      row.title = agent.description; // the full text when it ellipsizes
+      agentsMenu.appendChild(row);
+    }
   }
 
   window.addEventListener('message', (e) => {
@@ -1465,6 +1504,9 @@
     if (!attachMenu.hidden && !attachMenu.contains(e.target) && e.target !== attachBtn) hideMenu();
     if (!modelMenu.hidden && !modelMenu.contains(e.target) && !modelPill.contains(e.target)) {
       modelMenu.hidden = true;
+    }
+    if (!agentsMenu.hidden && !agentsMenu.contains(e.target) && !agentsChip.contains(e.target)) {
+      agentsMenu.hidden = true;
     }
   });
 

@@ -85,7 +85,7 @@ function domHtml(sessionId: string): string {
 <html>
 <body data-session-id="${sessionId}">
   <div id="prompt-bar" hidden></div>
-  <main id="messages"><div id="thread"></div></main>
+  <main id="messages"><div id="thread"></div><div id="pinned" hidden></div></main>
   <footer id="composer">
     <div id="input-box">
       <div id="chips" hidden></div>
@@ -783,4 +783,107 @@ test('loginPrompt: cancelling tells the host so the child process is stopped', (
   h.document.querySelector('.login-cancel').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
   assert.ok(h.posted.find((m) => m.type === 'loginCancel' && m.loginId === 'abc'));
   assert.equal(h.document.querySelector('.login-card'), null);
+});
+
+// ---------- pinned "waiting for you" bar ------------------------------------
+
+/**
+ * A permission or question card sits in the transcript in chronological order,
+ * but the conversation keeps scrolling while it waits — so the one thing
+ * blocking progress scrolls out of sight and gets missed. The pin keeps it beside
+ * the composer until it is answered.
+ */
+function pending(kind: 'permission' | 'question', requestId: string, seq: number) {
+  return kind === 'permission'
+    ? persisted({ type: 'permission_request', requestId, toolName: 'Bash', input: {} }, seq)
+    : persisted(
+        {
+          type: 'question_request',
+          requestId,
+          questions: [{ question: 'Which branch?', header: 'Branch', options: [{ label: 'main' }, { label: 'dev' }] }],
+        },
+        seq,
+      );
+}
+
+test('pinned: a permission request is pinned beside the composer', () => {
+  const h = createHarness();
+  h.send({ type: 'replay', reset: true, hasEarlier: false, info: {}, events: [pending('permission', 'r1', 0)] });
+
+  const bar = h.document.querySelector('#pinned .pinned-bar');
+  assert.ok(bar, 'the thing blocking progress must stay visible');
+  assert.equal(h.document.getElementById('pinned').hasAttribute('hidden'), false);
+  assert.match(bar.textContent, /Allow Bash/);
+  // The card itself stays in the transcript, in order.
+  assert.ok(h.document.querySelector('#thread .permission[data-request-id="r1"]'));
+});
+
+test('pinned: a question shows its text, not a generic label', () => {
+  const h = createHarness();
+  h.send({ type: 'replay', reset: true, hasEarlier: false, info: {}, events: [pending('question', 'q1', 0)] });
+  assert.match(h.document.querySelector('#pinned .pinned-bar').textContent, /Which branch\?/);
+});
+
+test('pinned: answering clears it', () => {
+  const h = createHarness();
+  h.send({ type: 'replay', reset: true, hasEarlier: false, info: {}, events: [pending('permission', 'r1', 0)] });
+  h.send(liveEvent({ type: 'permission_resolved', requestId: 'r1', allowed: true }, 0));
+
+  assert.equal(h.document.querySelector('#pinned .pinned-bar'), null);
+  assert.equal(h.document.getElementById('pinned').hasAttribute('hidden'), true);
+});
+
+/** Answering the oldest usually unblocks the rest; a stack would eat the panel. */
+test('pinned: with several outstanding, shows the oldest and counts the rest', () => {
+  const h = createHarness();
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    events: [pending('permission', 'r1', 0), pending('permission', 'r2', 1), pending('question', 'q1', 2)],
+  });
+  const bar = h.document.querySelector('#pinned .pinned-bar');
+  assert.match(bar.textContent, /Allow Bash/, 'oldest first');
+  assert.match(bar.textContent, /\+2 more/);
+
+  // Answering the oldest promotes the next one rather than clearing the bar.
+  h.send(liveEvent({ type: 'permission_resolved', requestId: 'r1', allowed: true }, 3));
+  assert.match(h.document.querySelector('#pinned .pinned-bar').textContent, /\+1 more/);
+});
+
+test('pinned: nothing outstanding means no bar at all', () => {
+  const h = createHarness();
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    events: [persisted({ type: 'user_message', text: 'hi' }, 0)],
+  });
+  assert.equal(h.document.getElementById('pinned').hasAttribute('hidden'), true);
+});
+
+/** A reset replay rebuilds the thread; a stale pin would point at a removed card. */
+test('pinned: a reset replay clears stale pins', () => {
+  const h = createHarness();
+  h.send({ type: 'replay', reset: true, hasEarlier: false, info: {}, events: [pending('permission', 'r1', 0)] });
+  assert.ok(h.document.querySelector('#pinned .pinned-bar'));
+
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    events: [persisted({ type: 'user_message', text: 'fresh' }, 0)],
+  });
+  assert.equal(h.document.querySelector('#pinned .pinned-bar'), null);
+});
+
+test('pinned: Show scrolls the card into view and highlights it', () => {
+  const h = createHarness();
+  h.send({ type: 'replay', reset: true, hasEarlier: false, info: {}, events: [pending('permission', 'r1', 0)] });
+  const card = h.document.querySelector('#thread .permission[data-request-id="r1"]');
+  h.document.querySelector('.pinned-show').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  assert.ok(card.classList.contains('flash'), 'the jump should say which card it meant');
 });

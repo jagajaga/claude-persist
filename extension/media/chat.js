@@ -699,6 +699,7 @@
     card.appendChild(actions);
     card.appendChild(el('div', 'perm-note', 'Claude is waiting for your answer — survives reloads.'));
     threadEl.appendChild(card);
+    return card;
   }
 
   // ---------- events ------------------------------------------------------------
@@ -780,14 +781,18 @@
         card.appendChild(el('div', 'perm-note',
           'Waiting for you — this survives reloads; answer whenever.'));
         threadEl.appendChild(card);
+        pinWaiting(event.requestId, `Allow ${event.toolName}?`, card);
         break;
       }
       case 'question_request': {
         endStreaming();
-        renderQuestionCard(event);
+        const card = renderQuestionCard(event);
+        const first = event.questions && event.questions[0];
+        pinWaiting(event.requestId, first ? first.question : 'Claude asked a question', card);
         break;
       }
       case 'permission_resolved': {
+        unpinWaiting(event.requestId);
         const card = threadEl.querySelector(`.permission[data-request-id="${event.requestId}"]`);
         if (card) {
           card.classList.add('resolved');
@@ -991,7 +996,59 @@
   }
 
   /** Drop every rendered event so a re-replay cannot duplicate the thread. */
+  /**
+   * Anything Claude is waiting on, pinned just above the composer.
+   *
+   * A permission or question card lives in the thread in chronological order,
+   * but the conversation keeps scrolling while it waits — so the thing that
+   * actually blocks progress scrolls out of sight and gets missed. The pin keeps
+   * it next to the input until it is answered; the card itself stays where it is
+   * so the transcript still reads in order.
+   */
+  const pinnedEl = document.getElementById('pinned');
+  const waiting = new Map();
+
+  function pinWaiting(requestId, label, card) {
+    if (!requestId) return;
+    waiting.set(requestId, { label, card });
+    renderPinned();
+  }
+
+  function unpinWaiting(requestId) {
+    if (!waiting.delete(requestId)) return;
+    renderPinned();
+  }
+
+  function renderPinned() {
+    pinnedEl.replaceChildren();
+    // Only the oldest outstanding item: answering it usually unblocks the rest,
+    // and a stack of pinned cards would eat the whole panel.
+    const next = waiting.values().next();
+    if (next.done) {
+      pinnedEl.hidden = true;
+      return;
+    }
+    const { label, card } = next.value;
+    pinnedEl.hidden = false;
+    const bar = el('div', 'pinned-bar');
+    bar.appendChild(el('span', 'pinned-icon', '?'));
+    bar.appendChild(el('span', 'pinned-label', label));
+    if (waiting.size > 1) {
+      bar.appendChild(el('span', 'pinned-more', `+${waiting.size - 1} more`));
+    }
+    const show = el('button', 'pinned-show', 'Show');
+    show.addEventListener('click', () => {
+      card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      card.classList.add('flash');
+      setTimeout(() => card.classList.remove('flash'), 1200);
+    });
+    bar.appendChild(show);
+    pinnedEl.appendChild(bar);
+  }
+
   function resetThread() {
+    waiting.clear();
+    renderPinned();
     dropPreviews();
     // Also stops the elapsed timer; nulling workingRow alone would leak it.
     setRunning(false);

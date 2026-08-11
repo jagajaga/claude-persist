@@ -101,7 +101,7 @@ function domHtml(sessionId: string): string {
           </svg>
         </button>
         <span id="branch-chip" hidden></span>
-        <button id="perm-toggle"><span>Bypass permissions</span></button>
+        <span id="agents-chip" hidden><span id="agents-count">0</span></span><button id="perm-toggle"><span>Bypass permissions</span></button>
         <button id="send"></button>
       </div>
     </div>
@@ -886,4 +886,45 @@ test('pinned: Show scrolls the card into view and highlights it', () => {
   const card = h.document.querySelector('#thread .permission[data-request-id="r1"]');
   h.document.querySelector('.pinned-show').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
   assert.ok(card.classList.contains('flash'), 'the jump should say which card it meant');
+});
+
+// ---------- subagent counter ------------------------------------------------
+
+test('agents: the chip is hidden when nothing is fanned out', () => {
+  const h = createHarness();
+  h.send({ type: 'agents', agents: [] });
+  assert.equal(h.document.getElementById('agents-chip').hasAttribute('hidden'), true);
+});
+
+test('agents: shows the count and lists them in the tooltip', () => {
+  const h = createHarness();
+  h.send({
+    type: 'agents',
+    agents: [
+      { id: 'a', description: 'Review PR 728' },
+      { id: 'b', description: 'Run the migration audit' },
+    ],
+  });
+  const chip = h.document.getElementById('agents-chip');
+  assert.equal(chip.hasAttribute('hidden'), false);
+  assert.equal(h.document.getElementById('agents-count').textContent, '2');
+  assert.match(chip.getAttribute('title'), /2 subagents working/);
+  assert.match(chip.getAttribute('title'), /Review PR 728/);
+  assert.match(chip.getAttribute('title'), /Run the migration audit/);
+});
+
+test('agents: one agent reads in the singular', () => {
+  const h = createHarness();
+  h.send({ type: 'agents', agents: [{ id: 'a', description: 'Solo' }] });
+  assert.match(h.document.getElementById('agents-chip').getAttribute('title'), /1 subagent working/);
+});
+
+/** Agents finish; the chip has to disappear again rather than stick at the peak. */
+test('agents: the chip clears when the last one goes quiet', () => {
+  const h = createHarness();
+  h.send({ type: 'agents', agents: [{ id: 'a', description: 'x' }, { id: 'b', description: 'y' }] });
+  h.send({ type: 'agents', agents: [{ id: 'a', description: 'x' }] });
+  assert.equal(h.document.getElementById('agents-count').textContent, '1');
+  h.send({ type: 'agents', agents: [] });
+  assert.equal(h.document.getElementById('agents-chip').hasAttribute('hidden'), true);
 });

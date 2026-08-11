@@ -19,6 +19,8 @@
   const inputEl = document.getElementById('input');
   const sendBtn = document.getElementById('send');
   const permToggle = document.getElementById('perm-toggle');
+  const agentsChip = document.getElementById('agents-chip');
+  const agentsCount = document.getElementById('agents-count');
   const attachBtn = document.getElementById('attach');
   const chipsEl = document.getElementById('chips');
   const ringBtn = document.getElementById('context-ring');
@@ -1164,8 +1166,33 @@
     loginCard.status.textContent = msg.error || 'Sign-in did not complete.';
   }
 
+  /**
+   * How many subagents this session has working, beside the shield.
+   *
+   * Derived from recent activity rather than from a finish event: every Agent
+   * dispatch returns "launched successfully" in 0.0s, so counting outstanding
+   * tool calls would always show zero. Hidden entirely at zero, so a session
+   * that never fans out looks exactly as it did before.
+   */
+  function showAgents(agents) {
+    const list = Array.isArray(agents) ? agents : [];
+    if (list.length === 0) {
+      agentsChip.hidden = true;
+      return;
+    }
+    agentsChip.hidden = false;
+    agentsCount.textContent = String(list.length);
+    agentsChip.title =
+      `${list.length} subagent${list.length === 1 ? '' : 's'} working\n` +
+      list.map((a) => `• ${a.description}`).join('\n');
+  }
+
   window.addEventListener('message', (e) => {
     const msg = e.data;
+    if (msg.type === 'agents') {
+      showAgents(msg.agents);
+      return;
+    }
     if (msg.type === 'loginPrompt') {
       showLoginPrompt(msg);
       return;

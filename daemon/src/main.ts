@@ -294,6 +294,9 @@ const callbacks = {
   onDelta(sessionId: string, text: string): void {
     broadcast(sessionId, { kind: 'delta', sessionId, text });
   },
+  onAgents(sessionId: string, agents: Array<{ id: string; description: string }>): void {
+    broadcast(sessionId, { kind: 'agents', sessionId, agents });
+  },
   onMetaChanged(): void {
     registry.save();
   },

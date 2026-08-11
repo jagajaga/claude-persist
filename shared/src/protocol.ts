@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 24;
+export const PROTOCOL_VERSION = 25;
 
 /**
  * Reply to `hello`. `entry` is the module path the daemon was launched from;
@@ -157,6 +157,12 @@ export interface UsageSnapshot {
   available: boolean;
 }
 
+/** A subagent this session currently has working. */
+export interface ActiveAgent {
+  id: string;
+  description: string;
+}
+
 /** Reply to `startLogin`: open `url`, then send back the code it shows. */
 export interface LoginStarted {
   loginId: string;
@@ -228,6 +234,12 @@ export type Push =
   | { kind: 'event'; sessionId: string; event: PersistedEvent }
   /** Broadcast when the daemon (re)learns the account's model list. */
   | { kind: 'models'; models: ModelDescriptor[] }
+  /**
+   * Which subagents a session has working. Pushed on change and when one goes
+   * quiet long enough to stop counting; there is no "agent finished" event to
+   * key off, so this is derived from recent activity.
+   */
+  | { kind: 'agents'; sessionId: string; agents: ActiveAgent[] }
   /** Broadcast when a plan rate-limit window changes; account-wide. */
   | { kind: 'rateLimits'; usage: UsageSnapshot }
   /** Live-only streaming text; not persisted, superseded by the next assistant_text event. */

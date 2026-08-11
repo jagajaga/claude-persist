@@ -12,6 +12,7 @@ import type {
   ModelDescriptor,
   PermissionMode,
   PersistedEvent,
+  ActiveAgent,
   LoginStarted,
   UsageSnapshot,
   Request,
@@ -26,7 +27,7 @@ const socketPath = path.join(baseDir, 'daemon.sock');
 // package is ESM, so the constant can't be require()d from this CJS module).
 // protocolVersion.test.ts asserts the two stay equal — desyncing them makes
 // the extension kill every daemon it spawns.
-const EXPECTED_PROTOCOL = 24;
+const EXPECTED_PROTOCOL = 25;
 
 /** How long to wait for a reply before treating the daemon as wedged. */
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -121,6 +122,7 @@ export interface AttachResult {
 type PushHandler = {
   onEvent(sessionId: string, event: PersistedEvent): void;
   onDelta(sessionId: string, text: string): void;
+  onAgents(sessionId: string, agents: ActiveAgent[]): void;
   onSessionsChanged(): void;
   onModels(models: ModelDescriptor[]): void;
   onRateLimits(usage: UsageSnapshot): void;
@@ -313,6 +315,9 @@ export class DaemonClient {
         break;
       case 'delta':
         this.handler.onDelta(message.sessionId, message.text);
+        break;
+      case 'agents':
+        this.handler.onAgents(message.sessionId, message.agents);
         break;
       case 'sessions_changed':
         this.handler.onSessionsChanged();

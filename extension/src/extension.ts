@@ -95,6 +95,7 @@ async function doConnect(context: vscode.ExtensionContext): Promise<DaemonClient
   const fresh = new DaemonClient(resolveDaemonEntry(context), {
     onEvent: (sessionId, event) => panels.handleEvent(sessionId, event),
     onDelta: (sessionId, text) => panels.handleDelta(sessionId, text),
+    onAgents: (sessionId, agents) => panels.handleAgents(sessionId, agents),
     onSessionsChanged: () => sessionsProvider.refresh(),
     onModels: (models) => panels.handleModels(models),
     onRateLimits: (usage) => {

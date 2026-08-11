@@ -776,3 +776,41 @@ button.secondary {
   outline: 2px solid var(--vscode-focusBorder, #007fd4);
   outline-offset: 2px;
 }
+
+
+/* ---------- subagent counter --------------------------------------------- */
+
+.agents-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--vscode-badge-foreground);
+  background: var(--vscode-badge-background);
+  cursor: default;
+}
+
+/*
+ * The pulse tracks real work rather than being decoration: the chip is only
+ * present while something is actually producing output.
+ */
+.agents-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: agents-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes agents-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
+/* Respect a reduced-motion preference; the count still conveys everything. */
+@media (prefers-reduced-motion: reduce) {
+  .agents-dot { animation: none; opacity: 0.9; }
+}

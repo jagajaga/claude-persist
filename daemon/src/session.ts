@@ -14,6 +14,13 @@ import { pendingTurnPath, sessionLogPath } from './paths.js';
 import { ROTATE_THRESHOLD, allLogFiles, loadTailAndCount, readRange, rotateActiveLog } from './logStore.js';
 import { accountsStore, ensureSdkTranscript, sdkTranscriptExists } from './accounts.js';
 import {
+  AGENT_ACTIVE_MS,
+  type AgentActivity,
+  activeAgents,
+  agentDescription,
+  pruneAgents,
+} from './agents.js';
+import {
   MAX_ATTEMPTS,
   RESTART_RESUME_MS,
   STALL_MS,
@@ -96,6 +103,8 @@ export interface SessionCallbacks {
   onLimited(ownResetAt: number): { retryAt: number; switchedTo: string | null };
   /** About to fire a queued retry; may switch to an account whose limit ended. */
   beforeRetry(): string | null;
+  /** The set of subagents working for this session changed. */
+  onAgents(sessionId: string, agents: Array<{ id: string; description: string }>): void;
 }
 
 /** A turn the plan limit rejected, held until the window resets. */
@@ -135,6 +144,10 @@ export class DaemonSession {
    * parks, 22 minutes apart, with nothing to stop it.
    */
   private consecutiveRetries = 0;
+  /** Subagents dispatched this turn, and when each last produced anything. */
+  private agents = new Map<string, AgentActivity>();
+  private agentTimer: NodeJS.Timeout | null = null;
+  private lastAgentSignature = '';
   /** Last time the SDK said anything at all, for the stall watchdog. */
   private lastSdkActivityAt = 0;
   private stallTimer: NodeJS.Timeout | null = null;
@@ -807,7 +820,55 @@ export class DaemonSession {
     }
   }
 
+  /** Publish the working set, but only when it actually changed. */
+  private publishAgents(): void {
+    const live = activeAgents(this.agents, Date.now());
+    const signature = live.map((a) => a.id).join(',');
+    if (signature === this.lastAgentSignature) return;
+    this.lastAgentSignature = signature;
+    this.callbacks.onAgents(
+      this.meta.id,
+      live.map((a) => ({ id: a.id, description: a.description })),
+    );
+  }
+
+  /**
+   * Note that a subagent produced something.
+   *
+   * Also covers agents this session never saw dispatched — a resumed turn can
+   * stream output from one launched before the daemon restarted.
+   */
+  private noteAgentActivity(id: string, description?: string): void {
+    const existing = this.agents.get(id);
+    if (existing) {
+      existing.lastActivityAt = Date.now();
+      if (description) existing.description = description;
+    } else {
+      this.agents.set(id, {
+        id,
+        description: description ?? 'subagent',
+        lastActivityAt: Date.now(),
+      });
+    }
+    this.publishAgents();
+    // Expiry has to be driven by a timer: silence produces no message to react to.
+    if (!this.agentTimer) {
+      this.agentTimer = setInterval(() => {
+        if (pruneAgents(this.agents, Date.now())) this.publishAgents();
+        if (this.agents.size === 0 && this.agentTimer) {
+          clearInterval(this.agentTimer);
+          this.agentTimer = null;
+        }
+      }, 5_000);
+      this.agentTimer.unref();
+    }
+  }
+
   private handleSdkMessage(msg: Record<string, unknown>): void {
+    // Subagent output is stamped with the Agent call that launched it, which is
+    // the only live signal available — the dispatch itself resolves instantly.
+    const parent = msg.parent_tool_use_id;
+    if (typeof parent === 'string' && parent) this.noteAgentActivity(parent);
     this.lastSdkActivityAt = Date.now();
     switch (msg.type) {
       case 'system': {
@@ -833,10 +894,17 @@ export class DaemonSession {
           if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
             this.appendEvent({ type: 'assistant_text', text: block.text });
           } else if (block.type === 'tool_use') {
+            const toolName = String(block.name ?? 'tool');
+            const toolUseId = typeof block.id === 'string' ? block.id : undefined;
+            // An Agent dispatch is the only place its description appears; the
+            // subagent's own messages carry just the parent id.
+            if (toolUseId && (toolName === 'Agent' || toolName === 'Task')) {
+              this.noteAgentActivity(toolUseId, agentDescription(block.input));
+            }
             this.appendEvent({
               type: 'tool_use',
-              toolUseId: typeof block.id === 'string' ? block.id : undefined,
-              toolName: String(block.name ?? 'tool'),
+              toolUseId,
+              toolName,
               input: block.input,
             });
           }

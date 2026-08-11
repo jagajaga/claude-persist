@@ -281,6 +281,76 @@ export function accountIdentity(configDir: string | null, homeDir = os.homedir()
   return null;
 }
 
+/**
+ * User-level configuration that must be identical for every account.
+ *
+ * Claude Code reads memory and skills from whatever CLAUDE_CONFIG_DIR points at,
+ * so switching account silently changed which rules and skills applied — a named
+ * account had none at all, and the daemon rotates accounts on its own. Global
+ * instructions simply stopped being followed, with nothing to indicate why.
+ */
+const SHARED_USER_CONFIG = ['CLAUDE.md', 'skills'];
+
+/**
+ * Point every account's memory and skills at the default account's, so the rules
+ * are the same whichever account is active.
+ *
+ * Symlinks rather than copies: one source of truth, so editing ~/.claude/CLAUDE.md
+ * or adding a skill takes effect everywhere at once instead of drifting per
+ * account. Anything the user put there themselves is left alone — this only
+ * fills in what is missing, and never replaces a real file.
+ */
+export function shareUserConfig(
+  claudeDir: string,
+  accountsDir: string,
+  log: (message: string) => void = () => undefined,
+): void {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(accountsDir);
+  } catch {
+    return; // no named accounts yet
+  }
+  for (const name of entries) {
+    const dir = path.join(accountsDir, name);
+    try {
+      if (!fs.statSync(dir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    for (const item of SHARED_USER_CONFIG) {
+      const source = path.join(claudeDir, item);
+      const link = path.join(dir, item);
+      if (!fs.existsSync(source)) continue; // nothing to share yet
+      let current: fs.Stats | null = null;
+      try {
+        current = fs.lstatSync(link);
+      } catch {
+        // absent — that is what we are here to fix
+      }
+      if (current) {
+        if (!current.isSymbolicLink()) continue; // the user's own file wins
+        try {
+          if (fs.realpathSync(link) === fs.realpathSync(source)) continue; // already ours
+        } catch {
+          // broken link — replace it below
+        }
+        try {
+          fs.unlinkSync(link);
+        } catch {
+          continue;
+        }
+      }
+      try {
+        fs.symlinkSync(source, link);
+        log(`account ${name}: linked ${item} to the default account's`);
+      } catch {
+        // read-only home, or a race with another daemon — not worth failing over
+      }
+    }
+  }
+}
+
 export interface AccountsStoreOptions {
   /** Defaults to ~/.claude. */
   claudeDir?: string;
@@ -319,6 +389,11 @@ export class AccountsStore {
   private persist(): void {
     fs.mkdirSync(path.dirname(this.stateFile), { recursive: true });
     fs.writeFileSync(this.stateFile, JSON.stringify({ configDir: this.activeConfigDir }));
+  }
+
+  /** Where the default account keeps its config, and where named ones live. */
+  get dirs(): { claudeDir: string; accountsDir: string } {
+    return { claudeDir: this.claudeDir, accountsDir: this.accountsDir };
   }
 
   /** null = default account (no CLAUDE_CONFIG_DIR override). */

@@ -21,7 +21,7 @@ import { claimOwnership } from './ownership.js';
 import { Registry } from './registry.js';
 import { DaemonSession } from './session.js';
 import { importClaudeSession, listClaudeSessions } from './importer.js';
-import { accountIdentity, accountsStore } from './accounts.js';
+import { accountIdentity, accountsStore, shareUserConfig } from './accounts.js';
 import { LoginManager } from './login.js';
 import { applyRateLimitEvent, applyUsageResponse } from './usage.js';
 import {
@@ -195,6 +195,10 @@ function broadcastAccounts(accounts: AccountInfo[]): void {
 function pollAccounts(): void {
   const accounts = accountsStore.list();
   if (JSON.stringify(accounts) === lastAccountsJson) return;
+  // A newly logged-in account starts with no memory and no skills; give it the
+  // shared ones before it is offered for use.
+  const { claudeDir, accountsDir } = accountsStore.dirs;
+  shareUserConfig(claudeDir, accountsDir, logLine);
   broadcastAccounts(accounts);
 }
 
@@ -669,6 +673,11 @@ async function start(): Promise<void> {
       logLine(`could not restore queued turn for ${sessionId}: ${String(err)}`);
     }
   }
+
+  // Rules and skills are the same for every account, including any added while
+  // this daemon was not running.
+  const accountDirs = accountsStore.dirs;
+  shareUserConfig(accountDirs.claudeDir, accountDirs.accountsDir, logLine);
 
   // Seed the cache, then keep watching for logins.
   lastAccountsJson = JSON.stringify(accountsStore.list());

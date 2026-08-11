@@ -8,6 +8,7 @@ import {
   accountIdentity,
   ensureSdkTranscript,
   scanAccounts,
+  shareUserConfig,
   sdkTranscriptExists,
 } from './accounts.js';
 
@@ -431,4 +432,105 @@ test('accountIdentity: null when nothing identifies the account', () => {
   fs.mkdirSync(dir, { recursive: true });
   assert.equal(accountIdentity(dir, home), null);
   assert.equal(accountIdentity(null, home), null);
+});
+
+// ---------------------------------------------------------------- shareUserConfig
+
+/**
+ * Claude Code reads memory and skills from whatever CLAUDE_CONFIG_DIR points at,
+ * so switching account silently changed which rules applied — a named account had
+ * none at all. Global instructions stopped being followed with nothing to show
+ * why, and the daemon rotates accounts on its own.
+ */
+test('shareUserConfig: every account gets the default account rules and skills', () => {
+  const root = tmpDir();
+  const claudeDir = path.join(root, 'claude');
+  fs.mkdirSync(path.join(claudeDir, 'skills', 'naming-commits'), { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'CLAUDE.md'), '# rules\n');
+  const accountsDir = path.join(root, 'claude-accounts');
+  writeCredentials(path.join(accountsDir, 'work'));
+  writeCredentials(path.join(accountsDir, 'personal'));
+
+  shareUserConfig(claudeDir, accountsDir);
+
+  for (const name of ['work', 'personal']) {
+    assert.equal(
+      fs.readFileSync(path.join(accountsDir, name, 'CLAUDE.md'), 'utf8'),
+      '# rules\n',
+      `${name} must see the same rules`,
+    );
+    assert.equal(
+      fs.existsSync(path.join(accountsDir, name, 'skills', 'naming-commits')),
+      true,
+      `${name} must see the same skills`,
+    );
+  }
+});
+
+/** One source of truth: editing the original must take effect everywhere. */
+test('shareUserConfig: links, so an edit reaches every account at once', () => {
+  const root = tmpDir();
+  const claudeDir = path.join(root, 'claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'CLAUDE.md'), 'first\n');
+  const accountsDir = path.join(root, 'claude-accounts');
+  writeCredentials(path.join(accountsDir, 'work'));
+
+  shareUserConfig(claudeDir, accountsDir);
+  fs.writeFileSync(path.join(claudeDir, 'CLAUDE.md'), 'edited\n');
+
+  assert.equal(fs.readFileSync(path.join(accountsDir, 'work', 'CLAUDE.md'), 'utf8'), 'edited\n');
+});
+
+/** Never destroy something the user put there deliberately. */
+test('shareUserConfig: an account with its own rules keeps them', () => {
+  const root = tmpDir();
+  const claudeDir = path.join(root, 'claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'CLAUDE.md'), 'shared\n');
+  const accountsDir = path.join(root, 'claude-accounts');
+  const own = path.join(accountsDir, 'work');
+  writeCredentials(own);
+  fs.writeFileSync(path.join(own, 'CLAUDE.md'), 'mine\n');
+
+  shareUserConfig(claudeDir, accountsDir);
+
+  assert.equal(fs.readFileSync(path.join(own, 'CLAUDE.md'), 'utf8'), 'mine\n');
+});
+
+test('shareUserConfig: repairs a link left dangling by a moved config', () => {
+  const root = tmpDir();
+  const claudeDir = path.join(root, 'claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'CLAUDE.md'), 'shared\n');
+  const accountsDir = path.join(root, 'claude-accounts');
+  const dir = path.join(accountsDir, 'work');
+  writeCredentials(dir);
+  fs.symlinkSync(path.join(root, 'gone', 'CLAUDE.md'), path.join(dir, 'CLAUDE.md'));
+
+  shareUserConfig(claudeDir, accountsDir);
+
+  assert.equal(fs.readFileSync(path.join(dir, 'CLAUDE.md'), 'utf8'), 'shared\n');
+});
+
+test('shareUserConfig: idempotent, and safe with nothing to share', () => {
+  const root = tmpDir();
+  const claudeDir = path.join(root, 'claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  const accountsDir = path.join(root, 'claude-accounts');
+  writeCredentials(path.join(accountsDir, 'work'));
+
+  // No CLAUDE.md or skills yet — must not create broken links.
+  shareUserConfig(claudeDir, accountsDir);
+  assert.equal(fs.existsSync(path.join(accountsDir, 'work', 'CLAUDE.md')), false);
+
+  fs.writeFileSync(path.join(claudeDir, 'CLAUDE.md'), 'rules\n');
+  shareUserConfig(claudeDir, accountsDir);
+  shareUserConfig(claudeDir, accountsDir);
+  assert.equal(fs.readFileSync(path.join(accountsDir, 'work', 'CLAUDE.md'), 'utf8'), 'rules\n');
+});
+
+test('shareUserConfig: no accounts directory at all is not an error', () => {
+  const root = tmpDir();
+  shareUserConfig(path.join(root, 'claude'), path.join(root, 'nope'));
 });

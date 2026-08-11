@@ -126,6 +126,15 @@ export class DaemonSession {
   /** Set while a turn is parked waiting for a rate limit to reset. */
   private pending: PendingTurn | null = null;
   private retryTimer: NodeJS.Timeout | null = null;
+  /**
+   * Retries since the last turn that actually completed.
+   *
+   * Not read from `pending`, which runPendingRetry clears before sending — so
+   * the next park computed attempts as 1 every time and MAX_ATTEMPTS was
+   * unreachable. A stalled session looped on that for hours: six "retry #1"
+   * parks, 22 minutes apart, with nothing to stop it.
+   */
+  private consecutiveRetries = 0;
   /** Last time the SDK said anything at all, for the stall watchdog. */
   private lastSdkActivityAt = 0;
   private stallTimer: NodeJS.Timeout | null = null;
@@ -292,8 +301,9 @@ export class DaemonSession {
    * turn just ends with no answer — which is exactly why nothing used to retry.
    */
   private parkForLimit(text: string, opts: { stalled?: boolean } = {}): void {
-    const attempts = (this.pending?.attempts ?? 0) + 1;
+    const attempts = this.consecutiveRetries + 1;
     if (attempts > MAX_ATTEMPTS) {
+      this.consecutiveRetries = 0;
       // Stop rather than loop: whatever keeps failing is not clearing on its own.
       this.callbacks.log(
         `session ${this.meta.id} giving up after ${MAX_ATTEMPTS} rate-limit retries`,
@@ -322,6 +332,7 @@ export class DaemonSession {
     const decision = opts.stalled
       ? { retryAt: plan.at, switchedTo: null as string | null }
       : this.callbacks.onLimited(plan.at);
+    this.consecutiveRetries = attempts;
     this.pending = { text, retryAt: decision.retryAt, attempts };
     this.persistPending();
     this.callbacks.log(
@@ -422,6 +433,7 @@ export class DaemonSession {
     }
     if (!this.pending) return;
     this.pending = null;
+    this.consecutiveRetries = 0;
     this.clearPersistedPending();
     this.callbacks.log(`session ${this.meta.id} queued retry cancelled: ${reason}`);
     this.appendEvent({
@@ -467,6 +479,7 @@ export class DaemonSession {
       const raw = JSON.parse(fs.readFileSync(pendingTurnPath(this.meta.id), 'utf8')) as PendingTurn;
       if (!raw || typeof raw.retryAt !== 'number') return;
       this.pending = raw;
+      this.consecutiveRetries = typeof raw.attempts === 'number' ? raw.attempts : 0;
       this.status = 'running';
       this.scheduleRetry();
       this.callbacks.log(
@@ -922,7 +935,9 @@ export class DaemonSession {
           this.status = 'error';
           this.parkForLimit(summaryText);
         } else {
-          // A real answer: whatever was parked has now been superseded.
+          // A real answer: the retry budget starts over.
+          this.consecutiveRetries = 0;
+          // Whatever was parked has now been superseded.
           if (this.pending) {
             this.pending = null;
             this.clearPersistedPending();

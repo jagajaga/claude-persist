@@ -1,6 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AGENT_ACTIVE_MS, type AgentActivity, activeAgents, agentDescription, pruneAgents } from './agents.js';
+import {
+  AGENT_ACTIVE_MS,
+  type AgentActivity,
+  activeAgents,
+  agentDescription,
+  pruneAgents,
+  tasksFromLevelSignal,
+} from './agents.js';
 
 const NOW = Date.parse('2026-08-10T12:00:00.000Z');
 
@@ -56,4 +63,64 @@ test('agentDescription: falls back rather than showing an empty chip tooltip', (
   assert.equal(agentDescription(undefined), 'subagent');
   assert.equal(agentDescription({}), 'subagent');
   assert.equal(agentDescription({ description: '   ' }), 'subagent');
+});
+
+// ------------------------------------------------------ tasksFromLevelSignal
+
+/**
+ * The CLI's own live-task set, which is authoritative where the activity
+ * heuristic is a guess. It carries REPLACE semantics — swap the whole set — so a
+ * missed start/stop edge cannot leave a task showing as running forever, and it
+ * carries the task_id that stopTask needs.
+ */
+test('tasksFromLevelSignal: reads the live set, keeping ids and descriptions', () => {
+  const tasks = tasksFromLevelSignal({
+    type: 'system',
+    subtype: 'background_tasks_changed',
+    tasks: [
+      { task_id: 't1', task_type: 'agent', description: 'Review PR 728' },
+      { task_id: 't2', task_type: 'bash', description: 'pytest -x' },
+    ],
+  });
+  assert.equal(tasks?.length, 2);
+  assert.deepEqual(tasks?.map((t) => t.taskId), ['t1', 't2']);
+  assert.deepEqual(tasks?.map((t) => t.kind), ['agent', 'bash']);
+  assert.equal(tasks?.[0].description, 'Review PR 728');
+  // id doubles as the map key, so it must be the stoppable one.
+  assert.equal(tasks?.[0].id, 't1');
+});
+
+/** An empty payload means "nothing is running", not "no information". */
+test('tasksFromLevelSignal: an empty set is a real answer, not null', () => {
+  const tasks = tasksFromLevelSignal({
+    type: 'system',
+    subtype: 'background_tasks_changed',
+    tasks: [],
+  });
+  assert.deepEqual(tasks, []);
+});
+
+test('tasksFromLevelSignal: null for anything that is not the level signal', () => {
+  assert.equal(tasksFromLevelSignal({ type: 'assistant' }), null);
+  assert.equal(tasksFromLevelSignal({ type: 'system', subtype: 'init' }), null);
+  assert.equal(tasksFromLevelSignal({}), null);
+});
+
+test('tasksFromLevelSignal: skips entries with no id, since they cannot be stopped', () => {
+  const tasks = tasksFromLevelSignal({
+    type: 'system',
+    subtype: 'background_tasks_changed',
+    tasks: [{ task_type: 'agent', description: 'no id' }, { task_id: 'ok', description: 'fine' }],
+  });
+  assert.deepEqual(tasks?.map((t) => t.id), ['ok']);
+});
+
+test('tasksFromLevelSignal: survives a malformed payload', () => {
+  assert.deepEqual(tasksFromLevelSignal({ type: 'system', subtype: 'background_tasks_changed' }), []);
+  const tasks = tasksFromLevelSignal({
+    type: 'system',
+    subtype: 'background_tasks_changed',
+    tasks: [null, 'nope', { task_id: 'x' }],
+  });
+  assert.deepEqual(tasks?.map((t) => t.description), ['background task']);
 });

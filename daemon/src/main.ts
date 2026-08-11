@@ -495,6 +495,8 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
       logins.cancel(req.loginId);
       return null;
     }
+    case 'stopAgent':
+      return getSession(req.sessionId).stopAgent(req.taskId);
     case 'listAccounts':
       return accountsStore.list();
     case 'setAccount': {

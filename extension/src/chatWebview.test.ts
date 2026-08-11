@@ -971,3 +971,45 @@ test('agents: an open list follows agents appearing and finishing', () => {
   assert.equal(h.document.querySelector('.agents-menu').hasAttribute('hidden'), true);
   assert.equal(h.document.getElementById('agents-chip').hasAttribute('hidden'), true);
 });
+
+test('agents: a stoppable agent gets an ×, and clicking it asks the host to stop that one', () => {
+  const h = createHarness();
+  h.send({
+    type: 'agents',
+    agents: [{ id: 't1', taskId: 't1', description: 'Review PR 728', kind: 'agent' }],
+  });
+  h.document.getElementById('agents-chip').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+
+  const stop = h.document.querySelector('.agent-item .agent-stop');
+  assert.ok(stop, 'a running agent should be stoppable');
+  stop.dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+
+  const sent = h.posted.find((m) => m.type === 'stopAgent');
+  assert.equal(sent?.taskId, 't1');
+  assert.equal(stop.disabled, true, 'no double-sending while it takes effect');
+});
+
+/**
+ * An agent inferred from message activity has no task id, so there is nothing to
+ * stop it with. A dead × would be worse than none.
+ */
+test('agents: an agent with no task id has no × at all', () => {
+  const h = createHarness();
+  h.send({ type: 'agents', agents: [{ id: 'a', description: 'inferred from activity' }] });
+  h.document.getElementById('agents-chip').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+
+  assert.ok(h.document.querySelector('.agent-item'), 'it is still listed');
+  assert.equal(h.document.querySelector('.agent-item .agent-stop'), null, 'but not stoppable');
+});
+
+test('agents: stopping marks the row until the CLI confirms by re-reporting', () => {
+  const h = createHarness();
+  h.send({ type: 'agents', agents: [{ id: 't1', taskId: 't1', description: 'x' }] });
+  h.document.getElementById('agents-chip').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  h.document.querySelector('.agent-stop').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  assert.ok(h.document.querySelector('.agent-item').classList.contains('stopping'));
+
+  // The CLI drops it from the live set; the row goes with it.
+  h.send({ type: 'agents', agents: [] });
+  assert.equal(h.document.querySelector('.agent-item'), null);
+});

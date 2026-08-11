@@ -1195,7 +1195,10 @@
     currentAgents = Array.isArray(agents) ? agents : [];
     if (currentAgents.length === 0) {
       agentsChip.hidden = true;
-      agentsMenu.hidden = true; // nothing left to list
+      // Empty it as well as hiding it: rows left behind would reappear the next
+      // time the menu opens, listing agents that finished long ago.
+      agentsMenu.replaceChildren();
+      agentsMenu.hidden = true;
       return;
     }
     agentsChip.hidden = false;
@@ -1220,8 +1223,23 @@
     for (const agent of currentAgents) {
       const row = el('div', 'agent-item');
       row.appendChild(el('span', 'agents-dot'));
-      row.appendChild(el('span', 'agent-desc', agent.description));
-      row.title = agent.description; // the full text when it ellipsizes
+      const desc = el('span', 'agent-desc', agent.description);
+      desc.title = agent.description; // the full text when it ellipsizes
+      row.appendChild(desc);
+      // Only tasks the CLI reported carry an id, and only those can be stopped;
+      // showing a dead × on the rest would be worse than showing none.
+      if (agent.taskId) {
+        const stop = el('button', 'agent-stop', '×');
+        stop.title = `Stop: ${agent.description}`;
+        stop.setAttribute('aria-label', `Stop ${agent.description}`);
+        stop.addEventListener('click', (e) => {
+          e.stopPropagation();
+          stop.disabled = true;
+          row.classList.add('stopping');
+          vscode.postMessage({ type: 'stopAgent', taskId: agent.taskId });
+        });
+        row.appendChild(stop);
+      }
       agentsMenu.appendChild(row);
     }
   }

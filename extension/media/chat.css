@@ -846,3 +846,30 @@ button.secondary {
 @media (max-width: 520px) {
   .agents-menu { left: 12px; right: 12px; max-width: none; }
 }
+
+
+.agent-item .agent-desc { flex: 1 1 auto; }
+
+.agent-stop {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 15px;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+}
+
+.agent-stop:hover {
+  color: var(--vscode-inputValidation-errorForeground, #f14c4c);
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.18));
+}
+
+.agent-stop[disabled] { opacity: 0.4; cursor: default; }
+
+/* Stays visible until the CLI confirms by re-reporting its live task set. */
+.agent-item.stopping .agent-desc { opacity: 0.5; text-decoration: line-through; }

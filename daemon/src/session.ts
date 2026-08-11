@@ -19,6 +19,7 @@ import {
   activeAgents,
   agentDescription,
   pruneAgents,
+  tasksFromLevelSignal,
 } from './agents.js';
 import {
   MAX_ATTEMPTS,
@@ -146,6 +147,12 @@ export class DaemonSession {
   private consecutiveRetries = 0;
   /** Subagents dispatched this turn, and when each last produced anything. */
   private agents = new Map<string, AgentActivity>();
+  /**
+   * Set once the CLI reports its live task set. From then on that is the only
+   * source: it is exact and carries the ids stopTask needs, whereas inferring
+   * from message activity is a heuristic with no handle to stop anything.
+   */
+  private hasLevelSignal = false;
   private agentTimer: NodeJS.Timeout | null = null;
   private lastAgentSignature = '';
   /** Last time the SDK said anything at all, for the stall watchdog. */
@@ -521,6 +528,27 @@ export class DaemonSession {
     }
   }
 
+  /**
+   * Stop one running subagent.
+   *
+   * Reached through a structural check: stopTask is recent, and an SDK without
+   * it must degrade to "cannot stop" rather than throwing at the user.
+   */
+  async stopAgent(taskId: string): Promise<{ ok: boolean; error?: string }> {
+    const q = this.activeQuery as unknown as { stopTask?: (id: string) => Promise<void> } | null;
+    if (typeof q?.stopTask !== 'function') {
+      return { ok: false, error: 'This Claude Code version cannot stop an individual subagent.' };
+    }
+    try {
+      await q.stopTask(taskId);
+      this.callbacks.log(`session ${this.meta.id} stopped subagent ${taskId}`);
+      // The CLI emits a fresh task set of its own accord; nothing to update here.
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   async interrupt(): Promise<void> {
     // Also drop a queued retry — "stop" must mean stop, including hours from now.
     if (this.pending) this.cancelPendingRetry('interrupted');
@@ -665,6 +693,13 @@ export class DaemonSession {
    * new account's env and resumes the same sdkSessionId.
    */
   disposeActiveQuery(): void {
+    // The live-task signal is per-process and silent at startup, so a restarted
+    // CLI must start from empty rather than inheriting a stale set.
+    if (this.agents.size > 0) {
+      this.agents.clear();
+      this.hasLevelSignal = false;
+      this.publishAgents();
+    }
     this.input?.close();
     this.input = null;
     try {
@@ -828,7 +863,12 @@ export class DaemonSession {
     this.lastAgentSignature = signature;
     this.callbacks.onAgents(
       this.meta.id,
-      live.map((a) => ({ id: a.id, description: a.description })),
+      live.map((a) => ({
+        id: a.id,
+        description: a.description,
+        ...(a.taskId ? { taskId: a.taskId } : {}),
+        ...(a.kind ? { kind: a.kind } : {}),
+      })),
     );
   }
 
@@ -854,6 +894,8 @@ export class DaemonSession {
     // Expiry has to be driven by a timer: silence produces no message to react to.
     if (!this.agentTimer) {
       this.agentTimer = setInterval(() => {
+        // Level-signal entries end when the CLI says so, not by going quiet.
+        if (this.hasLevelSignal) return;
         if (pruneAgents(this.agents, Date.now())) this.publishAgents();
         if (this.agents.size === 0 && this.agentTimer) {
           clearInterval(this.agentTimer);
@@ -867,8 +909,19 @@ export class DaemonSession {
   private handleSdkMessage(msg: Record<string, unknown>): void {
     // Subagent output is stamped with the Agent call that launched it, which is
     // the only live signal available — the dispatch itself resolves instantly.
+    const tasks = tasksFromLevelSignal(msg);
+    if (tasks) {
+      // REPLACE semantics: swap the set rather than pairing start/stop edges,
+      // so a missed edge cannot leave a task showing as running forever.
+      this.hasLevelSignal = true;
+      this.agents = new Map(tasks.map((t) => [t.id, t]));
+      this.lastAgentSignature = '';
+      this.publishAgents();
+    }
     const parent = msg.parent_tool_use_id;
-    if (typeof parent === 'string' && parent) this.noteAgentActivity(parent);
+    if (!this.hasLevelSignal && typeof parent === 'string' && parent) {
+      this.noteAgentActivity(parent);
+    }
     this.lastSdkActivityAt = Date.now();
     switch (msg.type) {
       case 'system': {

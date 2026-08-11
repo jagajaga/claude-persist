@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 25;
+export const PROTOCOL_VERSION = 26;
 
 /**
  * Reply to `hello`. `entry` is the module path the daemon was launched from;
@@ -161,6 +161,14 @@ export interface UsageSnapshot {
 export interface ActiveAgent {
   id: string;
   description: string;
+  /**
+   * The SDK task id, when known. Only tasks reported by the CLI's live-task
+   * signal have one, and only those can be stopped — an agent inferred purely
+   * from message activity has no handle to stop.
+   */
+  taskId?: string;
+  /** e.g. 'agent' or 'bash', straight from the CLI. */
+  kind?: string;
 }
 
 /** Reply to `startLogin`: open `url`, then send back the code it shows. */
@@ -227,6 +235,8 @@ export type Request =
   | { id: number; op: 'startLogin'; name: string }
   | { id: number; op: 'submitLoginCode'; loginId: string; code: string }
   | { id: number; op: 'cancelLogin'; loginId: string }
+  /** Stop one running subagent. Needs the SDK task id, not the tool_use id. */
+  | { id: number; op: 'stopAgent'; sessionId: string; taskId: string }
   /** `configDir: null` switches back to the default account. */
   | { id: number; op: 'setAccount'; configDir: string | null };
 

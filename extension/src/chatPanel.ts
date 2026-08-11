@@ -347,6 +347,20 @@ export class ChatPanelManager {
         if (url.startsWith('https://')) await vscode.env.openExternal(vscode.Uri.parse(url));
         return;
       }
+      if (msg.type === 'stopAgent') {
+        const client = await this.requireClient();
+        if (!client) return;
+        const result = await client
+          .stopAgent(entry.sessionId, String(msg.taskId ?? ''))
+          .catch((err: unknown) => ({
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          }));
+        if (!result.ok && result.error) {
+          void vscode.window.showWarningMessage(`Could not stop that subagent: ${result.error}`);
+        }
+        return;
+      }
       if (msg.type === 'loginCancel') {
         const client = await this.requireClient();
         void client?.cancelLogin(String(msg.loginId ?? '')).catch(() => undefined);

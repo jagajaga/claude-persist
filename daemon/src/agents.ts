@@ -15,6 +15,10 @@
 export const AGENT_ACTIVE_MS = 45_000;
 
 export interface AgentActivity {
+  /** SDK task id, present only for tasks the CLI reported; required to stop one. */
+  taskId?: string;
+  /** What the CLI called it, e.g. 'agent' or 'bash'. */
+  kind?: string;
   /** The Agent tool_use id; subagent messages carry it as parent_tool_use_id. */
   id: string;
   /** What it was asked to do, for the tooltip. */
@@ -69,4 +73,41 @@ export function pruneAgents(
     }
   }
   return changed;
+}
+
+
+/**
+ * The live set the CLI reports, which is authoritative when available.
+ *
+ * `background_tasks_changed` carries every live task after each change with
+ * REPLACE semantics, so swapping the whole set cannot wedge a stale entry the
+ * way pairing start/stop edges can. It also carries the task id that stopTask
+ * needs — inferring agents from message activity gives no handle to stop one.
+ *
+ * The CLI emits nothing at startup, so the set must be reset whenever the
+ * session's process restarts rather than assumed empty-means-unchanged.
+ */
+export function tasksFromLevelSignal(msg: Record<string, unknown>): AgentActivity[] | null {
+  if (msg.type !== 'system' || msg.subtype !== 'background_tasks_changed') return null;
+  const tasks = msg.tasks;
+  if (!Array.isArray(tasks)) return [];
+  const now = Date.now();
+  const out: AgentActivity[] = [];
+  for (const raw of tasks) {
+    if (!raw || typeof raw !== 'object') continue;
+    const task = raw as Record<string, unknown>;
+    const taskId = typeof task.task_id === 'string' ? task.task_id : undefined;
+    if (!taskId) continue;
+    out.push({
+      id: taskId,
+      taskId,
+      kind: typeof task.task_type === 'string' ? task.task_type : undefined,
+      description:
+        typeof task.description === 'string' && task.description.trim()
+          ? task.description.trim()
+          : 'background task',
+      lastActivityAt: now,
+    });
+  }
+  return out;
 }

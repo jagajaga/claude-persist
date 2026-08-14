@@ -274,3 +274,57 @@ test('accountForRetry: a duplicate of the spent account is not a way out', () =>
 test('byConfigDir: the default identity keeps distinct directories distinct', () => {
   assert.notEqual(byConfigDir(accounts()[0]), byConfigDir(accounts()[1]));
 });
+
+// ---------------------------------------------- the cooldown must not loop
+
+/**
+ * What happened in production: a switch to an account that turned out to be
+ * limited too. The cooldown branch returned "retry in 5s" without checking
+ * whether the account we had just landed on had any room, so four turns were
+ * spent in twenty seconds, each refused by the same weekly limit before it was
+ * sent — and each reported to the user as "every account is limited".
+ */
+test('planAfterLimit: does not retry in seconds onto an account that is itself spent', () => {
+  const justSwitched = NOW - 10_000;
+  const plan = planAfterLimit({
+    ...base,
+    current: '/acc/senia00',
+    accounts: accounts('/acc/senia00'),
+    state: state([['/acc/senia00', NOW + 3 * HOUR]], justSwitched),
+    enabled: true,
+  });
+  assert.equal(plan.why, 'cooldown-limited');
+  assert.equal(plan.switchTo, null);
+  assert.equal(
+    plan.retryAt,
+    justSwitched + SWITCH_COOLDOWN_MS + SWITCH_SETTLE_MS,
+    'wait for the cooldown to end, then choose properly',
+  );
+  assert.ok(plan.retryAt - NOW > 15_000, 'not another five-second doomed retry');
+});
+
+/** The cooldown still does its job when the account we landed on is fine. */
+test('planAfterLimit: retries promptly when the account just switched to has room', () => {
+  const plan = planAfterLimit({
+    ...base,
+    current: '/acc/senia00',
+    accounts: accounts('/acc/senia00'),
+    state: state([], NOW - 10_000),
+    enabled: true,
+  });
+  assert.equal(plan.why, 'cooldown');
+  assert.equal(plan.retryAt, NOW + SWITCH_SETTLE_MS);
+});
+
+/** Once the cooldown is over, a spent account rotates away rather than waiting. */
+test('planAfterLimit: after the cooldown, a spent account moves on', () => {
+  const plan = planAfterLimit({
+    ...base,
+    current: '/acc/senia00',
+    accounts: accounts('/acc/senia00'),
+    state: state([['/acc/senia00', NOW + 3 * HOUR]], NOW - SWITCH_COOLDOWN_MS - 1),
+    enabled: true,
+  });
+  assert.equal(plan.why, 'switched');
+  assert.equal(plan.switchTo?.name, 'serokell');
+});

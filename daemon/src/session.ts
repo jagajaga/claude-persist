@@ -101,7 +101,7 @@ export interface SessionCallbacks {
    * may move to an account with room; the reply says when to retry and which
    * account we ended up on.
    */
-  onLimited(ownResetAt: number): { retryAt: number; switchedTo: string | null };
+  onLimited(ownResetAt: number): { retryAt: number; switchedTo: string | null; why: string };
   /** About to fire a queued retry; may switch to an account whose limit ended. */
   beforeRetry(): string | null;
   /** The set of subagents working for this session changed. */
@@ -114,6 +114,36 @@ interface PendingTurn {
   attempts: number;
   /** The limit notice itself, for the panel message and for parsing the reset. */
   text: string;
+}
+
+/**
+ * What the panel says about a limit.
+ *
+ * Every non-switch outcome used to read "Rate limit reached on every account",
+ * including the cooldown — so a retry seconds after a switch claimed all four
+ * accounts were spent when nothing of the sort had been established. Say what
+ * actually happened instead.
+ */
+function limitNotice(
+  decision: { switchedTo: string | null; why: string },
+  when: string,
+): string {
+  const sent = `"${RESUME_MESSAGE}" will be sent automatically at ${when} — you don't need to come back.`;
+  switch (decision.why) {
+    case 'stalled':
+      return `This turn stopped responding. ${sent}`;
+    case 'switched':
+      return `Rate limit reached. Switched to account "${decision.switchedTo}" and continuing — you don't need to come back.`;
+    case 'cooldown':
+      return `Rate limit reached. Another session just switched accounts, so retrying on that one — ${sent}`;
+    case 'cooldown-limited':
+      return `Rate limit reached on this account too. Waiting for the account switch to settle, then trying another — ${sent}`;
+    case 'all-limited':
+      return `Rate limit reached on every account. ${sent}`;
+    default:
+      // disabled / single-account: nothing is known about other accounts.
+      return `Rate limit reached. ${sent}`;
+  }
 }
 
 /** Truncate long tool payloads before persisting/rendering. */
@@ -350,7 +380,7 @@ export class DaemonSession {
         });
     // A stall is not a limit, so it must not mark the account spent or rotate.
     const decision = opts.stalled
-      ? { retryAt: plan.at, switchedTo: null as string | null }
+      ? { retryAt: plan.at, switchedTo: null as string | null, why: 'stalled' }
       : this.callbacks.onLimited(plan.at);
     this.consecutiveRetries = attempts;
     this.pending = { text, retryAt: decision.retryAt, attempts };
@@ -362,11 +392,7 @@ export class DaemonSession {
     this.appendEvent({
       type: 'status',
       status: 'error',
-      detail: opts.stalled
-        ? `This turn stopped responding. "${RESUME_MESSAGE}" will be sent automatically at ${new Date(decision.retryAt).toISOString()} — you don't need to come back.`
-        : decision.switchedTo
-          ? `Rate limit reached. Switched to account "${decision.switchedTo}" and continuing — you don't need to come back.`
-          : `Rate limit reached on every account. "${RESUME_MESSAGE}" will be sent automatically at ${new Date(decision.retryAt).toISOString()} — you don't need to come back.`,
+      detail: limitNotice(decision, new Date(decision.retryAt).toISOString()),
     });
     this.scheduleRetry();
   }

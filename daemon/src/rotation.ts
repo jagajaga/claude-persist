@@ -41,7 +41,14 @@ export interface RotationPlan {
   switchTo: AccountInfo | null;
   /** When the session should send "restart and continue". */
   retryAt: number;
-  why: 'switched' | 'cooldown' | 'all-limited' | 'disabled' | 'single-account';
+  why:
+    | 'switched'
+    | 'cooldown'
+    /** In cooldown *and* the account we are on is spent — retrying now is doomed. */
+    | 'cooldown-limited'
+    | 'all-limited'
+    | 'disabled'
+    | 'single-account';
 }
 
 /**
@@ -117,6 +124,18 @@ export function planAfterLimit(opts: {
 
   // Another session just switched us; don't cycle again, just try where we are.
   if (now - state.lastSwitchAt < SWITCH_COOLDOWN_MS) {
+    const currentAccount = accounts.find((a) => accountKey(a.configDir) === accountKey(current));
+    // ...unless the account we landed on is itself spent. Retrying into a known
+    // limit costs a real turn to be refused by the same limit, and the 5s retry
+    // made that a loop: four turns in twenty seconds, each one doomed before it
+    // was sent. Wait for the cooldown to end and then pick properly.
+    if (currentAccount && !usable(currentAccount, state, now, identityOf)) {
+      return {
+        switchTo: null,
+        retryAt: state.lastSwitchAt + SWITCH_COOLDOWN_MS + SWITCH_SETTLE_MS,
+        why: 'cooldown-limited',
+      };
+    }
     return { switchTo: null, retryAt: now + SWITCH_SETTLE_MS, why: 'cooldown' };
   }
 

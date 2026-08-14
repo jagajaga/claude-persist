@@ -28,7 +28,7 @@ const noopCallbacks = {
   onUsage(): void {},
   rateLimitWindows: () => ({}),
   log(): void {},
-  onLimited: (at: number) => ({ retryAt: at, switchedTo: null }),
+  onLimited: (at: number) => ({ retryAt: at, switchedTo: null, why: 'all-limited' }),
   beforeRetry: () => null,
   onAgents(): void {},
 };

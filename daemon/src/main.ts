@@ -307,7 +307,7 @@ const callbacks = {
    * The active account was refused. Record it, move to one with room if that is
    * enabled and one exists, and say when the session should try again.
    */
-  onLimited(ownResetAt: number): { retryAt: number; switchedTo: string | null } {
+  onLimited(ownResetAt: number): { retryAt: number; switchedTo: string | null; why: string } {
     const now = Date.now();
     const current = accountsStore.active;
     // Key by identity: two directories logged into the same account share one
@@ -328,10 +328,16 @@ const callbacks = {
     });
     if (plan.switchTo) {
       activateAccount(plan.switchTo.configDir, 'rate limit on the previous account');
-      return { retryAt: plan.retryAt, switchedTo: plan.switchTo.name };
+      return { retryAt: plan.retryAt, switchedTo: plan.switchTo.name, why: plan.why };
     }
-    logLine(`limit handling: ${plan.why}; retry at ${new Date(plan.retryAt).toISOString()}`);
-    return { retryAt: plan.retryAt, switchedTo: null };
+    // Name the accounts considered, so "every account" can be checked rather
+    // than taken on trust.
+    const groups = new Set(accountsStore.list().map((a) => identityOf(a)));
+    logLine(
+      `limit handling: ${plan.why}; ${groups.size} distinct account(s), ` +
+        `${rotation.limited.size} marked limited; retry at ${new Date(plan.retryAt).toISOString()}`,
+    );
+    return { retryAt: plan.retryAt, switchedTo: null, why: plan.why };
   },
   /**
    * A queued retry is about to fire. Decided here rather than at park time so we

@@ -1568,11 +1568,43 @@
     });
   });
   inputEl.addEventListener('input', autosize);
+  /**
+   * Where Enter goes depends on the keyboard you have.
+   *
+   * On a desktop keyboard Enter sends and Shift+Enter makes a new line — the
+   * usual chat bargain. On a phone that bargain is a trap: the soft keyboard's
+   * Return is the only way to break a line, Shift is buried behind a modifier
+   * layer, and a stray Return fires off a half-written message. So on a touch
+   * keyboard Enter makes a new line and the send button (or a hardware
+   * Cmd/Ctrl+Enter) sends.
+   *
+   * `pointer: coarse` is the ask-the-browser version of "is this a phone" —
+   * finger-sized pointer, hence an on-screen keyboard. Anything we cannot ask
+   * (no matchMedia) is treated as a desktop, which is the behaviour that was
+   * already there.
+   */
+  const touchKeyboard = (() => {
+    try {
+      return window.matchMedia('(pointer: coarse)').matches;
+    } catch {
+      return false;
+    }
+  })();
+
   inputEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key !== 'Enter') return;
+    // Mid-composition Enter picks an IME candidate; it is not a send. Android
+    // reports that as keyCode 229 rather than setting isComposing.
+    if (e.isComposing || e.keyCode === 229) return;
+    // A hardware modifier is unambiguous: send, on any device.
+    if (e.metaKey || e.ctrlKey) {
       e.preventDefault();
       send();
+      return;
     }
+    if (e.shiftKey || touchKeyboard) return; // new line
+    e.preventDefault();
+    send();
   });
 
   // ---------- swipe between tabs (touch) --------------------------------------

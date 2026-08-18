@@ -34,6 +34,8 @@ interface JsdomWindow {
   acquireVsCodeApi?: () => unknown;
   IntersectionObserver?: unknown;
   navigator: { onLine: boolean };
+  /** Stubbed per harness: chat.js asks it whether this is a touch device. */
+  matchMedia: (query: string) => DomNode;
   Date: { now: () => number };
   close(): void;
 }
@@ -139,7 +141,10 @@ function liveEvent(event: Record<string, unknown>, ts?: number) {
   return { type: 'event', event: persisted(event, ts) };
 }
 
-function createHarness(sessionId = 'harness-session'): Harness {
+function createHarness(
+  sessionId = 'harness-session',
+  opts: { coarsePointer?: boolean } = {},
+): Harness {
   const dom = new JSDOM(domHtml(sessionId), {
     runScripts: 'dangerously',
     pretendToBeVisual: true, // polyfills requestAnimationFrame/cancelAnimationFrame
@@ -174,6 +179,20 @@ function createHarness(sessionId = 'harness-session'): Harness {
     script.textContent = code;
     window.document.body.appendChild(script);
   };
+  // chat.js asks '(pointer: coarse)' to tell a phone from a desktop, which
+  // decides whether Enter sends or makes a new line. jsdom's matchMedia answers
+  // false to everything, so the device has to be stated here.
+  window.matchMedia = (query: string) => ({
+    matches: opts.coarsePointer === true && query.includes('coarse'),
+    media: query,
+    onchange: null,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => false,
+  });
+
   runScript(STREAMING_MARKDOWN_JS);
   runScript(CHAT_JS);
 
@@ -1012,4 +1031,66 @@ test('agents: stopping marks the row until the CLI confirms by re-reporting', ()
   // The CLI drops it from the live set; the row goes with it.
   h.send({ type: 'agents', agents: [] });
   assert.equal(h.document.querySelector('.agent-item'), null);
+});
+
+// ---------------------------------------------------------------------------
+// Enter: sends from a desktop keyboard, makes a new line on a phone
+//
+// The composer sent on any unshifted Enter. On a phone that is the only key
+// that can break a line — Shift lives behind a modifier layer — so writing two
+// lines was impossible and a stray Return fired off a half-written message.
+// ---------------------------------------------------------------------------
+
+/** Types into the composer and presses Enter with the given modifiers. */
+function pressEnter(h: Harness, text: string, init: Record<string, unknown> = {}): void {
+  const input = h.document.getElementById('input') as unknown as { value: string; dispatchEvent(e: unknown): boolean };
+  input.value = text;
+  input.dispatchEvent(new h.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...init }));
+}
+
+const sentText = (h: Harness): unknown[] =>
+  h.posted.filter((m) => m.type === 'send').map((m) => m.text);
+
+test('composer: plain Enter sends on a desktop keyboard', () => {
+  const h = createHarness('enter-desktop');
+  pressEnter(h, 'ship it');
+  assert.deepEqual(sentText(h), ['ship it']);
+});
+
+test('composer: Shift+Enter is a new line, not a send', () => {
+  const h = createHarness('enter-shift');
+  pressEnter(h, 'first line', { shiftKey: true });
+  assert.deepEqual(sentText(h), [], 'the textarea keeps the keystroke');
+});
+
+test('composer: on a touch keyboard Enter makes a new line', () => {
+  const h = createHarness('enter-phone', { coarsePointer: true });
+  pressEnter(h, 'half a thought');
+  assert.deepEqual(sentText(h), [], 'a phone Return must not fire the message');
+});
+
+/** The escape hatch on a phone with a hardware keyboard attached. */
+test('composer: Cmd+Enter and Ctrl+Enter send on a touch keyboard', () => {
+  const h = createHarness('enter-phone-modifier', { coarsePointer: true });
+  pressEnter(h, 'with cmd', { metaKey: true });
+  pressEnter(h, 'with ctrl', { ctrlKey: true });
+  assert.deepEqual(sentText(h), ['with cmd', 'with ctrl']);
+});
+
+test('composer: Cmd+Enter also sends on a desktop keyboard', () => {
+  const h = createHarness('enter-desktop-modifier');
+  pressEnter(h, 'either way', { metaKey: true });
+  assert.deepEqual(sentText(h), ['either way']);
+});
+
+/**
+ * Selecting a candidate in an IME (Russian, Chinese, the phone's own
+ * autocorrect) ends with Enter. That keystroke belongs to the keyboard, not to
+ * the composer. Android reports it as keyCode 229 rather than isComposing.
+ */
+test('composer: Enter while an IME is composing neither sends nor is swallowed', () => {
+  const h = createHarness('enter-ime');
+  pressEnter(h, 'привет', { isComposing: true });
+  pressEnter(h, 'привет', { keyCode: 229 });
+  assert.deepEqual(sentText(h), []);
 });

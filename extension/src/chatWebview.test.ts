@@ -25,7 +25,12 @@ type DomNode = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 interface JsdomWindow {
   document: DomNode;
-  Element: { prototype: { scrollIntoView: (...args: unknown[]) => void } };
+  Element: {
+    prototype: {
+      scrollIntoView: (...args: unknown[]) => void;
+      getBoundingClientRect: (...args: unknown[]) => unknown;
+    };
+  };
   MessageEvent: new (type: string, init: { data: unknown }) => DomNode;
   MouseEvent: new (type: string, init?: Record<string, unknown>) => DomNode;
   KeyboardEvent: new (type: string, init?: Record<string, unknown>) => DomNode;
@@ -168,6 +173,15 @@ function createHarness(
     observe(): void {}
     unobserve(): void {}
     disconnect(): void {}
+  };
+  // jsdom lays nothing out — every getBoundingClientRect() is all zeros. The
+  // prompt bar picks the exchange you are in by comparing box tops against the
+  // viewport top, so tests state the geometry via data-top and this reads it
+  // back. Elements without one sit at 0, which puts #messages' viewport top at
+  // 0 and makes an unpositioned box "at the top" by default.
+  window.Element.prototype.getBoundingClientRect = function (this: DomNode) {
+    const top = Number(this.dataset?.top ?? 0);
+    return { top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top };
   };
   const scrollIntoViewCalls: DomNode[] = [];
   window.Element.prototype.scrollIntoView = function (this: DomNode): void {
@@ -1093,4 +1107,137 @@ test('composer: Enter while an IME is composing neither sends nor is swallowed',
   pressEnter(h, 'привет', { isComposing: true });
   pressEnter(h, 'привет', { keyCode: 229 });
   assert.deepEqual(sentText(h), []);
+});
+
+// ---------------------------------------------------------------------------
+// The prompt bar: a section header for the exchange you are reading
+//
+// It used to track only the newest prompt — scroll up past it and the bar kept
+// naming a question that was now far below, which is worse than showing
+// nothing. And tapping it could only ever jump back to that same newest
+// prompt.
+// ---------------------------------------------------------------------------
+
+/** Places the loaded prompts at the given viewport tops and scrolls. */
+async function layout(h: Harness, tops: number[]): Promise<void> {
+  const boxes = [...h.document.querySelectorAll('#thread > .user-msg')] as DomNode[];
+  boxes.forEach((box: DomNode, i: number) => {
+    box.dataset.top = String(tops[i]);
+  });
+  h.document.getElementById('messages').dispatchEvent(new h.window.MessageEvent('scroll', { data: null }));
+  await h.flush();
+}
+
+function threeExchanges(h: Harness): void {
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    events: [
+      persisted({ type: 'user_message', text: 'add the rate limit bar' }),
+      persisted({ type: 'assistant_text', text: 'done' }),
+      persisted({ type: 'user_message', text: 'now rotate accounts' }),
+      persisted({ type: 'assistant_text', text: 'done' }),
+      persisted({ type: 'user_message', text: 'enter should make a new line' }),
+    ],
+    info: {},
+  });
+}
+
+const barText = (h: Harness): string => h.document.getElementById('prompt-bar').textContent;
+const barHidden = (h: Harness): boolean => h.document.getElementById('prompt-bar').hidden;
+
+test('prompt bar: scrolling up past a prompt falls back to the one before it', async () => {
+  const h = createHarness('prompt-bar-scroll');
+  threeExchanges(h);
+
+  // Reading the newest exchange: every prompt is above the viewport.
+  await layout(h, [-900, -400, -80]);
+  assert.equal(barText(h), 'enter should make a new line');
+
+  // Scrolled up so the newest prompt is on screen — the content at the top of
+  // the viewport still belongs to the exchange before it.
+  await layout(h, [-500, -120, 300]);
+  assert.equal(barText(h), 'now rotate accounts');
+
+  await layout(h, [-200, 150, 600]);
+  assert.equal(barText(h), 'add the rate limit bar');
+});
+
+test('prompt bar: nothing above the first loaded prompt means no bar', async () => {
+  const h = createHarness('prompt-bar-top');
+  threeExchanges(h);
+  await layout(h, [40, 300, 700]);
+  assert.equal(barHidden(h), true);
+});
+
+test('prompt bar: tapping it lists every prompt in the loaded history, newest first', async () => {
+  const h = createHarness('prompt-menu-list');
+  threeExchanges(h);
+  await layout(h, [-900, -400, -80]);
+
+  h.document.getElementById('prompt-bar').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  const items = [...h.document.querySelectorAll('.prompt-item .prompt-label')] as DomNode[];
+  assert.deepEqual(
+    items.map((i: DomNode) => i.textContent),
+    ['enter should make a new line', 'now rotate accounts', 'add the rate limit bar'],
+  );
+});
+
+test('prompt bar: the list marks the exchange you are in', async () => {
+  const h = createHarness('prompt-menu-check');
+  threeExchanges(h);
+  await layout(h, [-500, -120, 300]); // reading the middle exchange
+
+  h.document.getElementById('prompt-bar').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  const checked = [...h.document.querySelectorAll('.prompt-item')]
+    .filter((item: DomNode) => item.querySelector('.menu-check').textContent === '✓')
+    .map((item: DomNode) => item.querySelector('.prompt-label').textContent);
+  assert.deepEqual(checked, ['now rotate accounts']);
+});
+
+test('prompt bar: picking a message jumps to it and closes the list', async () => {
+  const h = createHarness('prompt-menu-jump');
+  threeExchanges(h);
+  await layout(h, [-900, -400, -80]);
+
+  h.document.getElementById('prompt-bar').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  const oldest = h.document.querySelectorAll('.prompt-item')[2];
+  oldest.dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+
+  const target = h.document.querySelectorAll('#thread > .user-msg')[0];
+  assert.equal(h.scrollIntoViewCalls.at(-1), target, 'jumped to the message that was picked');
+  assert.equal(h.document.querySelector('.prompt-menu').hidden, true);
+});
+
+test('prompt bar: tapping again closes the list', async () => {
+  const h = createHarness('prompt-menu-toggle');
+  threeExchanges(h);
+  await layout(h, [-900, -400, -80]);
+  const bar = h.document.getElementById('prompt-bar');
+
+  bar.dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  assert.equal(h.document.querySelector('.prompt-menu').hidden, false);
+  bar.dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  assert.equal(h.document.querySelector('.prompt-menu').hidden, true);
+});
+
+/** A switch to another session must not leave the old chat's prompts listed. */
+test('prompt bar: a reset replay clears the list', async () => {
+  const h = createHarness('prompt-menu-reset');
+  threeExchanges(h);
+  await layout(h, [-900, -400, -80]);
+
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    events: [persisted({ type: 'user_message', text: 'a different session' })],
+    info: {},
+  });
+  await layout(h, [-100]);
+
+  h.document.getElementById('prompt-bar').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  const items = [...h.document.querySelectorAll('.prompt-item .prompt-label')] as DomNode[];
+  assert.deepEqual(items.map((i: DomNode) => i.textContent), ['a different session']);
 });

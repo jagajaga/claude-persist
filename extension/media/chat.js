@@ -97,25 +97,133 @@
     }
   });
 
-  // Sticky bar showing the last user prompt whenever it has scrolled out of
-  // view; clicking jumps back to where the current exchange started.
-  let lastUserEl = null;
-  const promptObserver = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) promptBar.hidden = entry.isIntersecting;
-    },
-    { root: messagesEl },
-  );
-  function trackUserMessage(box, text) {
-    lastUserEl = box;
-    promptBar.textContent = text.length > 160 ? `${text.slice(0, 160)}…` : text;
-    promptObserver.disconnect();
-    promptObserver.observe(box);
+  // Sticky bar naming the exchange you are currently looking at.
+  //
+  // It used to track only the newest prompt: scrolling up past it left the bar
+  // showing a question two hours of transcript below, which is worse than
+  // nothing. It is a section header now — whichever prompt started the content
+  // at the top of the viewport — so scrolling back through the conversation
+  // walks the bar back through the prompts with it.
+  //
+  // Tapping it opens the list of every prompt in the loaded history, to jump
+  // straight to one.
+  const PROMPT_BAR_MAX = 160;
+  const PROMPT_MENU_MAX = 90;
+
+  /** The .user-msg boxes in document order; rebuilt lazily after renders. */
+  let promptEls = [];
+  let promptsStale = true;
+  /** The prompt the bar is currently naming, and the target of a jump. */
+  let activePromptEl = null;
+
+  const promptMenu = el('div', 'attach-menu prompt-menu');
+  promptMenu.hidden = true;
+  document.body.appendChild(promptMenu);
+
+  function markPromptsStale() {
+    promptsStale = true;
   }
-  promptBar.addEventListener('click', () => {
-    if (!lastUserEl) return;
+
+  function prompts() {
+    if (promptsStale) {
+      // Read from the DOM rather than keeping a parallel list: "load earlier"
+      // prepends, and a list that disagreed with document order would send
+      // jumps to the wrong message.
+      promptEls = Array.from(threadEl.querySelectorAll('.user-msg'));
+      promptsStale = false;
+    }
+    return promptEls;
+  }
+
+  function promptText(box) {
+    return (box && box.dataset && box.dataset.prompt) || '';
+  }
+
+  function clip(text, max) {
+    return text.length > max ? `${text.slice(0, max)}…` : text;
+  }
+
+  /**
+   * The last prompt whose top has scrolled above the top of the viewport —
+   * i.e. the one that opened whatever you are reading. While a prompt is still
+   * on screen the bar names the exchange before it, which is what a sticky
+   * header does; nothing above the first loaded prompt means no bar at all.
+   */
+  function updatePromptBar() {
+    const list = prompts();
+    const top = messagesEl.getBoundingClientRect().top;
+    let active = null;
+    for (const box of list) {
+      if (box.getBoundingClientRect().top < top + 1) active = box;
+      else break;
+    }
+    activePromptEl = active;
+    if (!active) {
+      promptBar.hidden = true;
+      promptMenu.hidden = true;
+      return;
+    }
+    promptBar.textContent = clip(promptText(active), PROMPT_BAR_MAX);
+    promptBar.hidden = false;
+  }
+
+  // Scroll fires far more often than the bar can meaningfully change; one
+  // recomputation per frame is enough and keeps the reads off the scroll path.
+  let promptBarQueued = false;
+  function schedulePromptBar() {
+    if (promptBarQueued) return;
+    promptBarQueued = true;
+    requestAnimationFrame(() => {
+      promptBarQueued = false;
+      updatePromptBar();
+    });
+  }
+  messagesEl.addEventListener('scroll', schedulePromptBar);
+
+  function jumpToPrompt(box) {
+    promptMenu.hidden = true;
     pinned = false;
-    lastUserEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    box.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    schedulePromptBar();
+  }
+
+  /** Newest first: a jump backwards is nearly always a recent one. */
+  function renderPromptMenu() {
+    const list = prompts();
+    promptMenu.replaceChildren();
+    if (!list.length) {
+      promptMenu.appendChild(el('div', 'menu-title', 'No messages yet'));
+      return;
+    }
+    promptMenu.appendChild(
+      el('div', 'menu-title', `${list.length} message${list.length === 1 ? '' : 's'}`),
+    );
+    for (let i = list.length - 1; i >= 0; i--) {
+      const box = list[i];
+      const text = promptText(box);
+      const item = el('button', 'menu-item prompt-item');
+      item.appendChild(el('span', 'menu-check', box === activePromptEl ? '✓' : ''));
+      const label = el('span', 'prompt-label', clip(text, PROMPT_MENU_MAX));
+      label.title = text; // the full text when it ellipsizes
+      item.appendChild(label);
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        jumpToPrompt(box);
+      });
+      promptMenu.appendChild(item);
+    }
+  }
+
+  promptBar.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!promptMenu.hidden) {
+      promptMenu.hidden = true;
+      return;
+    }
+    renderPromptMenu();
+    // Anchored under the bar, whose height depends on the font and the theme.
+    promptMenu.style.top = `${promptBar.getBoundingClientRect().bottom}px`;
+    promptMenu.hidden = false;
   });
 
   /**
@@ -743,8 +851,12 @@
           }
           box.appendChild(row);
         }
+        // The bar and its menu read the prompt back off the element, so the
+        // displayed text has to live there rather than in a parallel list.
+        box.dataset.prompt = displayUserText(event.text);
         threadEl.appendChild(box);
-        trackUserMessage(box, displayUserText(event.text));
+        markPromptsStale();
+        schedulePromptBar();
         break;
       }
       case 'assistant_text': {
@@ -1073,7 +1185,10 @@
     toolCards.clear();
     loadEarlierRow = null;
     firstRenderedSeq = null;
-    lastUserEl = null;
+    promptEls = [];
+    promptsStale = true;
+    activePromptEl = null;
+    promptMenu.hidden = true;
     promptBar.hidden = true;
     workingRow = null;
   }
@@ -1525,6 +1640,9 @@
     }
     if (!agentsMenu.hidden && !agentsMenu.contains(e.target) && !agentsChip.contains(e.target)) {
       agentsMenu.hidden = true;
+    }
+    if (!promptMenu.hidden && !promptMenu.contains(e.target) && !promptBar.contains(e.target)) {
+      promptMenu.hidden = true;
     }
   });
 

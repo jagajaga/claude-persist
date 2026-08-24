@@ -940,3 +940,30 @@ button.secondary {
 
 /* On a tool card it sits inline in the head, before the tool name. */
 .tool-card.from-agent { border-left: 2px solid var(--agent-tint, transparent); }
+
+/* ---------- empty session -------------------------------------------------- */
+
+/* A fresh panel was a bare rectangle. The thread is where a new user is
+   looking, so what they need to know first goes there rather than in a
+   notification they will not read. */
+.empty-state {
+  margin: auto 0;
+  padding: 28px 18px;
+  text-align: center;
+  color: var(--vscode-descriptionForeground);
+}
+.empty-title {
+  font-size: 1.05em;
+  color: var(--vscode-foreground);
+  margin-bottom: 8px;
+}
+.empty-hint { font-size: 0.9em; line-height: 1.5; max-width: 46ch; margin: 0 auto 16px; }
+.empty-action {
+  background: transparent;
+  color: var(--vscode-textLink-foreground);
+  border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.35));
+  border-radius: 7px;
+  padding: 6px 14px;
+  font-size: 0.9em;
+}
+.empty-action:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }

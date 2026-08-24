@@ -706,6 +706,38 @@
     return node;
   }
 
+  /**
+   * What an empty session shows.
+   *
+   * A fresh panel was a bare grey rectangle above the composer: no greeting, no
+   * state, and — for someone who has never signed in — no hint that the first
+   * message is about to fail for a reason they cannot guess. The thread is the
+   * only place a new user is looking, so the first thing to know goes there.
+   */
+  function renderEmptyState() {
+    if (threadEl.childElementCount) return;
+    const box = el('div', 'empty-state');
+    box.appendChild(el('div', 'empty-title', 'Ask Claude anything about this folder.'));
+    box.appendChild(
+      el(
+        'div',
+        'empty-hint',
+        'This session runs in a background daemon — reload the window, close the tab, ' +
+          'or lose the connection and the turn keeps going.',
+      ),
+    );
+    const signIn = el('button', 'empty-action', 'Not signed in to Claude? Add an account');
+    signIn.addEventListener('click', () => vscode.postMessage({ type: 'addAccount' }));
+    box.appendChild(signIn);
+    threadEl.appendChild(box);
+  }
+
+  /** Removes the empty state as soon as there is anything real to show. */
+  function clearEmptyState() {
+    const box = threadEl.querySelector('.empty-state');
+    if (box) box.remove();
+  }
+
   function renderToolUse(event) {
     endStreaming();
     if (event.toolName === 'TodoWrite') {
@@ -878,6 +910,7 @@
   }
 
   function renderEvent(event, ts) {
+    clearEmptyState();
     switch (event.type) {
       case 'user_message': {
         endStreaming();
@@ -1459,6 +1492,10 @@
           currentEffort = msg.info.effort || '';
           renderPill();
         }
+        // Nothing at all in this session: say something rather than showing a
+        // blank rectangle. Only for a genuinely empty thread, so it cannot
+        // appear above a conversation that merely scrolled out of the window.
+        if (!msg.hasEarlier) renderEmptyState();
         const anchorEl = anchorIndex >= 0 ? threadEl.children[anchorIndex] : null;
         if (anchorEl) {
           // Land on the message that was at the top before, with the newly

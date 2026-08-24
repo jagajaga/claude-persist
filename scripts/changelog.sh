@@ -14,7 +14,13 @@ out="extension/CHANGELOG.md"
 
 # Newest first, ordered by version rather than by tag date — a re-tagged or
 # back-dated release must not jump the queue.
-mapfile -t tags < <(git tag --list 'v*' --sort=-version:refname | head -n "$count")
+#
+# Read in a loop rather than with mapfile: macOS ships bash 3.2, where mapfile
+# does not exist, and the release matrix runs this on macOS runners too.
+tags=()
+while IFS= read -r tag_line; do
+  tags+=("$tag_line")
+done < <(git tag --list 'v*' --sort=-version:refname | head -n "$count")
 
 if [ ${#tags[@]} -eq 0 ]; then
   echo "no v* tags found; leaving $out alone" >&2

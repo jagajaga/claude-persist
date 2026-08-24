@@ -23,6 +23,7 @@ import {
   tasksFromLevelSignal,
 } from './agents.js';
 import { NO_CLAUDE_MESSAGE, claudeExecutable } from './claudeExecutable.js';
+import { friendlyError, isSetupFailure } from './errorHints.js';
 import {
   MAX_ATTEMPTS,
   RESTART_RESUME_MS,
@@ -891,7 +892,10 @@ export class DaemonSession {
       if (this.activeQuery === q) this.setStatus('idle');
     } catch (err) {
       if (this.activeQuery === q) {
-        this.setStatus('error', err instanceof Error ? err.message : String(err));
+        this.setStatus(
+          'error',
+          friendlyError(err instanceof Error ? err.message : String(err)),
+        );
       }
     } finally {
       // Same reasoning as above, and this one is worse: clearing
@@ -1130,6 +1134,18 @@ export class DaemonSession {
         // Only an errored turn can be a rate-limit rejection. `subtype` is
         // 'success' on a normal answer; anything else, or is_error, means the
         // turn did not complete.
+        // A turn refused for setup reasons — no login, no Claude Code — comes
+        // back as an ordinary errored result, so it rendered as a plain turn
+        // summary reading "Invalid API key · Please run /login": no error
+        // styling, and advice for a terminal this extension exists to avoid.
+        // It is the first thing a new user sees, so it says what to do instead.
+        if (msg.is_error === true && isSetupFailure(summaryText)) {
+          this.appendEvent({
+            type: 'status',
+            status: 'error',
+            detail: friendlyError(summaryText),
+          });
+        }
         const textLooksLimited = isLimitNotice(summaryText);
         // Corroborate against measured usage before parking. Prose and the
         // result's own error flags have both produced false positives; the

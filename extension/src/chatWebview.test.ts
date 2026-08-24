@@ -1299,3 +1299,55 @@ test('agent badge: an empty agent name is treated as the main thread', () => {
   h.send(liveEvent({ type: 'assistant_text', text: 'no name', agent: '' }));
   assert.deepEqual(badges(h), []);
 });
+
+// ---------------------------------------------------------------------------
+// Empty state
+//
+// A fresh panel was a bare grey rectangle above the composer — no greeting, no
+// state, and for someone who has never signed in, no hint that their first
+// message was about to fail for a reason they could not guess.
+// ---------------------------------------------------------------------------
+
+test('empty state: a session with no history says what this is', () => {
+  const h = createHarness('empty-fresh');
+  h.send({ type: 'replay', reset: true, hasEarlier: false, events: [], info: {} });
+  const box = h.document.querySelector('.empty-state');
+  assert.notEqual(box, null, 'a fresh session must not render a blank rectangle');
+  assert.match(box.textContent, /daemon/, 'and should say why this session is different');
+});
+
+test('empty state: it offers the way to sign in', () => {
+  const h = createHarness('empty-signin');
+  h.send({ type: 'replay', reset: true, hasEarlier: false, events: [], info: {} });
+  h.document.querySelector('.empty-action').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  assert.ok(
+    h.posted.some((m) => m.type === 'addAccount'),
+    'the button must reach the host, not just look clickable',
+  );
+});
+
+test('empty state: any real content replaces it', () => {
+  const h = createHarness('empty-then-content');
+  h.send({ type: 'replay', reset: true, hasEarlier: false, events: [], info: {} });
+  h.send(liveEvent({ type: 'user_message', text: 'hello' }));
+  assert.equal(h.document.querySelector('.empty-state'), null);
+});
+
+test('empty state: a replay with events never shows it', () => {
+  const h = createHarness('empty-with-events');
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    events: [persisted({ type: 'user_message', text: 'hi' })],
+    info: {},
+  });
+  assert.equal(h.document.querySelector('.empty-state'), null);
+});
+
+/** Scrolled-away history is not an empty session. */
+test('empty state: a window with earlier history never shows it', () => {
+  const h = createHarness('empty-has-earlier');
+  h.send({ type: 'replay', reset: true, hasEarlier: true, events: [], info: {} });
+  assert.equal(h.document.querySelector('.empty-state'), null);
+});

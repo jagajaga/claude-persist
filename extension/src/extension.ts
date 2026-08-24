@@ -71,15 +71,17 @@ function scheduleReconnect(context: vscode.ExtensionContext, delayMs = 1000): vo
 function resolveDaemonEntry(context: vscode.ExtensionContext): string {
   const configured = vscode.workspace.getConfiguration('claudePersist').get<string>('daemonEntry');
   if (configured) return configured;
-  // Monorepo dev layout: <repo>/extension and <repo>/daemon side by side.
-  const candidates = [
-    path.join(context.extensionPath, '..', 'daemon', 'dist', 'main.js'),
-    path.join(context.extensionPath, 'daemon', 'dist', 'main.js'), // bundled into the .vsix
-  ];
-  for (const candidate of candidates) {
+  // Monorepo dev layout first (<repo>/extension and <repo>/daemon side by
+  // side), then the copy bundled into the .vsix.
+  const devCheckout = path.join(context.extensionPath, '..', 'daemon', 'dist', 'main.js');
+  const bundled = path.join(context.extensionPath, 'daemon', 'dist', 'main.js');
+  for (const candidate of [devCheckout, bundled]) {
     if (fs.existsSync(candidate)) return candidate;
   }
-  return candidates[0];
+  // Fall back to the bundled path, not the dev one: for an installed extension
+  // '..' is the extensions directory, so reporting that path told the user to
+  // look for a file that has never existed on their machine.
+  return bundled;
 }
 
 async function ensureClient(context: vscode.ExtensionContext): Promise<DaemonClient> {

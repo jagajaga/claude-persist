@@ -64,13 +64,22 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          OLD=$(node -p "require('./extension/package.json').version")
-          # npm's stdout is multi-line in workspaces — read the result from
-          # the file instead of parsing it.
-          (cd extension && npm version patch --no-git-tag-version >/dev/null)
-          NEW=$(node -p "require('./extension/package.json').version")
-          git add extension/package.json
-          git commit -m "chore(extension): $OLD -> $NEW"
+          CURRENT=$(node -p "require('./extension/package.json').version")
+          # A version with no tag yet was set deliberately in this commit — a
+          # 1.0, or any hand-picked number. Release it rather than bumping past
+          # it, which would turn a deliberate 1.0.0 into 1.0.1 and leave 1.0.0
+          # never published.
+          if git rev-parse -q --verify "refs/tags/v$CURRENT" >/dev/null; then
+            # npm's stdout is multi-line in workspaces — read the result from
+            # the file instead of parsing it.
+            (cd extension && npm version patch --no-git-tag-version >/dev/null)
+            NEW=$(node -p "require('./extension/package.json').version")
+            git add extension/package.json
+            git commit -m "chore(extension): $CURRENT -> $NEW"
+          else
+            NEW=$CURRENT
+            echo "releasing $NEW as set in the commit; no bump"
+          fi
           git tag -a "v$NEW" -m "v$NEW"
           git push origin main "v$NEW"
           echo "version=$NEW" >> "$GITHUB_OUTPUT"
@@ -158,9 +167,10 @@ jobs:
     if: always() && needs.tag.result == 'success'
     runs-on: ubuntu-latest
     env:
-      # Absent until the Open VSX token is added as a repo secret; the publish
-      # step below is skipped while it is, so the release still succeeds.
+      # Both absent until added as repo secrets; each publish step is skipped
+      # while its token is, so the release still succeeds without them.
       OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -261,5 +271,39 @@ jobs:
           done
           if [ "$failed" -ne 0 ]; then
             echo "::error::Open VSX publish failed after 3 attempts; the GitHub release is live. Re-run with scripts/publish-ovsx.sh once the service recovers."
+            exit 1
+          fi
+
+      # Desktop VS Code reads only Microsoft's marketplace, so without this a
+      # desktop user searching "Claude Persist" finds nothing and has to pick
+      # one of six files off the release page by hand.
+      #
+      # Same shape as Open VSX: every target published separately, retried, and
+      # never allowed to fail a release that is already live on GitHub.
+      - name: Publish to the VS Code Marketplace
+        if: env.VSCE_PAT != ''
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          publish() {
+            for attempt in 1 2 3; do
+              if npx --yes @vscode/vsce publish --packagePath "$1" -p "$VSCE_PAT"; then
+                echo "published $1 on attempt $attempt"
+                return 0
+              fi
+              echo "::warning::Marketplace publish of $1, attempt $attempt, failed"
+              sleep $((attempt * 30))
+            done
+            return 1
+          }
+          V=${{ needs.tag.outputs.version }}
+          failed=0
+          publish "claude-persist-${V}.vsix" || failed=1
+          for f in claude-persist-${V}-*.vsix; do
+            [ -e "$f" ] || continue
+            publish "$f" || failed=1
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::VS Code Marketplace publish failed; the GitHub release and Open VSX are unaffected."
             exit 1
           fi

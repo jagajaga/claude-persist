@@ -73,6 +73,11 @@ Reload the window, click the Claude Persist icon in the activity bar, and
 create a session. The daemon starts automatically (detached from VS Code) and
 self-replaces on extension upgrades.
 
+Search **Claude Persist** in the Extensions view — the extension is on both
+registries, [the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=jaga.claude-persist-vscode)
+(desktop VS Code) and [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
+(code-server, VSCodium), and your editor picks the build for your machine.
+
 Every release publishes one `.vsix` per platform, each built on that platform:
 **linux-x64**, **linux-arm64**, **darwin-x64**, **darwin-arm64** and
 **win32-x64** bundle the Claude Agent SDK runtime (~100 MB, nothing to install),

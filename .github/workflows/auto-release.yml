@@ -208,10 +208,12 @@ jobs:
         run: |
           set -euo pipefail
           cat > RELEASE_BODY.md <<'EOF'
-          Install from the [Open VSX marketplace](https://open-vsx.org/extension/jaga/claude-persist-vscode)
-          — search **Claude Persist** in the Extensions view and your editor picks
-          the right build automatically. The files below are for installing by
-          hand: `code --install-extension <file>`.
+          Search **Claude Persist** in the Extensions view — the extension is on
+          both [the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=jaga.claude-persist-vscode)
+          (desktop VS Code) and [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
+          (code-server, VSCodium), and your editor picks the build for your
+          machine. The files below are for installing by hand:
+          `code --install-extension <file>`.
 
           | Your machine | File |
           | --- | --- |

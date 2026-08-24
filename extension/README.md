@@ -7,6 +7,9 @@ a page refresh normally kills any in-flight Claude session.
 Refresh the page mid-generation and the turn keeps running in the daemon; the
 tab replays everything it missed when it comes back.
 
+[**Install from the VS Code Marketplace**](https://marketplace.visualstudio.com/items?itemName=jaga.claude-persist-vscode)
+· [**Open VSX**](https://open-vsx.org/extension/jaga/claude-persist-vscode) (code-server, VSCodium)
+
 ## Getting started
 
 1. **Nothing to install first**, on Linux, macOS or Windows — the runtime is

@@ -15,7 +15,7 @@ tab replays everything it missed when it comes back.
 1. **Nothing to install first**, on Linux, macOS or Windows — the runtime is
    bundled. On other platforms see Requirements below.
 2. **Open the panel.** Click the Claude Persist icon in the activity bar, or the
-   `✨ Claude Persist` item in the status bar, or run
+   "Claude Persist" item in the status bar, or run
    **Claude Persist: New Session** from the Command Palette.
 3. **Pick a folder** when asked. That is the working directory for the session.
 4. **Sign in**, if you have never used Claude Code on this machine: open the
@@ -41,17 +41,88 @@ tab replays everything it missed when it comes back.
 
 ## Features
 
-- **Sessions that outlive the window.** The daemon runs detached; tabs are just
-  views onto it. Reload, disconnect, or close the tab — the turn keeps going.
-- **Every session, from any window.** *Claude Persist: Open Session* lists them
-  all, grouped by folder, with unread markers.
-- **Multiple accounts.** Sign in to several and switch from the model pill. When
-  one hits its limit the daemon moves to the next and resumes on its own; when
-  every account is spent it waits for the soonest reset and picks up from there.
-  Turn it off with `claudePersist.switchAccountOnLimit`.
-- **Subagent attribution.** When several subagents work at once, each message is
-  badged with the one that wrote it.
-- **Images, files, and drag-and-drop** into the chat, with inline previews.
+### Sessions
+
+- **Reload-proof.** Turns keep executing with no client attached. Reload the
+  window mid-generation and the tab replays everything it missed, tool calls
+  included.
+- **Native editor tabs**, restored after a window reload, plus an activity-bar
+  sidebar listing every session grouped by folder, with live running/idle state
+  and unread markers.
+- **Any session, from any window.** The daemon is per-user, not per-window.
+- **Survives its own upgrades.** A turn in flight when the daemon restarts is
+  queued and resumed rather than lost.
+- **Import existing Claude Code sessions** from `~/.claude` and continue them
+  with their full context.
+- **Rename and delete** sessions; long histories load a window at a time with
+  "load earlier".
+
+### The chat
+
+- **Claude Code look and feel** — streaming markdown, collapsible tool cards
+  with IN/OUT, inline diffs for Edit and Write, todo checklists, and clickable
+  file paths that open in the editor.
+- **Permissions** — Allow/Deny cards that survive a reload, plus a
+  bypass-permissions toggle you can flip mid-turn.
+- **Questions** — AskUserQuestion renders as option cards with a free-text
+  fallback.
+- **Nothing gets lost.** An unanswered question or permission request stays
+  pinned beside the composer while the conversation keeps scrolling.
+- **Jump back through the conversation.** A sticky bar names the exchange you
+  are reading and follows you as you scroll; tap it for a list of every message
+  in the loaded history and jump to one.
+- **Context ring** — live context usage against the model's real window. Click
+  to compact the conversation.
+- **Model and reasoning-effort picker**, per session.
+- **Interrupt** a running turn; per-turn token counts, cost, and duration; a
+  live elapsed timer while Claude works.
+- **Git branch and worktree** shown beside the composer.
+- **Offline is visible**, not silent: the panel dims and reconnects by itself.
+
+### Attachments
+
+- **Images** embed as vision blocks; other files attach as path references.
+- **Drag and drop, paste, or pick** — large files upload in chunks with
+  progress.
+- **Inline previews** with a full-size lightbox, including for image paths you
+  simply type or that a tool returns.
+
+### Accounts and rate limits
+
+- **Several accounts**, switched from the model pill.
+- **Sign in inside the editor** — a link and a box for the code. No terminal,
+  and it works over code-server where a callback to `localhost` cannot.
+- **Sign in to the default account or a named one**; accounts with no
+  credentials are labelled rather than silently failing.
+- **Rate limits in the status bar**, with the reset time in the tooltip.
+- **Automatic rotation.** Hit a limit and the turn is parked, the next account
+  is activated, and the conversation resumes on its own. If every account is
+  spent it waits for the soonest reset and resumes then. You do not have to
+  come back and restart it.
+- **Transcripts follow you** between accounts, so a switch mid-conversation
+  continues rather than starting over.
+- **One set of rules.** `CLAUDE.md` and skills are shared across every account.
+
+### Subagents
+
+- **A live count** beside the composer while subagents are working.
+- **Click it for the list**, and stop any one of them individually.
+- **Every message is badged** with the subagent that wrote it, colour-coded, so
+  parallel agents writing into one transcript stay legible.
+
+### On a phone or tablet
+
+- **Enter makes a new line** on a touch keyboard, where it is the only key that
+  can; Cmd/Ctrl+Enter sends. On a desktop keyboard Enter sends as usual.
+- **Swipe** left and right to move between editor tabs.
+- The composer stays in view while the on-screen keyboard is up.
+
+### Commands
+
+`Claude Persist: New Session`, `Open Session`, `Add Account (Sign In)`,
+`Import Claude Code Session`, `Rename Session`, `Delete Session`,
+`Refresh Sessions` — all under the "Claude Persist" category in the Command
+Palette.
 
 ## Troubleshooting
 

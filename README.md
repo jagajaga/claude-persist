@@ -40,24 +40,72 @@ that are still waiting, while nobody was connected.
 
 ## Features
 
+**Sessions**
+
 - **Reload-proof sessions** — turns keep executing with no client attached;
   reconnect replays everything missed, mid-generation refreshes included
 - **Multiple sessions as native editor tabs**, restored after window reload,
-  plus an activity-bar sidebar with live running/idle status
-- **Claude Code look & feel** — markdown (marked + DOMPurify), collapsible
+  plus an activity-bar sidebar grouped by folder with live running/idle status
+  and unread markers
+- **Survives daemon restarts and upgrades** — a turn in flight is queued and
+  resumed rather than lost
+- **Import Claude Code sessions** — converts existing `~/.claude` transcripts
+  and continues them via SDK resume, with full context
+- **Session rename**, delete, and windowed history with "load earlier"
+
+**Chat**
+
+- **Claude Code look and feel** — markdown (marked + DOMPurify), collapsible
   tool cards with IN/OUT, inline diffs for Edit/Write, todo checklists,
   clickable file paths that open in the editor
 - **Permissions** — Allow/Deny cards that survive reloads, plus a
   bypass-permissions toggle (switchable mid-turn)
-- **Attachments** — images embed as vision blocks, other files attach as path
-  references
+- **Questions** — AskUserQuestion option cards with a free-text fallback
+- **Pinned prompts** — an unanswered question or permission stays beside the
+  composer while the conversation continues
+- **Prompt bar** — a sticky header naming the exchange you are reading; tap for
+  a jump list of every message in the loaded window
 - **Context ring** — live context usage vs the model's real window; click to
   compact the conversation
-- **Import Claude Code sessions** — converts existing `~/.claude` transcripts
-  and continues them via SDK resume, with full context
-- **Session rename**, per-turn token counts, interrupt/stop
-- **Subscription auth** — uses the same login as Claude Code (`claude /login`
-  or `ANTHROPIC_API_KEY`); on Claude Pro/Max there are no API charges
+- **Model and reasoning-effort picker**, per-turn token counts, cost, duration,
+  interrupt/stop, git branch and worktree chip, visible offline/reconnect state
+
+**Attachments**
+
+- Images embed as vision blocks, other files attach as path references
+- Drag-and-drop, clipboard paste, or file picker, with chunked upload progress
+- Inline thumbnails and a lightbox, including for image paths in message text
+
+**Accounts and rate limits**
+
+- **Multiple accounts** switched from the model pill, with in-editor sign-in —
+  a link and a code box, no terminal, and no `localhost` callback
+- **Rate limits in the status bar** with reset times
+- **Automatic rotation and resume** — on a limit the turn is parked, the next
+  account is activated, and the conversation continues on its own; when every
+  account is spent it waits for the soonest reset
+- **Transcripts sync between accounts**, so switching mid-conversation resumes
+  rather than restarting
+- **`CLAUDE.md` and skills shared** across every account
+
+**Subagents**
+
+- Live count beside the composer, a list of what is running, and a stop button
+  per subagent
+- Every message badged with the subagent that wrote it, colour-coded, so
+  parallel agents writing into one transcript stay legible
+
+**Mobile**
+
+- Enter makes a new line on touch keyboards (Cmd/Ctrl+Enter sends); Enter sends
+  on a desktop keyboard
+- Swipe between editor tabs; the composer stays visible above the on-screen
+  keyboard
+
+**Auth**
+
+- **Subscription auth** — uses the same login as Claude Code, or
+  `ANTHROPIC_API_KEY`; on Claude Pro/Max there are no API charges
 
 ## Install
 
@@ -149,9 +197,9 @@ WantedBy=default.target
 
 ## Roadmap
 
-Slash-command autocomplete · model picker · "always allow" permission rules ·
-native diff-editor integration · AI titles for imported sessions ·
-multi-platform `.vsix` bundles
+Slash-command autocomplete · "always allow" permission rules · native
+diff-editor integration · AI titles for imported sessions · redaction of
+secrets pasted into the chat
 
 ## License
 

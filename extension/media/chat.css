@@ -894,3 +894,49 @@ button.secondary {
 
 /* Stays visible until the CLI confirms by re-reporting its live task set. */
 .agent-item.stopping .agent-desc { opacity: 0.5; text-decoration: line-through; }
+
+/* ---------- subagent attribution ------------------------------------------- */
+
+/* Several subagents write into one transcript at once, interleaved. The badge
+   names the one that wrote a block; the rail carries the same colour down its
+   left edge so a run of messages from one agent reads as a group.
+
+   Eight tints from the theme's chart palette — themed rather than hard-coded,
+   and doubled up past six so the hash never lands on "no colour". */
+[data-tint="0"] { --agent-tint: var(--vscode-charts-blue, #4a9eda); }
+[data-tint="1"] { --agent-tint: var(--vscode-charts-green, #4caf50); }
+[data-tint="2"] { --agent-tint: var(--vscode-charts-orange, #e8912d); }
+[data-tint="3"] { --agent-tint: var(--vscode-charts-purple, #b180d7); }
+[data-tint="4"] { --agent-tint: var(--vscode-charts-red, #e04f5f); }
+[data-tint="5"] { --agent-tint: var(--vscode-charts-yellow, #d3b229); }
+[data-tint="6"] { --agent-tint: var(--vscode-charts-foreground, var(--vscode-descriptionForeground)); }
+[data-tint="7"] { --agent-tint: var(--vscode-textLink-foreground, #4a9eda); }
+
+.agent-badge {
+  flex: none;
+  align-self: flex-start;
+  display: inline-block;
+  max-width: 16em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.7em;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  padding: 1px 8px;
+  margin-right: 7px;
+  border-radius: 999px;
+  border: 1px solid var(--agent-tint, var(--vscode-descriptionForeground));
+  color: var(--agent-tint, var(--vscode-descriptionForeground));
+  opacity: 0.9;
+}
+
+/* On a text block the badge sits on its own line above the prose. */
+.assistant.from-agent {
+  border-left: 2px solid var(--agent-tint, transparent);
+  padding-left: 10px;
+}
+.assistant.from-agent > .agent-badge { display: block; width: max-content; margin-bottom: 4px; }
+
+/* On a tool card it sits inline in the head, before the tool name. */
+.tool-card.from-agent { border-left: 2px solid var(--agent-tint, transparent); }

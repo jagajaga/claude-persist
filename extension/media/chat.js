@@ -659,6 +659,53 @@
     threadEl.appendChild(card);
   }
 
+  /**
+   * The badge naming the subagent that wrote a message.
+   *
+   * Several subagents write into this one transcript at once and their
+   * messages arrive interleaved, so without a name the chat reads as one
+   * confused voice. Colour comes from the name itself: the same agent keeps
+   * the same colour for the whole conversation, and two working side by side
+   * are told apart at a glance rather than by reading.
+   */
+  const AGENT_COLOURS = 8;
+
+  /**
+   * Colours are handed out in order of appearance, not hashed from the name.
+   * A hash collides: with eight tints, two agents sharing one was likely
+   * enough to see on the first try, and two agents the same colour is exactly
+   * the confusion the badge exists to remove. Replay re-renders in the same
+   * order, so an agent keeps its colour across a reload.
+   */
+  const agentTints = new Map();
+
+  function agentTint(name) {
+    let tint = agentTints.get(name);
+    if (tint === undefined) {
+      tint = String(agentTints.size % AGENT_COLOURS);
+      agentTints.set(name, tint);
+    }
+    return tint;
+  }
+
+  function agentBadge(name) {
+    const badge = el('span', 'agent-badge', name);
+    badge.title = `Written by subagent: ${name}`;
+    return badge;
+  }
+
+  /**
+   * Marks a rendered block as a subagent's, when the event says it is. The
+   * tint sits on the block so its rail and its badge are the same colour.
+   */
+  function withAgent(node, event) {
+    if (!event || typeof event.agent !== 'string' || !event.agent) return node;
+    node.classList.add('from-agent');
+    node.dataset.tint = agentTint(event.agent);
+    node.insertBefore(agentBadge(event.agent), node.firstChild);
+    return node;
+  }
+
   function renderToolUse(event) {
     endStreaming();
     if (event.toolName === 'TodoWrite') {
@@ -669,6 +716,11 @@
     const head = el('div', 'tool-head');
     const dot = el('span', 'dot spin');
     head.appendChild(dot);
+    if (event.agent) {
+      card.classList.add('from-agent');
+      card.dataset.tint = agentTint(event.agent);
+      head.appendChild(agentBadge(event.agent));
+    }
     head.appendChild(el('span', 'tool-name', event.toolName));
     const desc = toolDescription(event.input);
     if (desc.path) {
@@ -865,7 +917,7 @@
         dropPreviews();
         const wrap = el('div', 'assistant');
         wrap.appendChild(renderMarkdown(event.text));
-        threadEl.appendChild(wrap);
+        threadEl.appendChild(withAgent(wrap, event));
         break;
       }
       case 'tool_use':
@@ -1185,6 +1237,7 @@
     toolCards.clear();
     loadEarlierRow = null;
     firstRenderedSeq = null;
+    agentTints.clear();
     promptEls = [];
     promptsStale = true;
     activePromptEl = null;

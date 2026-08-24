@@ -1241,3 +1241,61 @@ test('prompt bar: a reset replay clears the list', async () => {
   const items = [...h.document.querySelectorAll('.prompt-item .prompt-label')] as DomNode[];
   assert.deepEqual(items.map((i: DomNode) => i.textContent), ['a different session']);
 });
+
+// ---------------------------------------------------------------------------
+// Subagent badges
+//
+// Several subagents write into this one transcript at once and their messages
+// arrive interleaved. Unbadged, the chat reads as one confused voice.
+// ---------------------------------------------------------------------------
+
+const badges = (h: Harness): string[] =>
+  [...h.document.querySelectorAll('.agent-badge')].map((b: DomNode) => b.textContent);
+
+test('agent badge: a subagent message is named', () => {
+  const h = createHarness('agent-badge');
+  h.send(liveEvent({ type: 'assistant_text', text: 'the socket was stale', agent: 'Check daemon logs' }));
+  assert.deepEqual(badges(h), ['Check daemon logs']);
+  assert.equal(h.document.querySelector('.assistant.from-agent') !== null, true);
+});
+
+test('agent badge: the main thread is left unmarked', () => {
+  const h = createHarness('agent-badge-main');
+  h.send(liveEvent({ type: 'assistant_text', text: 'answering directly' }));
+  assert.deepEqual(badges(h), []);
+  assert.equal(h.document.querySelector('.from-agent'), null);
+});
+
+/** The colour is the whole point: two agents interleaved, told apart at a glance. */
+test('agent badge: each agent keeps one colour, and two agents differ', () => {
+  const h = createHarness('agent-badge-tint');
+  h.send(liveEvent({ type: 'assistant_text', text: 'a1', agent: 'Audit rotation' }));
+  h.send(liveEvent({ type: 'assistant_text', text: 'b1', agent: 'Check daemon logs' }));
+  h.send(liveEvent({ type: 'assistant_text', text: 'a2', agent: 'Audit rotation' }));
+
+  const tints = [...h.document.querySelectorAll('.assistant.from-agent')].map(
+    (b: DomNode) => b.dataset.tint,
+  );
+  assert.equal(tints[0], tints[2], 'the same agent must not change colour mid-conversation');
+  assert.notEqual(tints[0], tints[1], 'two agents writing at once must not share one');
+  assert.ok(tints.every((t: string) => Number(t) >= 0 && Number(t) < 8), `tint out of range: ${tints}`);
+});
+
+test("agent badge: a subagent's tool card is badged too", () => {
+  const h = createHarness('agent-badge-tool');
+  h.send(liveEvent({ type: 'tool_use', toolUseId: 't1', toolName: 'Read', input: {}, agent: 'Audit rotation' }));
+  const card = h.document.querySelector('.tool-card.from-agent');
+  assert.notEqual(card, null, 'the card carries the rail');
+  assert.equal(card.querySelector('.agent-badge').textContent, 'Audit rotation');
+  assert.equal(
+    card.querySelector('.agent-badge').nextSibling.textContent,
+    'Read',
+    'the badge reads before the tool name, not after it',
+  );
+});
+
+test('agent badge: an empty agent name is treated as the main thread', () => {
+  const h = createHarness('agent-badge-empty');
+  h.send(liveEvent({ type: 'assistant_text', text: 'no name', agent: '' }));
+  assert.deepEqual(badges(h), []);
+});

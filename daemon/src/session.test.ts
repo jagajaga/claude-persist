@@ -240,3 +240,155 @@ test('consume: messages from the current query are applied as usual', async () =
     'the current query still drives the session',
   );
 });
+
+// ---------------------------------------------------------------------------
+// Subagent attribution
+//
+// Several subagents write into one transcript at once and their messages
+// arrive interleaved, indistinguishable from the main thread's. Every event a
+// subagent produces is stamped with which one, so the chat can badge it.
+// ---------------------------------------------------------------------------
+
+/** handleSdkMessage is private at the type level only; TS erases that. */
+function feed(session: InstanceType<typeof DaemonSession>, msg: Record<string, unknown>): void {
+  (session as unknown as { handleSdkMessage(m: Record<string, unknown>): void }).handleSdkMessage(msg);
+}
+
+function dispatchAgent(
+  session: InstanceType<typeof DaemonSession>,
+  id: string,
+  description: string,
+): void {
+  feed(session, {
+    type: 'assistant',
+    parent_tool_use_id: null,
+    message: { content: [{ type: 'tool_use', id, name: 'Agent', input: { description } }] },
+  });
+}
+
+function agentsOf(session: InstanceType<typeof DaemonSession>): Array<string | undefined> {
+  return session
+    .eventsSince(0, 400)
+    .events.map((e) => (e.event as { agent?: string }).agent);
+}
+
+test('subagent text is stamped with the agent that wrote it', () => {
+  const session = makeSession(`agent-stamp-${Date.now()}`);
+  dispatchAgent(session, 'toolu_a', 'Check daemon logs');
+  feed(session, {
+    type: 'assistant',
+    parent_tool_use_id: 'toolu_a',
+    message: { content: [{ type: 'text', text: 'the log says the socket was stale' }] },
+  });
+
+  const events = session.eventsSince(0, 400).events;
+  const text = events.find((e) => e.event.type === 'assistant_text');
+  assert.equal((text?.event as { agent?: string }).agent, 'Check daemon logs');
+});
+
+test('the main thread is not badged', () => {
+  const session = makeSession(`agent-main-${Date.now()}`);
+  feed(session, {
+    type: 'assistant',
+    parent_tool_use_id: null,
+    message: { content: [{ type: 'text', text: 'answering directly' }] },
+  });
+  assert.deepEqual(agentsOf(session), [undefined]);
+});
+
+/** The point of the badge: two agents interleaved stay told apart. */
+test('two subagents writing at once keep their own names', () => {
+  const session = makeSession(`agent-two-${Date.now()}`);
+  dispatchAgent(session, 'toolu_a', 'Audit rotation');
+  dispatchAgent(session, 'toolu_b', 'Check daemon logs');
+  for (const [parent, text] of [
+    ['toolu_a', 'rotation looks right'],
+    ['toolu_b', 'the socket was stale'],
+    ['toolu_a', 'except the cooldown'],
+  ] as const) {
+    feed(session, {
+      type: 'assistant',
+      parent_tool_use_id: parent,
+      message: { content: [{ type: 'text', text }] },
+    });
+  }
+
+  const said = session
+    .eventsSince(0, 400)
+    .events.filter((e) => e.event.type === 'assistant_text')
+    .map((e) => (e.event as { agent?: string }).agent);
+  assert.deepEqual(said, ['Audit rotation', 'Check daemon logs', 'Audit rotation']);
+});
+
+test("a subagent's tool calls and results are badged too", () => {
+  const session = makeSession(`agent-tools-${Date.now()}`);
+  dispatchAgent(session, 'toolu_a', 'Check daemon logs');
+  feed(session, {
+    type: 'assistant',
+    parent_tool_use_id: 'toolu_a',
+    message: { content: [{ type: 'tool_use', id: 'toolu_read', name: 'Read', input: {} }] },
+  });
+  feed(session, {
+    type: 'user',
+    parent_tool_use_id: 'toolu_a',
+    message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_read', content: 'ok' }] },
+  });
+
+  const events = session.eventsSince(0, 400).events;
+  const read = events.find(
+    (e) => e.event.type === 'tool_use' && (e.event as { toolName: string }).toolName === 'Read',
+  );
+  const result = events.find((e) => e.event.type === 'tool_result');
+  assert.equal((read?.event as { agent?: string }).agent, 'Check daemon logs');
+  assert.equal((result?.event as { agent?: string }).agent, 'Check daemon logs');
+});
+
+/**
+ * Level signals replace the agent map wholesale and key it by SDK task id,
+ * while subagent messages carry the tool_use id — the two never join. The
+ * dispatch description is remembered separately for exactly this reason.
+ */
+test('a badge survives the CLI taking over agent tracking', () => {
+  const session = makeSession(`agent-level-${Date.now()}`);
+  dispatchAgent(session, 'toolu_a', 'Audit rotation');
+  feed(session, {
+    type: 'system',
+    subtype: 'background_tasks_changed',
+    tasks: [{ task_id: 'task_99', task_type: 'agent', description: 'something else' }],
+  });
+  feed(session, {
+    type: 'assistant',
+    parent_tool_use_id: 'toolu_a',
+    message: { content: [{ type: 'text', text: 'still me' }] },
+  });
+
+  const text = session.eventsSince(0, 400).events.find((e) => e.event.type === 'assistant_text');
+  assert.equal((text?.event as { agent?: string }).agent, 'Audit rotation');
+});
+
+/**
+ * There is one preview line. With several subagents writing at once their
+ * deltas arrived interleaved and it became a shuffle of two or three answers.
+ */
+test('only the main thread streams into the live preview', () => {
+  const deltas: string[] = [];
+  const meta = { id: `agent-delta-${Date.now()}`, title: 't', cwd: '/tmp', createdAt: 0, lastActivityAt: 0 };
+  const session = new DaemonSession(meta, {
+    ...noopCallbacks,
+    onDelta(_id: string, text: string): void {
+      deltas.push(text);
+    },
+  });
+
+  const delta = (parent: string | null, text: string) =>
+    feed(session, {
+      type: 'stream_event',
+      parent_tool_use_id: parent,
+      event: { type: 'content_block_delta', delta: { type: 'text_delta', text } },
+    });
+  delta(null, 'main ');
+  delta('toolu_a', 'subagent ');
+  delta(null, 'thread');
+
+  assert.deepEqual(deltas, ['main ', 'thread']);
+});

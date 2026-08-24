@@ -4,7 +4,9 @@ import {
   AGENT_ACTIVE_MS,
   type AgentActivity,
   activeAgents,
+  AGENT_TAG_MAX,
   agentDescription,
+  agentTag,
   pruneAgents,
   tasksFromLevelSignal,
 } from './agents.js';
@@ -123,4 +125,38 @@ test('tasksFromLevelSignal: survives a malformed payload', () => {
     tasks: [null, 'nope', { task_id: 'x' }],
   });
   assert.deepEqual(tasks?.map((t) => t.description), ['background task']);
+});
+
+// ---------------------------------------------------------------------------
+// agentTag: the badge beside every message a subagent writes
+// ---------------------------------------------------------------------------
+
+test('agentTag: the dispatch description is the badge', () => {
+  assert.equal(agentTag('Check daemon logs', 'toolu_01abcd'), 'Check daemon logs');
+});
+
+test('agentTag: a long description is clipped to a chip', () => {
+  const tag = agentTag('Audit every call site of the rotation planner and report', 'toolu_01abcd');
+  assert.ok(tag.length <= AGENT_TAG_MAX, `badge too long: ${tag}`);
+  assert.ok(tag.endsWith('…'), 'clipping is visible');
+  assert.ok(tag.startsWith('Audit every'), 'and keeps the front, which identifies it');
+});
+
+test('agentTag: whitespace is collapsed so the chip stays one line', () => {
+  assert.equal(agentTag('review\n  the   diff', 'toolu_01abcd'), 'review the diff');
+});
+
+/**
+ * Two nameless agents sharing one badge would defeat the point of badging at
+ * all — telling apart the several that write into one transcript at once.
+ */
+test('agentTag: nameless agents fall back to their id, and stay distinct', () => {
+  const first = agentTag(undefined, 'toolu_01aaaa');
+  const second = agentTag('subagent', 'toolu_01bbbb');
+  assert.notEqual(first, second);
+  assert.match(first, /^subagent /);
+});
+
+test('agentTag: the same agent always gets the same badge', () => {
+  assert.equal(agentTag(undefined, 'toolu_01aaaa'), agentTag(undefined, 'toolu_01aaaa'));
 });

@@ -18,6 +18,7 @@ import {
   type AgentActivity,
   activeAgents,
   agentDescription,
+  agentTag,
   pruneAgents,
   tasksFromLevelSignal,
 } from './agents.js';
@@ -904,6 +905,35 @@ export class DaemonSession {
    * Also covers agents this session never saw dispatched — a resumed turn can
    * stream output from one launched before the daemon restarted.
    */
+  /**
+   * Dispatch descriptions by Agent tool_use id, for the badge on every message
+   * a subagent writes.
+   *
+   * Separate from `agents` on purpose: once the CLI sends level signals that
+   * map is replaced wholesale and keyed by SDK task id, while subagent messages
+   * are stamped with the tool_use id — the two never join. The dispatch is the
+   * only place the description appears, and it always precedes the subagent's
+   * own output, so recording it here is enough.
+   */
+  private agentNames = new Map<string, string>();
+
+  /** Bounded: a long session dispatches hundreds of agents. Oldest first out. */
+  private rememberAgentName(id: string, description: string): void {
+    this.agentNames.delete(id); // re-insert so a live agent is not the oldest
+    this.agentNames.set(id, description);
+    while (this.agentNames.size > 256) {
+      const oldest = this.agentNames.keys().next();
+      if (oldest.done) break;
+      this.agentNames.delete(oldest.value);
+    }
+  }
+
+  /** The badge for a message, or undefined when the main thread wrote it. */
+  private agentTagFor(parent: unknown): string | undefined {
+    if (typeof parent !== 'string' || !parent) return undefined;
+    return agentTag(this.agentNames.get(parent) ?? this.agents.get(parent)?.description, parent);
+  }
+
   private noteAgentActivity(id: string, description?: string): void {
     const existing = this.agents.get(id);
     if (existing) {
@@ -948,6 +978,10 @@ export class DaemonSession {
     if (!this.hasLevelSignal && typeof parent === 'string' && parent) {
       this.noteAgentActivity(parent);
     }
+    // Everything below this message came from a subagent, so every event it
+    // produces is badged with which one — several of them write into this one
+    // transcript at once, interleaved.
+    const agent = this.agentTagFor(parent);
     this.lastSdkActivityAt = Date.now();
     switch (msg.type) {
       case 'system': {
@@ -971,20 +1005,23 @@ export class DaemonSession {
         }
         for (const block of message?.content ?? []) {
           if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
-            this.appendEvent({ type: 'assistant_text', text: block.text });
+            this.appendEvent({ type: 'assistant_text', text: block.text, ...(agent ? { agent } : {}) });
           } else if (block.type === 'tool_use') {
             const toolName = String(block.name ?? 'tool');
             const toolUseId = typeof block.id === 'string' ? block.id : undefined;
             // An Agent dispatch is the only place its description appears; the
             // subagent's own messages carry just the parent id.
             if (toolUseId && (toolName === 'Agent' || toolName === 'Task')) {
-              this.noteAgentActivity(toolUseId, agentDescription(block.input));
+              const description = agentDescription(block.input);
+              this.noteAgentActivity(toolUseId, description);
+              this.rememberAgentName(toolUseId, description);
             }
             this.appendEvent({
               type: 'tool_use',
               toolUseId,
               toolName,
               input: block.input,
+              ...(agent ? { agent } : {}),
             });
           }
         }
@@ -1002,6 +1039,7 @@ export class DaemonSession {
                 toolUseId: typeof block.tool_use_id === 'string' ? block.tool_use_id : undefined,
                 summary: summarize(block.content, 1500),
                 isError: block.is_error === true,
+                ...(agent ? { agent } : {}),
               });
             }
           }
@@ -1012,7 +1050,12 @@ export class DaemonSession {
         const event = msg.event as Record<string, unknown> | undefined;
         if (event?.type === 'content_block_delta') {
           const delta = event.delta as Record<string, unknown> | undefined;
-          if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+          // Only the main thread streams. There is one preview line, and with
+          // several subagents writing at once their deltas arrive interleaved
+          // — the preview became a shuffle of two or three answers. A
+          // subagent's text still lands, badged, as assistant_text when its
+          // block completes.
+          if (delta?.type === 'text_delta' && typeof delta.text === 'string' && !agent) {
             this.callbacks.onDelta(this.meta.id, delta.text);
           }
         }

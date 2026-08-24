@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 26;
+export const PROTOCOL_VERSION = 27;
 
 /**
  * Reply to `hello`. `entry` is the module path the daemon was launched from;
@@ -71,9 +71,10 @@ export interface AttachmentRef {
 /** A single chat-visible event. Persisted events replay after reconnect. */
 export type ChatEvent =
   | { type: 'user_message'; text: string; attachments?: AttachmentRef[] }
-  | { type: 'assistant_text'; text: string }
-  | { type: 'tool_use'; toolUseId?: string; toolName: string; input: unknown }
-  | { type: 'tool_result'; toolUseId?: string; summary: string; isError: boolean }
+  /** `agent` names the subagent that wrote it; absent means the main thread. */
+  | { type: 'assistant_text'; text: string; agent?: string }
+  | { type: 'tool_use'; toolUseId?: string; toolName: string; input: unknown; agent?: string }
+  | { type: 'tool_result'; toolUseId?: string; summary: string; isError: boolean; agent?: string }
   | { type: 'permission_request'; requestId: string; toolName: string; input: unknown }
   /** Claude asked the user a question (AskUserQuestion tool). */
   | {

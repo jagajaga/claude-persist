@@ -41,6 +41,25 @@ export function agentDescription(input: unknown): string {
   return 'subagent';
 }
 
+/** Longest badge the chat shows beside a subagent's message. */
+export const AGENT_TAG_MAX = 28;
+
+/**
+ * The short name shown beside every message a subagent wrote.
+ *
+ * The dispatch description is what a human would call it ("Check daemon
+ * logs"), so that is the badge. Anonymous agents fall back to a slice of their
+ * id -- dull, but it keeps two nameless agents apart, which is the entire
+ * point of the badge when several are writing into one transcript at once.
+ */
+export function agentTag(description: string | undefined, id: string): string {
+  const text = (description ?? '').trim().replace(/\s+/g, ' ');
+  if (!text || text === 'subagent' || text === 'background task') {
+    return `subagent ${id.slice(-4)}`;
+  }
+  return text.length > AGENT_TAG_MAX ? `${text.slice(0, AGENT_TAG_MAX - 1)}…` : text;
+}
+
 /**
  * Which agents count as working now.
  *

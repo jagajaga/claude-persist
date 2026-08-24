@@ -1150,12 +1150,17 @@
     }
     modelMenu.appendChild(el('div', 'menu-title', 'Account'));
     for (const account of accountInfos) {
-      modelMenu.appendChild(
-        menuChoice(account.name, account.active, () => {
-          vscode.postMessage({ type: 'setAccount', configDir: account.configDir });
-          modelMenu.hidden = true;
-        }),
-      );
+      // The default account is always listed, credentials or not: it is the
+      // normal already-logged-in case. On a machine that has never run Claude
+      // Code it was therefore shown ticked and active while every message
+      // failed, with nothing anywhere saying why. Say it here.
+      const label = account.signedIn === false ? `${account.name} — not signed in` : account.name;
+      const item = menuChoice(label, account.active, () => {
+        vscode.postMessage({ type: 'setAccount', configDir: account.configDir });
+        modelMenu.hidden = true;
+      });
+      if (account.signedIn === false) item.classList.add('account-unauthed');
+      modelMenu.appendChild(item);
     }
     modelMenu.appendChild(
       menuChoice('Log in to another account…', false, () => {

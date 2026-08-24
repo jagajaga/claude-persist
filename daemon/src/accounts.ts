@@ -15,6 +15,17 @@ function hasCredentials(dir: string): boolean {
 }
 
 /**
+ * Can this account actually be used?
+ *
+ * An API key in the environment authenticates without any login file, so it
+ * counts — otherwise a perfectly working setup would be labelled broken.
+ */
+export function accountSignedIn(configDir: string | null, claudeDir: string): boolean {
+  if ((process.env.ANTHROPIC_API_KEY ?? '').trim()) return true;
+  return hasCredentials(configDir ?? claudeDir);
+}
+
+/**
  * Discover known accounts. The default account (configDir: null) is always
  * offered — it's the normal, already-logged-in case. Named directories under
  * `accountsDir` are only offered once they actually hold credentials; a
@@ -345,7 +356,17 @@ export function shareUserConfig(
         fs.symlinkSync(source, link);
         log(`account ${name}: linked ${item} to the default account's`);
       } catch {
-        // read-only home, or a race with another daemon — not worth failing over
+        // Windows refuses symlinks without Developer Mode or admin rights, and
+        // this failed silently there — every extra account quietly lost the
+        // user's CLAUDE.md and skills. A copy is not live (an edit to the
+        // original will not follow) but it is the difference between the rules
+        // applying and not applying at all.
+        try {
+          fs.cpSync(source, link, { recursive: true });
+          log(`account ${name}: copied ${item} from the default account (symlinks unavailable)`);
+        } catch {
+          // read-only home, or a race with another daemon — not worth failing over
+        }
       }
     }
   }
@@ -415,6 +436,7 @@ export class AccountsStore {
     return scanAccounts(this.claudeDir, this.accountsDir).map((a) => ({
       ...a,
       active: a.configDir === this.activeConfigDir,
+      signedIn: accountSignedIn(a.configDir, this.claudeDir),
     }));
   }
 

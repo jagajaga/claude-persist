@@ -57,7 +57,43 @@ test('AccountsStore: a fresh store defaults to the default account and lists it 
     stateDir: path.join(root, 'claude-persist'),
   });
   assert.equal(store.active, null);
-  assert.deepEqual(store.list(), [{ name: 'default', configDir: null, active: true }]);
+  assert.deepEqual(store.list(), [
+    { name: 'default', configDir: null, active: true, signedIn: false },
+  ]);
+});
+
+/**
+ * The default account is listed whether or not it has credentials — it is the
+ * normal already-logged-in case, and there is nowhere else to start. On a
+ * machine that has never run Claude Code that meant the menu showed it, ticked
+ * and active, while every message failed and nothing anywhere said why.
+ */
+test('AccountsStore: the default account reports whether it can actually be used', () => {
+  const root = tmpDir();
+  const claudeDir = path.join(root, 'claude');
+  const store = new AccountsStore({
+    claudeDir,
+    accountsDir: path.join(root, 'claude-accounts'),
+    stateDir: path.join(root, 'claude-persist'),
+  });
+  const key = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  try {
+    assert.equal(store.list()[0].signedIn, false, 'no credentials anywhere');
+
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(path.join(claudeDir, '.credentials.json'), '{}');
+    assert.equal(store.list()[0].signedIn, true, 'a login file is credentials');
+
+    // An API key authenticates with no login file at all; calling that setup
+    // "not signed in" would be wrong in the direction that scares people.
+    fs.rmSync(path.join(claudeDir, '.credentials.json'));
+    process.env.ANTHROPIC_API_KEY = 'sk-test';
+    assert.equal(store.list()[0].signedIn, true, 'an API key counts');
+  } finally {
+    if (key === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = key;
+  }
 });
 
 test('AccountsStore: the active choice persists across a fresh construct (daemon restart)', () => {

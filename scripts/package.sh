@@ -100,6 +100,22 @@ else
 fi
 (cd extension && npx --yes @vscode/vsce package --no-dependencies "$@" -o "../${out}")
 
+# The native binary is useless without +x, and a claude that cannot be executed
+# fails with EACCES from a daemon whose stdio is discarded -- invisible except
+# in ~/.claude-persist/daemon.log. Cheaper to catch here than in a bug report.
+if [ "$platforms" != "none" ]; then
+  for name in $platforms; do
+    case "$name" in
+      *win32*) continue ;;  # Windows has no mode bit to lose
+    esac
+    if ! unzip -Z "$out" "extension/daemon/node_modules/@anthropic-ai/${name}/claude" \
+         2>/dev/null | grep -q '^-rwx'; then
+      echo "error: bundled ${name}/claude is not executable inside ${out}" >&2
+      exit 1
+    fi
+  done
+fi
+
 echo
 echo "Packaged: ${out}"
 du -h "${out}"

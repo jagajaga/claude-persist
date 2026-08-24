@@ -18,9 +18,9 @@ const HOUR = 3600_000;
 /** default first, then named dirs — the order the model menu shows. */
 function accounts(active: string | null = null): AccountInfo[] {
   return [
-    { name: 'default', configDir: null, active: active === null },
-    { name: 'senia00', configDir: '/acc/senia00', active: active === '/acc/senia00' },
-    { name: 'serokell', configDir: '/acc/serokell', active: active === '/acc/serokell' },
+    { name: 'default', configDir: null, active: active === null, signedIn: true },
+    { name: 'senia00', configDir: '/acc/senia00', active: active === '/acc/senia00', signedIn: true },
+    { name: 'serokell', configDir: '/acc/serokell', active: active === '/acc/serokell', signedIn: true },
   ];
 }
 

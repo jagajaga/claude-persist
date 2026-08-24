@@ -72,7 +72,10 @@ const manifest = JSON.parse(
 ) as {
   keywords?: string[];
   capabilities?: { untrustedWorkspaces?: { supported?: boolean; description?: string } };
-  contributes?: { commands?: Array<{ command: string; title: string }> };
+  contributes?: {
+    commands?: Array<{ command: string; title: string; category?: string }>;
+    walkthroughs?: Array<{ id: string; steps?: Array<{ media?: { markdown?: string } }> }>;
+  };
 };
 
 /**
@@ -101,10 +104,45 @@ test('signing in is reachable from the Command Palette', () => {
   const commands = manifest.contributes?.commands ?? [];
   const addAccount = commands.find((c) => c.command === 'claudePersist.addAccount');
   assert.ok(addAccount, 'no claudePersist.addAccount command: sign-in is unreachable from a cold start');
-  assert.match(addAccount.title, /^Claude Persist: /, 'palette search relies on the prefix');
+  assert.equal(addAccount.category, 'Claude Persist', 'palette grouping relies on the category');
 });
 
 test('the listing carries keywords, or marketplace search cannot find it', () => {
   assert.ok((manifest.keywords ?? []).length >= 3);
   assert.ok(manifest.keywords?.includes('claude'));
+});
+
+/**
+ * Every palette-visible command needs the category, or it appears in the
+ * palette as a bare verb with nothing tying it to this extension. Two commands
+ * exist only for the tree's context menu and are hidden from the palette, so
+ * they are exempt.
+ */
+test('palette commands are grouped under one category', () => {
+  const hidden = new Set(['claudePersist.openSessionFromTree', 'claudePersist.deleteSessionItem']);
+  for (const command of manifest.contributes?.commands ?? []) {
+    if (hidden.has(command.command)) continue;
+    assert.equal(command.category, 'Claude Persist', `${command.command} has no category`);
+    assert.ok(
+      !command.title.startsWith('Claude Persist'),
+      `${command.command} repeats the category in its title, so the palette shows it twice`,
+    );
+  }
+});
+
+/**
+ * VS Code's post-install "Get Started" page showed nothing for this extension,
+ * which is the one moment a new user is looking for instructions.
+ */
+test('the walkthrough exists and its media files are really there', () => {
+  const walkthroughs = manifest.contributes?.walkthroughs ?? [];
+  assert.ok(walkthroughs.length >= 1, 'no walkthrough: the Get Started page is empty');
+  for (const step of walkthroughs[0].steps ?? []) {
+    const markdown = step.media?.markdown;
+    if (!markdown) continue;
+    assert.ok(
+      fs.existsSync(path.join(__dirname, '..', markdown)),
+      `walkthrough media missing: ${markdown} — the step renders blank`,
+    );
+  }
 });

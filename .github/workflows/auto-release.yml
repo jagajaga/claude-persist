@@ -12,9 +12,14 @@ on:
   push:
     branches:
       - main
+    # Narrow on purpose: extension/README.md is the marketplace page and
+    # extension/CHANGELOG.md is the Extensions view's Changelog tab, so both are
+    # shipped content and a fix to them has to reach users. Ignoring every *.md
+    # meant a correction to the listing never published — it rode along with the
+    # next code push, or waited forever.
     paths-ignore:
       - 'docs/**'
-      - '**.md'
+      - 'README.md'
       - '.github/**'
   workflow_dispatch:
 

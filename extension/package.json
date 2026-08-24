@@ -70,35 +70,42 @@
     "commands": [
       {
         "command": "claudePersist.addAccount",
-        "title": "Claude Persist: Add Account (Sign In)"
+        "title": "Add Account (Sign In)",
+        "category": "Claude Persist"
       },
       {
         "command": "claudePersist.newSession",
-        "title": "Claude Persist: New Session",
-        "icon": "$(add)"
+        "title": "New Session",
+        "icon": "$(add)",
+        "category": "Claude Persist"
       },
       {
         "command": "claudePersist.openSession",
-        "title": "Claude Persist: Open Session"
+        "title": "Open Session",
+        "category": "Claude Persist"
       },
       {
         "command": "claudePersist.deleteSession",
-        "title": "Claude Persist: Delete Session"
+        "title": "Delete Session",
+        "category": "Claude Persist"
       },
       {
         "command": "claudePersist.refreshSessions",
-        "title": "Claude Persist: Refresh Sessions",
-        "icon": "$(refresh)"
+        "title": "Refresh Sessions",
+        "icon": "$(refresh)",
+        "category": "Claude Persist"
       },
       {
         "command": "claudePersist.importSession",
-        "title": "Claude Persist: Import Claude Code Session",
-        "icon": "$(cloud-download)"
+        "title": "Import Claude Code Session",
+        "icon": "$(cloud-download)",
+        "category": "Claude Persist"
       },
       {
         "command": "claudePersist.renameSession",
-        "title": "Claude Persist: Rename Session",
-        "icon": "$(edit)"
+        "title": "Rename Session",
+        "icon": "$(edit)",
+        "category": "Claude Persist"
       },
       {
         "command": "claudePersist.openSessionFromTree",
@@ -183,7 +190,46 @@
           "description": "Model id applied to every new or imported session (e.g. claude-opus-5). Leave empty to use the account default."
         }
       }
-    }
+    },
+    "walkthroughs": [
+      {
+        "id": "claudePersist.gettingStarted",
+        "title": "Get started with Claude Persist",
+        "description": "Chat with Claude in sessions that survive window reloads.",
+        "steps": [
+          {
+            "id": "session",
+            "title": "Create a session",
+            "description": "Pick a folder to work in. The session runs in a background daemon, not in this window.\n[Create a session](command:claudePersist.newSession)",
+            "media": {
+              "markdown": "media/walkthrough/session.md"
+            },
+            "completionEvents": [
+              "onCommand:claudePersist.newSession"
+            ]
+          },
+          {
+            "id": "signin",
+            "title": "Sign in to Claude",
+            "description": "Only if you have never used Claude Code on this machine. No terminal needed — the panel gives you a link and a box for the code.\n[Add an account](command:claudePersist.addAccount)",
+            "media": {
+              "markdown": "media/walkthrough/signin.md"
+            },
+            "completionEvents": [
+              "onCommand:claudePersist.addAccount"
+            ]
+          },
+          {
+            "id": "reload",
+            "title": "Reload the window mid-answer",
+            "description": "The turn keeps running in the daemon and the tab replays everything it missed. That is the whole point.",
+            "media": {
+              "markdown": "media/walkthrough/reload.md"
+            }
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
     "build": "tsc -p ."
@@ -191,5 +237,14 @@
   "devDependencies": {
     "@claude-persist/shared": "0.1.0",
     "@types/vscode": "^1.85.0"
+  },
+  "homepage": "https://github.com/jagajaga/claude-persist#readme",
+  "bugs": {
+    "url": "https://github.com/jagajaga/claude-persist/issues"
+  },
+  "qna": "https://github.com/jagajaga/claude-persist/issues",
+  "galleryBanner": {
+    "color": "#1f1f1f",
+    "theme": "dark"
   }
 }

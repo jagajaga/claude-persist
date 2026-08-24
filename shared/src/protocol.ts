@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 27;
+export const PROTOCOL_VERSION = 28;
 
 /**
  * Reply to `hello`. `entry` is the module path the daemon was launched from;
@@ -196,6 +196,16 @@ export interface AccountInfo {
   name: string;
   configDir: string | null;
   active: boolean;
+  /**
+   * Whether this account has credentials to use.
+   *
+   * The default account is always listed — it is the normal already-logged-in
+   * case, and an ANTHROPIC_API_KEY needs no login file at all — so on a machine
+   * that has never run Claude Code the menu showed it, ticked, as the active
+   * account while every message failed. Named accounts are only listed once
+   * they hold credentials, so this is false only for the default.
+   */
+  signedIn: boolean;
 }
 
 export type Request =

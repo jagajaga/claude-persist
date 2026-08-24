@@ -967,3 +967,7 @@ button.secondary {
   font-size: 0.9em;
 }
 .empty-action:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
+
+/* An account with no credentials is still listed — it can become usable — but
+   it must not look like a working choice. */
+.menu-item.account-unauthed { color: var(--vscode-descriptionForeground); font-style: italic; }

@@ -1351,3 +1351,31 @@ test('empty state: a window with earlier history never shows it', () => {
   h.send({ type: 'replay', reset: true, hasEarlier: true, events: [], info: {} });
   assert.equal(h.document.querySelector('.empty-state'), null);
 });
+
+/**
+ * The default account is listed whether or not it has credentials. On a machine
+ * that has never run Claude Code it was therefore shown ticked and active while
+ * every message failed, with nothing anywhere saying why.
+ */
+test('account menu: an account with no credentials says so', () => {
+  const h = createHarness('account-unauthed');
+  h.send({
+    type: 'accounts',
+    accounts: [
+      { name: 'default', configDir: null, active: true, signedIn: false },
+      { name: 'work', configDir: '/acc/work', active: false, signedIn: true },
+    ],
+  });
+  h.document.getElementById('model-pill').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+
+  const labels = [...h.document.querySelectorAll('.menu-item')].map((i: DomNode) => i.textContent);
+  assert.ok(
+    labels.some((l: string) => /default — not signed in/.test(l)),
+    `the unusable account is not marked: ${labels.join(' | ')}`,
+  );
+  assert.ok(
+    labels.some((l: string) => /(^|\s)work$/.test(l.trim())),
+    'a usable account must not be marked',
+  );
+  assert.equal(h.document.querySelectorAll('.account-unauthed').length, 1);
+});

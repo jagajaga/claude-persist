@@ -183,6 +183,14 @@ export class LoginManager {
     this.pending.delete(loginId);
 
     const loggedIn = await this.isLoggedIn(entry.configDir);
+    if (loggedIn === 'unknown') {
+      return {
+        ok: false,
+        error:
+          'Could not check whether the sign-in worked — Claude Code did not run. ' +
+          NO_CLAUDE_MESSAGE,
+      };
+    }
     if (loggedIn) {
       this.log(`login ${entry.name}: succeeded`);
       // The caller activates this directory. A sign-in that leaves you on the
@@ -208,10 +216,17 @@ export class LoginManager {
     this.log(`login ${entry.name}: ${why}`);
   }
 
-  /** Ask the CLI, rather than inferring from files whose shape may change. */
-  private isLoggedIn(configDir: string): Promise<boolean> {
+  /**
+   * Ask the CLI, rather than inferring from files whose shape may change.
+   *
+   * 'unknown' is not 'no'. The probe failing to run at all used to read as
+   * "not logged in", so a machine where the binary could not be spawned told
+   * the user their code was wrong and to try again — advice that could never
+   * work, for a problem they were never told about.
+   */
+  private isLoggedIn(configDir: string): Promise<boolean | 'unknown'> {
     return new Promise((resolve) => {
-      if (!this.claudeBin) return resolve(false);
+      if (!this.claudeBin) return resolve('unknown');
       const probe = spawn(this.claudeBin, ['auth', 'status', '--json'], {
         stdio: ['ignore', 'pipe', 'ignore'],
         env: { ...process.env, CLAUDE_CONFIG_DIR: configDir },
@@ -228,7 +243,7 @@ export class LoginManager {
         }
       };
       probe.once('exit', finish);
-      probe.once('error', () => resolve(false));
+      probe.once('error', () => resolve('unknown'));
       setTimeout(() => {
         probe.kill();
         finish();

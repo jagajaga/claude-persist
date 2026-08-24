@@ -47,7 +47,22 @@ cp -r shared/dist extension/daemon/node_modules/@claude-persist/shared/dist
 # without multiplying the download.
 cp -r node_modules/@anthropic-ai/claude-agent-sdk \
       extension/daemon/node_modules/@anthropic-ai/
-platforms="${CP_SDK_PLATFORMS:-claude-agent-sdk-linux-x64}"
+# The SDK package that matches CP_TARGET. Derived rather than passed in, so
+# the target triple is stated once and cannot disagree with the binary inside.
+sdk_package_for() {
+  case "$1" in
+    linux-x64)     echo claude-agent-sdk-linux-x64 ;;
+    linux-arm64)   echo claude-agent-sdk-linux-arm64 ;;
+    alpine-x64)    echo claude-agent-sdk-linux-x64-musl ;;
+    alpine-arm64)  echo claude-agent-sdk-linux-arm64-musl ;;
+    darwin-x64)    echo claude-agent-sdk-darwin-x64 ;;
+    darwin-arm64)  echo claude-agent-sdk-darwin-arm64 ;;
+    win32-x64)     echo claude-agent-sdk-win32-x64 ;;
+    "")            echo none ;;
+    *)             echo "error: no SDK runtime known for target '$1'" >&2; exit 1 ;;
+  esac
+}
+platforms="${CP_SDK_PLATFORMS:-$(sdk_package_for "${CP_TARGET:-}")}"
 if [ "$platforms" = "none" ]; then
   echo "Packaging without a native runtime (uses the user's Claude Code install)"
 else
@@ -63,7 +78,7 @@ else
     # vsce's zip does not always carry the unix mode through, and a claude
     # without +x fails with EACCES from a daemon whose stdio is discarded --
     # invisible except in ~/.claude-persist/daemon.log.
-    chmod +x "extension/daemon/node_modules/@anthropic-ai/${name}/claude" 2>/dev/null || true
+    chmod +x "extension/daemon/node_modules/@anthropic-ai/${name}"/claude* 2>/dev/null || true
   done
 fi
 

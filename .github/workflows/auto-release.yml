@@ -26,12 +26,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  # ---------------------------------------------------------------- tag
+  # Version and tag exactly once, before anything is built. The packaging
+  # matrix then checks out that tag, so every platform's vsix carries the
+  # same version and the same code.
+  tag:
     runs-on: ubuntu-latest
-    env:
-      # Absent until the Open VSX token is added as a repo secret; the publish
-      # step below is skipped while it is, so the release still succeeds.
-      OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,42 +70,114 @@ jobs:
           git push origin main "v$NEW"
           echo "version=$NEW" >> "$GITHUB_OUTPUT"
 
+  # -------------------------------------------------------------- package
+  # One vsix per platform, each built on that platform.
+  #
+  # The native `claude` the SDK spawns ships as one npm package per platform,
+  # and npm installs only the one matching the host — so the only honest way to
+  # bundle a macOS or Windows binary is to run npm there. Cross-installing with
+  # --force would work, but a binary nobody has ever executed is a poor thing to
+  # ship to someone else's machine.
+  #
+  # The universal build carries no binary at all (1 MB rather than 100 MB) and
+  # drives whatever Claude Code the user already has. It is the fallback for
+  # every platform without a targeted build — Alpine, 32-bit, ARM Windows — and
+  # the safety net if a matrix leg fails, which is why fail-fast is off.
+  package:
+    needs: tag
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: ''
+            label: universal
+          - runner: ubuntu-latest
+            target: linux-x64
+            label: linux-x64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+            label: linux-arm64
+          - runner: macos-13
+            target: darwin-x64
+            label: darwin-x64
+          - runner: macos-latest
+            target: darwin-arm64
+            label: darwin-arm64
+          - runner: windows-latest
+            target: win32-x64
+            label: win32-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.tag.outputs.version }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install
+
       - name: Generate changelog for the Extensions view
+        shell: bash
         run: bash scripts/changelog.sh 3
 
-      # Two builds, because one binary cannot serve every platform.
-      #
-      # The universal vsix carries no native runtime (~1 MB instead of ~105 MB)
-      # and drives whatever Claude Code the user already has, so macOS, Windows,
-      # ARM and Alpine can all install it. The linux-x64 build bundles the
-      # runtime, so a code-server host still needs nothing installed at all.
-      #
-      # Marketplaces hand a platform-targeted build to the platforms it targets
-      # and the universal one to everybody else, so publishing both covers every
-      # machine without multiplying anyone's download.
-      - name: Package universal vsix (no bundled runtime)
-        run: CP_SDK_PLATFORMS=none bash scripts/package.sh
+      - name: Package
+        shell: bash
+        env:
+          CP_TARGET: ${{ matrix.target }}
+        run: bash scripts/package.sh
 
-      - name: Package linux-x64 vsix (bundled runtime)
-        run: CP_TARGET=linux-x64 bash scripts/package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix-${{ matrix.label }}
+          path: claude-persist-*.vsix
+          if-no-files-found: error
+          retention-days: 3
 
-      - name: Locate vsix files
-        id: vsix
+  # -------------------------------------------------------------- publish
+  publish:
+    needs: [tag, package]
+    # Even if a platform leg failed: a release missing one target beats a tag
+    # with no release at all, and the universal build covers the gap.
+    if: always() && needs.tag.result == 'success'
+    runs-on: ubuntu-latest
+    env:
+      # Absent until the Open VSX token is added as a repo secret; the publish
+      # step below is skipped while it is, so the release still succeeds.
+      OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: vsix-*
+          merge-multiple: true
+
+      - name: List what was built
+        id: built
         run: |
           set -euo pipefail
-          V=${{ steps.bump.outputs.version }}
-          echo "universal=claude-persist-${V}.vsix" >> "$GITHUB_OUTPUT"
-          echo "linux=claude-persist-${V}-linux-x64.vsix" >> "$GITHUB_OUTPUT"
           ls -la claude-persist-*.vsix
+          V=${{ needs.tag.outputs.version }}
+          # The universal build is the fallback every platform can install; a
+          # release without it is worse than no release.
+          test -f "claude-persist-${V}.vsix" || {
+            echo "::error::universal vsix missing — refusing to publish a release nobody can install"
+            exit 1
+          }
+          for t in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64; do
+            test -f "claude-persist-${V}-${t}.vsix" \
+              || echo "::warning::no build for ${t}; those users get the universal vsix"
+          done
 
-      - name: Publish release with vsix
+      - name: Publish release with vsix files
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.bump.outputs.version }}
-          name: v${{ steps.bump.outputs.version }}
-          files: |
-            ${{ steps.vsix.outputs.universal }}
-            ${{ steps.vsix.outputs.linux }}
+          tag_name: v${{ needs.tag.outputs.version }}
+          name: v${{ needs.tag.outputs.version }}
+          files: claude-persist-*.vsix
           generate_release_notes: true
 
       # Open VSX is the marketplace code-server uses by default, so publishing
@@ -115,7 +189,6 @@ jobs:
       - name: Publish to Open VSX
         if: env.OVSX_TOKEN != ''
         continue-on-error: true
-        id: ovsx
         run: |
           set -uo pipefail
           publish() {
@@ -129,11 +202,16 @@ jobs:
             done
             return 1
           }
+          V=${{ needs.tag.outputs.version }}
           # The universal build first: it is the one every platform can fall
-          # back to, so if only one of the two lands, it should be that one.
-          if publish "${{ steps.vsix.outputs.universal }}" \
-            && publish "${{ steps.vsix.outputs.linux }}"; then
-            exit 0
+          # back to, so if only one publish lands, it should be that one.
+          failed=0
+          publish "claude-persist-${V}.vsix" || failed=1
+          for f in claude-persist-${V}-*.vsix; do
+            [ -e "$f" ] || continue
+            publish "$f" || failed=1
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::Open VSX publish failed after 3 attempts; the GitHub release is live. Re-run with scripts/publish-ovsx.sh once the service recovers."
+            exit 1
           fi
-          echo "::error::Open VSX publish failed after 3 attempts; the GitHub release is live. Re-run with scripts/publish-ovsx.sh once the service recovers."
-          exit 1

@@ -9,7 +9,8 @@ tab replays everything it missed when it comes back.
 
 ## Getting started
 
-1. **Install Claude Code**, unless you are on `linux-x64` — see Requirements below.
+1. **Nothing to install first**, on Linux, macOS or Windows — the runtime is
+   bundled. On other platforms see Requirements below.
 2. **Open the panel.** Click the Claude Persist icon in the activity bar, or the
    `✨ Claude Persist` item in the status bar, or run
    **Claude Persist: New Session** from the Command Palette.
@@ -24,12 +25,14 @@ tab replays everything it missed when it comes back.
 ## Requirements
 
 - **VS Code 1.85+**, or any code-server built on it.
-- **Claude Code**, and a Claude account or `ANTHROPIC_API_KEY`.
-  The `linux-x64` build of this extension bundles the Claude Code runtime and
-  needs nothing installed. Every other platform — macOS, Windows, ARM Linux,
-  Alpine — installs the universal build, which drives the Claude Code you
-  already have. Install it from <https://claude.com/download> or with
-  `npm i -g @anthropic-ai/claude-code`, then reload the window.
+- **A Claude account**, or `ANTHROPIC_API_KEY`.
+- **Claude Code — only on platforms without a bundled build.** Builds for
+  Linux (x64, arm64), macOS (Intel, Apple silicon) and Windows (x64) carry the
+  Claude Code runtime and need nothing installed; your marketplace picks the
+  right one automatically. Anywhere else — Alpine, ARM Windows, 32-bit — you get
+  the universal build, which drives the Claude Code you already have. Install it
+  from <https://claude.com/download> or with `npm i -g @anthropic-ai/claude-code`,
+  then reload the window.
 - **A trusted folder.** The extension runs Claude against your files, so it
   stays disabled in Restricted Mode.
 

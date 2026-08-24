@@ -73,8 +73,25 @@ Reload the window, click the Claude Persist icon in the activity bar, and
 create a session. The daemon starts automatically (detached from VS Code) and
 self-replaces on extension upgrades.
 
-The `.vsix` is self-contained (~83 MB — it bundles the Claude Agent SDK
-runtime), currently for **linux-x64** servers.
+Every release publishes one `.vsix` per platform, each built on that platform:
+**linux-x64**, **linux-arm64**, **darwin-x64**, **darwin-arm64** and
+**win32-x64** bundle the Claude Agent SDK runtime (~100 MB, nothing to install),
+and a **universal** build (~1 MB) carries no runtime and drives whatever Claude
+Code is already installed. Marketplaces hand each machine the build that targets
+it and everyone else the universal one, so Alpine, ARM Windows and anything else
+still works — with Claude Code installed separately.
+
+To build one yourself, `CP_TARGET` selects the target triple and the matching
+runtime; leaving it empty produces the universal build:
+
+```sh
+CP_TARGET=darwin-arm64 ./scripts/package.sh   # bundles the macOS arm64 runtime
+CP_SDK_PLATFORMS=none  ./scripts/package.sh   # universal, no runtime
+```
+
+The runtime ships as one npm package per platform and npm installs only the
+host's, so a bundled build has to run on the platform it targets — which is what
+the release matrix does.
 
 ## Build from source
 

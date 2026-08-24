@@ -12,6 +12,11 @@ mkdir -p extension/daemon/node_modules/@claude-persist/shared \
          extension/daemon/node_modules/@anthropic-ai
 
 cp -r daemon/dist extension/daemon/dist
+# The daemon's compiled tests are dead weight in a release: never loaded, and
+# .vscodeignore cannot reach them (its node_modules/** rule matches only the
+# extension root, which is also why the bundled runtime survives packaging).
+rm -f extension/daemon/dist/*.test.js extension/daemon/dist/*.test.d.ts \
+      extension/daemon/dist/*.test.js.map
 cat > extension/daemon/package.json <<'EOF'
 {
   "name": "claude-persist-daemon-bundle",

@@ -19,13 +19,11 @@ import * as path from 'path';
  * hazard the way an activation-path require would be — nothing under
  * extension.ts ever requires a *.test.js file, compiled or not, so it never
  * executes during activation. It IS worth naming explicitly rather than
- * exempting every "*.test.js" wholesale: compiled test files currently ship
- * inside the VSIX as-is (confirmed both by reading .vscodeignore — it only
- * excludes src/**, tsconfig.json, node_modules/** and *.map/*.ts, nothing
- * under dist/*.test.js — and by running `vsce ls`, whose output lists e.g.
- * dist/packaging.test.js and dist/streamingMarkdown.test.js next to the real
- * dist/*.js files). Shipping them is harmless dead weight since they're never
- * loaded, but it means a blanket "*.test.js" exemption would silently wave
+ * exempting every "*.test.js" wholesale. .vscodeignore now excludes
+ * dist/**\/*.test.js and scripts/package.sh strips the bundled daemon's
+ * compiled tests (its node_modules/** rule matches only the extension root,
+ * which is the same reason the bundled runtime survives packaging), so they no
+ * longer ship — but a blanket "*.test.js" exemption would still silently wave
  * through a bare require in *any* future test file, vetted or not. Naming the
  * one file (and the one specifier) keeps the guard meaningful.
  */

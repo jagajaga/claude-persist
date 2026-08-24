@@ -8,7 +8,7 @@ import path from 'node:path';
 import type { AccountInfo } from '@claude-persist/shared';
 import { projectDirName } from './projectDir.js';
 
-const DEFAULT_ACCOUNT_NAME = 'default';
+export const DEFAULT_ACCOUNT_NAME = 'default';
 
 function hasCredentials(dir: string): boolean {
   return fs.existsSync(path.join(dir, '.credentials.json'));
@@ -36,6 +36,7 @@ export function accountSignedIn(configDir: string | null, claudeDir: string): bo
 export function scanAccounts(
   claudeDir: string,
   accountsDir: string,
+  envConfigDir: string | undefined = process.env.CLAUDE_CONFIG_DIR,
 ): Array<{ name: string; configDir: string | null }> {
   const out: Array<{ name: string; configDir: string | null }> = [
     { name: DEFAULT_ACCOUNT_NAME, configDir: null },
@@ -46,11 +47,39 @@ export function scanAccounts(
   } catch {
     entries = []; // ~/.claude-accounts doesn't exist yet — no extra accounts
   }
+  const named: string[] = [];
   for (const name of entries.sort()) {
     const dir = path.join(accountsDir, name);
-    if (hasCredentials(dir)) out.push({ name, configDir: dir });
+    if (hasCredentials(dir)) {
+      out.push({ name, configDir: dir });
+      named.push(dir);
+    }
+  }
+  // A CLAUDE_CONFIG_DIR exported in the user's shell is inherited by the
+  // daemon, so it used to silently become the default account's credentials
+  // while the menu still called that entry "default" — the label and the login
+  // were different things. It gets its own row instead: visible, selectable,
+  // and switchable away from.
+  const envDir = (envConfigDir ?? '').trim();
+  if (envDir) {
+    const already = [claudeDir, ...named].some((dir) => samePath(dir, envDir));
+    if (!already) {
+      out.push({ name: `${path.basename(envDir)} (CLAUDE_CONFIG_DIR)`, configDir: envDir });
+    }
   }
   return out;
+}
+
+/** Two paths pointing at one directory, symlinks and trailing slashes aside. */
+function samePath(a: string, b: string): boolean {
+  const resolve = (p: string): string => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  return resolve(a) === resolve(b);
 }
 
 /**
@@ -396,12 +425,23 @@ export class AccountsStore {
       'account.json',
     );
     this.load();
+    // First run with CLAUDE_CONFIG_DIR set: start on that account rather than
+    // on ~/.claude. It is the login the user's shell has been using, and
+    // quietly moving them off it would look like being logged out.
+    const envDir = (process.env.CLAUDE_CONFIG_DIR ?? '').trim();
+    if (!this.loadedFromDisk && envDir && !samePath(envDir, this.claudeDir)) {
+      this.activeConfigDir = envDir;
+    }
   }
+
+  /** Whether load() found a persisted choice, as opposed to defaulting. */
+  private loadedFromDisk = false;
 
   private load(): void {
     try {
       const raw = JSON.parse(fs.readFileSync(this.stateFile, 'utf8')) as { configDir?: string | null };
       this.activeConfigDir = raw.configDir ?? null;
+      this.loadedFromDisk = true;
     } catch {
       this.activeConfigDir = null; // first run, or corrupt state file
     }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractAuthUrl, loginFailureReason } from './login.js';
+import { LoginManager, extractAuthUrl, loginFailureReason } from './login.js';
 
 const ESC = '';
 
@@ -58,4 +58,34 @@ test('loginFailureReason: explains a rejected code instead of a bare failure', (
 test('loginFailureReason: null when the output says nothing useful', () => {
   assert.equal(loginFailureReason('Opening browser to sign in…'), null);
   assert.equal(loginFailureReason(''), null);
+});
+
+// ---------------------------------------------------------------------------
+// Which directory a sign-in writes to
+//
+// Sign-in could only ever create a *named* account, so on a machine with no
+// Claude Code login the one account the UI lists first — "default" — could
+// never be filled in, and the user had to invent a name for what was really
+// their only login.
+// ---------------------------------------------------------------------------
+
+/** configDirFor is private at the type level only; TS erases that at runtime. */
+function configDirFor(manager: LoginManager, name: string): string {
+  return (manager as unknown as { configDirFor(n: string): string }).configDirFor(name);
+}
+
+test('signing in as "default" writes to ~/.claude, not to a named directory', () => {
+  const manager = new LoginManager('/bin/claude', '/home/u/.claude-accounts', () => undefined, '/home/u/.claude');
+  assert.equal(configDirFor(manager, 'default'), '/home/u/.claude');
+});
+
+test('any other name still gets its own directory', () => {
+  const manager = new LoginManager('/bin/claude', '/home/u/.claude-accounts', () => undefined, '/home/u/.claude');
+  assert.equal(configDirFor(manager, 'work'), '/home/u/.claude-accounts/work');
+});
+
+/** Nothing to run is a stated problem, not a spawn that fails with ENOENT. */
+test('start rejects with an actionable message when there is no Claude Code', async () => {
+  const manager = new LoginManager(null, '/home/u/.claude-accounts', () => undefined, '/home/u/.claude');
+  await assert.rejects(() => manager.start('work'), /claude\.com\/download/);
 });

@@ -816,7 +816,15 @@ export class DaemonSession {
         ...(claudeBin ? { pathToClaudeCodeExecutable: claudeBin } : {}),
         // Don't replace the whole env — CLAUDE_CONFIG_DIR is the only thing
         // that changes between accounts.
-        ...(activeAccountDir ? { env: { ...process.env, CLAUDE_CONFIG_DIR: activeAccountDir } } : {}),
+        // "default" must mean ~/.claude. A CLAUDE_CONFIG_DIR exported in the
+        // user's shell is inherited here, so leaving env untouched made the
+        // default account quietly use someone else's credentials while the menu
+        // still called it "default". It now has its own row in the account list
+        // (see scanAccounts); selecting "default" gets the default.
+        env: {
+          ...process.env,
+          CLAUDE_CONFIG_DIR: activeAccountDir ?? accountsStore.dirs.claudeDir,
+        },
       },
     });
     this.activeQuery = q;

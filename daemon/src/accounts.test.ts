@@ -3,6 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+// This suite is about how the environment is read, so it must not inherit the
+// environment it is run in. The daemon that runs these tests may itself have
+// CLAUDE_CONFIG_DIR set — under which every "no extra accounts" expectation
+// below would fail for a reason that has nothing to do with the code. Tests
+// that care set it themselves and put it back.
+delete process.env.CLAUDE_CONFIG_DIR;
 import {
   AccountsStore,
   accountIdentity,
@@ -569,4 +576,88 @@ test('shareUserConfig: idempotent, and safe with nothing to share', () => {
 test('shareUserConfig: no accounts directory at all is not an error', () => {
   const root = tmpDir();
   shareUserConfig(path.join(root, 'claude'), path.join(root, 'nope'));
+});
+
+// ---------------------------------------------------------------------------
+// CLAUDE_CONFIG_DIR exported in the user's shell
+//
+// The daemon inherits it, so it used to silently become the default account's
+// credentials while the menu still called that entry "default" — the label and
+// the login were two different things, and nothing showed the difference.
+// ---------------------------------------------------------------------------
+
+test('scanAccounts: an inherited CLAUDE_CONFIG_DIR gets its own row', () => {
+  const root = tmpDir();
+  const envDir = path.join(root, 'work-config');
+  fs.mkdirSync(envDir, { recursive: true });
+
+  const accounts = scanAccounts(path.join(root, 'claude'), path.join(root, 'accts'), envDir);
+  assert.deepEqual(
+    accounts.map((a) => a.name),
+    ['default', 'work-config (CLAUDE_CONFIG_DIR)'],
+  );
+  assert.equal(accounts[1].configDir, envDir, 'and it is selectable, not just named');
+});
+
+test('scanAccounts: unset or blank CLAUDE_CONFIG_DIR adds nothing', () => {
+  const root = tmpDir();
+  for (const value of [undefined, '', '   ']) {
+    const accounts = scanAccounts(path.join(root, 'claude'), path.join(root, 'accts'), value);
+    assert.deepEqual(accounts.map((a) => a.name), ['default']);
+  }
+});
+
+/** Pointing it at ~/.claude is just the default account spelled out. */
+test('scanAccounts: CLAUDE_CONFIG_DIR equal to ~/.claude is not a second account', () => {
+  const root = tmpDir();
+  const claudeDir = path.join(root, 'claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  const accounts = scanAccounts(claudeDir, path.join(root, 'accts'), claudeDir);
+  assert.deepEqual(accounts.map((a) => a.name), ['default']);
+});
+
+/** Nor is it a duplicate of an account already listed by name. */
+test('scanAccounts: CLAUDE_CONFIG_DIR pointing at a known account is not listed twice', () => {
+  const root = tmpDir();
+  const accountsDir = path.join(root, 'accts');
+  const work = path.join(accountsDir, 'work');
+  fs.mkdirSync(work, { recursive: true });
+  fs.writeFileSync(path.join(work, '.credentials.json'), '{}');
+
+  const accounts = scanAccounts(path.join(root, 'claude'), accountsDir, work);
+  assert.deepEqual(accounts.map((a) => a.name), ['default', 'work']);
+});
+
+/**
+ * Moving someone off the login their shell has been using would look exactly
+ * like being logged out, so the first run starts there — visibly, as that
+ * account, rather than by pretending it is "default".
+ */
+test('AccountsStore: first run starts on the inherited CLAUDE_CONFIG_DIR', () => {
+  const root = tmpDir();
+  const envDir = path.join(root, 'inherited');
+  fs.mkdirSync(envDir, { recursive: true });
+  const previous = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = envDir;
+  try {
+    const store = new AccountsStore({
+      claudeDir: path.join(root, 'claude'),
+      accountsDir: path.join(root, 'accts'),
+      stateDir: path.join(root, 'state'),
+    });
+    assert.equal(store.active, envDir);
+
+    // But a choice already made wins: this must not drag the user back every
+    // restart after they have deliberately switched away.
+    store.setActive(null);
+    const reloaded = new AccountsStore({
+      claudeDir: path.join(root, 'claude'),
+      accountsDir: path.join(root, 'accts'),
+      stateDir: path.join(root, 'state'),
+    });
+    assert.equal(reloaded.active, null, 'a persisted choice outranks the environment');
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previous;
+  }
 });

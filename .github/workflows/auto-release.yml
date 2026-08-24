@@ -184,12 +184,48 @@ jobs:
               || echo "::warning::no build for ${t}; those users get the universal vsix"
           done
 
+      # The README points at Releases as the install path, so the page needs to
+      # say which file to take. generate_release_notes appends the commit list
+      # below this body rather than replacing it.
+      # The README points at Releases as the install path, so the page needs to
+      # say which file to take. generate_release_notes appends the commit list
+      # below this body rather than replacing it.
+      #
+      # Quoted heredoc: the body is full of backticks, and an unquoted one would
+      # run `code --install-extension <file>` as a command instead of printing
+      # it. The version goes in afterwards, by substitution.
+      - name: Write the release body
+        run: |
+          set -euo pipefail
+          cat > RELEASE_BODY.md <<'EOF'
+          Install from the [Open VSX marketplace](https://open-vsx.org/extension/jaga/claude-persist-vscode)
+          — search **Claude Persist** in the Extensions view and your editor picks
+          the right build automatically. The files below are for installing by
+          hand: `code --install-extension <file>`.
+
+          | Your machine | File |
+          | --- | --- |
+          | Linux x64 (most code-server hosts) | `claude-persist-__V__-linux-x64.vsix` |
+          | Linux arm64 | `claude-persist-__V__-linux-arm64.vsix` |
+          | macOS, Apple silicon | `claude-persist-__V__-darwin-arm64.vsix` |
+          | macOS, Intel | `claude-persist-__V__-darwin-x64.vsix` |
+          | Windows x64 | `claude-persist-__V__-win32-x64.vsix` |
+          | Anything else (Alpine, ARM Windows, …) | `claude-persist-__V__.vsix` |
+
+          The platform builds bundle the Claude Code runtime and need nothing
+          installed. The last one carries no runtime (1 MB) and drives the Claude
+          Code you already have — install that from https://claude.com/download.
+          EOF
+          sed -i "s/__V__/${{ needs.tag.outputs.version }}/g" RELEASE_BODY.md
+          cat RELEASE_BODY.md
+
       - name: Publish release with vsix files
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.tag.outputs.version }}
           name: v${{ needs.tag.outputs.version }}
           files: claude-persist-*.vsix
+          body_path: RELEASE_BODY.md
           generate_release_notes: true
 
       # Open VSX is the marketplace code-server uses by default, so publishing

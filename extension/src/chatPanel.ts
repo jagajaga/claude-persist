@@ -578,14 +578,36 @@ export class ChatPanelManager {
    * gets a link and a box to paste the code into, and never sees a shell.
    */
   private async addAccountInteractively(entry: PanelEntry): Promise<void> {
-    const name = await vscode.window.showInputBox({
-      title: 'Log in to another account',
-      prompt: 'Name for this account (used as its config folder name)',
-      placeHolder: 'work',
-      validateInput: (value) =>
-        /^[a-z0-9-]+$/.test(value) ? undefined : 'Use lowercase letters, digits, and hyphens only',
-    });
-    if (!name) return;
+    // A pick, not a name prompt. Sign-in could only ever create a *named*
+    // account, so on a machine with no Claude Code login the one account the UI
+    // lists first — "default" — could never be filled in, and the user had to
+    // invent a name for what was really their only login.
+    const DEFAULT_CHOICE = 'Default account  (~/.claude)';
+    const choice = await vscode.window.showQuickPick(
+      [
+        { label: DEFAULT_CHOICE, detail: 'The account Claude Code itself uses on this machine' },
+        { label: 'New named account…', detail: 'A separate login, kept under ~/.claude-accounts' },
+      ],
+      { title: 'Sign in to Claude', placeHolder: 'Which account?' },
+    );
+    if (!choice) return;
+
+    let name = 'default';
+    if (choice.label !== DEFAULT_CHOICE) {
+      const typed = await vscode.window.showInputBox({
+        title: 'Sign in to Claude',
+        prompt: 'Name for this account (used as its config folder name)',
+        placeHolder: 'work',
+        validateInput: (value) =>
+          value === 'default'
+            ? 'Pick "Default account" instead'
+            : /^[a-z0-9-]+$/.test(value)
+              ? undefined
+              : 'Use lowercase letters, digits, and hyphens only',
+      });
+      if (!typed) return;
+      name = typed;
+    }
 
     const client = await this.requireClient();
     if (!client) {

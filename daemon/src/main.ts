@@ -215,6 +215,7 @@ const logins = new LoginManager(
   claudeExecutable(),
   path.join(os.homedir(), '.claude-accounts'),
   logLine,
+  accountsStore.dirs.claudeDir,
 );
 
 /** Which accounts are known spent, and when we last rotated. */
@@ -488,7 +489,12 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
         // panel reported success and every message went on failing against the
         // unauthenticated default — the single worst first-run experience here.
         pollAccounts();
-        activateAccount(result.configDir, 'signed in');
+        // The default account is `null` in the account list, not its path, so a
+        // sign-in to ~/.claude has to be translated back or it would activate
+        // an "account" nothing in the list matches.
+        const signedIn =
+          result.configDir === accountsStore.dirs.claudeDir ? null : result.configDir;
+        activateAccount(signedIn, 'signed in');
         return result;
       });
     case 'cancelLogin': {

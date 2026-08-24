@@ -11,7 +11,9 @@
 // stdin. So the daemon runs it, hands the URL to the extension to open, and
 // feeds back the code the user pastes into a normal input box.
 import fs from 'node:fs';
+import os from 'node:os';
 import { NO_CLAUDE_MESSAGE } from './claudeExecutable.js';
+import { DEFAULT_ACCOUNT_NAME } from './accounts.js';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -74,7 +76,20 @@ export class LoginManager {
     private readonly claudeBin: string | null,
     private readonly accountsDir: string,
     private readonly log: (message: string) => void = () => undefined,
+    /** ~/.claude, so the default account can be signed in to as well. */
+    private readonly claudeDir: string = path.join(os.homedir(), '.claude'),
   ) {}
+
+  /**
+   * Where a login writes its credentials.
+   *
+   * Sign-in could only ever create a *named* account, so on a machine with no
+   * Claude Code login the one account the UI lists first could never be filled
+   * in — the user had to make up a name for what was really their only login.
+   */
+  private configDirFor(name: string): string {
+    return name === DEFAULT_ACCOUNT_NAME ? this.claudeDir : path.join(this.accountsDir, name);
+  }
 
   /**
    * Start a login and resolve once the CLI has printed its authorize URL.
@@ -90,7 +105,7 @@ export class LoginManager {
     if (!/^[a-z0-9-]+$/.test(name)) {
       return Promise.reject(new Error('Account name may use lowercase letters, digits and hyphens only'));
     }
-    const configDir = path.join(this.accountsDir, name);
+    const configDir = this.configDirFor(name);
     fs.mkdirSync(configDir, { recursive: true });
 
     // A Windows install can be a .cmd shim, which CreateProcess cannot run

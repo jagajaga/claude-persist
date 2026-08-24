@@ -15,7 +15,8 @@ import type {
 } from '@claude-persist/shared';
 import type { HelloResult } from '@claude-persist/shared';
 import { PROTOCOL_VERSION } from '@claude-persist/shared';
-import { ensureDirs, socketPath, lockPath, sessionLogPath, logPath, pendingTurnSessionIds, pendingTurnPath } from './paths.js';
+import { NO_CLAUDE_MESSAGE, claudeExecutable } from './claudeExecutable.js';
+import { ensureDirs, socketPath, socketIsFile, lockPath, sessionLogPath, logPath, pendingTurnSessionIds, pendingTurnPath } from './paths.js';
 import { releaseLock } from './lock.js';
 import { claimOwnership } from './ownership.js';
 import { Registry } from './registry.js';
@@ -208,25 +209,10 @@ function pollAccounts(): void {
  */
 const options = { switchAccountOnLimit: true };
 
-/**
- * The `claude` binary bundled beside this daemon, used to drive sign-in. Falls
- * back to PATH for a dev checkout that has no bundle.
- */
-function claudeBinary(): string {
-  const entry = process.argv[1] ?? '';
-  const bundled = path.join(
-    path.dirname(entry),
-    '..',
-    'node_modules',
-    '@anthropic-ai',
-    'claude-agent-sdk-linux-x64',
-    'claude',
-  );
-  return fs.existsSync(bundled) ? bundled : 'claude';
-}
-
 const logins = new LoginManager(
-  claudeBinary(),
+  // Null means "nothing to run"; LoginManager says so rather than spawning a
+  // bare 'claude' that fails with ENOENT and no explanation.
+  claudeExecutable(),
   path.join(os.homedir(), '.claude-accounts'),
   logLine,
 );
@@ -589,11 +575,14 @@ async function start(): Promise<void> {
     process.exit(0);
   }
   // The lock is ours, so any socket file still sitting here is stale by
-  // definition — no live daemon could have been holding it.
-  try {
-    fs.unlinkSync(socketPath);
-  } catch {
-    // wasn't there
+  // definition — no live daemon could have been holding it. A Windows named
+  // pipe has no file to remove: it disappears with the process that owned it.
+  if (socketIsFile) {
+    try {
+      fs.unlinkSync(socketPath);
+    } catch {
+      // wasn't there
+    }
   }
 
   /** Every server we've bound; kept so shutdown closes them all. */
@@ -616,11 +605,16 @@ async function start(): Promise<void> {
     servers.push(server);
     server.on('error', onServerError);
     server.listen(socketPath, () => {
-      fs.chmodSync(socketPath, 0o600);
-      try {
-        boundIno = fs.statSync(socketPath).ino;
-      } catch {
-        boundIno = null;
+      // A named pipe is neither chmod-able nor stat-able. Its access is already
+      // limited to this session, and with no inode there is nothing for the
+      // self-heal watch below to compare — it stands down via boundIno === null.
+      if (socketIsFile) {
+        fs.chmodSync(socketPath, 0o600);
+        try {
+          boundIno = fs.statSync(socketPath).ino;
+        } catch {
+          boundIno = null;
+        }
       }
       logLine(`daemon listening on ${socketPath} (pid ${process.pid})`);
     });
@@ -714,7 +708,7 @@ async function start(): Promise<void> {
     // *replacement's* socket on the way out, leaving a healthy daemon that
     // nothing could reach and a client stuck reconnecting to nothing.
     try {
-      if (boundIno !== null && fs.statSync(socketPath).ino === boundIno) {
+      if (socketIsFile && boundIno !== null && fs.statSync(socketPath).ino === boundIno) {
         fs.unlinkSync(socketPath);
       }
     } catch {

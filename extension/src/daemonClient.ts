@@ -21,7 +21,23 @@ import type {
 } from '@claude-persist/shared';
 
 const baseDir = path.join(os.homedir(), '.claude-persist');
-const socketPath = path.join(baseDir, 'daemon.sock');
+
+/**
+ * Must match daemon/src/paths.ts exactly — the two processes meet here and
+ * nowhere else. Windows has no unix domain socket in the filesystem, so the
+ * endpoint is a named pipe, keyed by home directory for the same reason the
+ * unix path lives under a per-user directory.
+ */
+function pipeSuffix(home: string): string {
+  let hash = 0;
+  for (let i = 0; i < home.length; i++) hash = (Math.imul(hash, 31) + home.charCodeAt(i)) >>> 0;
+  return hash.toString(36);
+}
+
+const socketPath =
+  process.platform === 'win32'
+    ? `\\\\.\\pipe\\claude-persist-${pipeSuffix(os.homedir())}`
+    : path.join(baseDir, 'daemon.sock');
 
 // Keep in sync with PROTOCOL_VERSION in shared/src/protocol.ts (the shared
 // package is ESM, so the constant can't be require()d from this CJS module).

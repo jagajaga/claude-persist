@@ -17,6 +17,26 @@
     "AI",
     "Chat"
   ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "anthropic",
+    "agent",
+    "chat",
+    "code-server",
+    "remote development",
+    "persistent sessions"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Claude Persist runs Claude Code against the files in this folder, so the folder has to be trusted."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Sessions run in a real working directory on the machine hosting the daemon."
+    }
+  },
   "activationEvents": [
     "onStartupFinished"
   ],

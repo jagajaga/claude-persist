@@ -71,19 +71,39 @@ jobs:
       - name: Generate changelog for the Extensions view
         run: bash scripts/changelog.sh 3
 
-      - name: Build and package
-        run: bash scripts/package.sh
+      # Two builds, because one binary cannot serve every platform.
+      #
+      # The universal vsix carries no native runtime (~1 MB instead of ~105 MB)
+      # and drives whatever Claude Code the user already has, so macOS, Windows,
+      # ARM and Alpine can all install it. The linux-x64 build bundles the
+      # runtime, so a code-server host still needs nothing installed at all.
+      #
+      # Marketplaces hand a platform-targeted build to the platforms it targets
+      # and the universal one to everybody else, so publishing both covers every
+      # machine without multiplying anyone's download.
+      - name: Package universal vsix (no bundled runtime)
+        run: CP_SDK_PLATFORMS=none bash scripts/package.sh
 
-      - name: Locate vsix
+      - name: Package linux-x64 vsix (bundled runtime)
+        run: CP_TARGET=linux-x64 bash scripts/package.sh
+
+      - name: Locate vsix files
         id: vsix
-        run: echo "file=$(ls claude-persist-*.vsix)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          V=${{ steps.bump.outputs.version }}
+          echo "universal=claude-persist-${V}.vsix" >> "$GITHUB_OUTPUT"
+          echo "linux=claude-persist-${V}-linux-x64.vsix" >> "$GITHUB_OUTPUT"
+          ls -la claude-persist-*.vsix
 
       - name: Publish release with vsix
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.bump.outputs.version }}
           name: v${{ steps.bump.outputs.version }}
-          files: ${{ steps.vsix.outputs.file }}
+          files: |
+            ${{ steps.vsix.outputs.universal }}
+            ${{ steps.vsix.outputs.linux }}
           generate_release_notes: true
 
       # Open VSX is the marketplace code-server uses by default, so publishing
@@ -98,13 +118,22 @@ jobs:
         id: ovsx
         run: |
           set -uo pipefail
-          for attempt in 1 2 3; do
-            if npx --yes ovsx publish "${{ steps.vsix.outputs.file }}" -p "$OVSX_TOKEN"; then
-              echo "published on attempt $attempt"
-              exit 0
-            fi
-            echo "::warning::Open VSX publish attempt $attempt failed"
-            sleep $((attempt * 30))
-          done
+          publish() {
+            for attempt in 1 2 3; do
+              if npx --yes ovsx publish "$1" -p "$OVSX_TOKEN"; then
+                echo "published $1 on attempt $attempt"
+                return 0
+              fi
+              echo "::warning::Open VSX publish of $1, attempt $attempt, failed"
+              sleep $((attempt * 30))
+            done
+            return 1
+          }
+          # The universal build first: it is the one every platform can fall
+          # back to, so if only one of the two lands, it should be that one.
+          if publish "${{ steps.vsix.outputs.universal }}" \
+            && publish "${{ steps.vsix.outputs.linux }}"; then
+            exit 0
+          fi
           echo "::error::Open VSX publish failed after 3 attempts; the GitHub release is live. Re-run with scripts/publish-ovsx.sh once the service recovers."
           exit 1

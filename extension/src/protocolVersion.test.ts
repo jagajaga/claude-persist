@@ -40,3 +40,39 @@ test('EXPECTED_PROTOCOL matches shared PROTOCOL_VERSION', () => {
       'Bump both, or the extension will kill every daemon it spawns.',
   );
 });
+
+/**
+ * The socket path is the other hand-maintained copy, and for the same reason:
+ * the daemon computes it in ESM (daemon/src/paths.ts), the extension host in
+ * CommonJS (extension/src/daemonClient.ts), and neither can import the other.
+ *
+ * It is the single point where the two processes meet. Disagree by one
+ * character and the extension connects to nothing, spawns a daemon, connects
+ * to nothing again, and reports "Could not start claude-persist daemon"
+ * forever — while a perfectly healthy daemon is listening a few bytes away.
+ * Windows made this real: the unix branch is a path join, the pipe branch is an
+ * escaped literal, and only one of them was written twice.
+ */
+function readSource(relPath: string): string {
+  return fs.readFileSync(path.join(repoRoot, relPath), 'utf8');
+}
+
+test('the daemon and the extension agree on the socket path', () => {
+  const daemon = readSource('daemon/src/paths.ts');
+  const extension = readSource('extension/src/daemonClient.ts');
+
+  for (const fragment of ['pipe\\\\claude-persist-', "'.claude-persist'", "'daemon.sock'"]) {
+    assert.ok(daemon.includes(fragment), `daemon/src/paths.ts lost ${fragment}`);
+    assert.ok(
+      extension.includes(fragment),
+      `extension/src/daemonClient.ts does not match the daemon: missing ${fragment}`,
+    );
+  }
+});
+
+/** Both sides must branch on the platform, or one of them is wrong somewhere. */
+test('both sides branch to a named pipe on Windows', () => {
+  for (const file of ['daemon/src/paths.ts', 'extension/src/daemonClient.ts']) {
+    assert.match(readSource(file), /process\.platform === 'win32'/, `${file} assumes unix`);
+  }
+});

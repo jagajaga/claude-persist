@@ -3,7 +3,35 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 export const baseDir = path.join(os.homedir(), '.claude-persist');
-export const socketPath = path.join(baseDir, 'daemon.sock');
+
+/**
+ * Where clients connect.
+ *
+ * Windows has no unix domain socket in the filesystem. A named pipe lives in
+ * its own namespace instead: it has no inode, cannot be chmod'ed, and cannot be
+ * unlinked — so every filesystem operation the unix path performs on the socket
+ * has to be skipped there (see `socketIsFile`). The name is derived from the
+ * home directory so that, exactly as the per-user ~/.claude-persist does on
+ * unix, two users on one machine get two daemons rather than fighting over one.
+ */
+export const socketPath =
+  process.platform === 'win32'
+    ? `\\\\.\\pipe\\claude-persist-${pipeSuffix(os.homedir())}`
+    : path.join(baseDir, 'daemon.sock');
+
+/**
+ * True when `socketPath` names a real file — the only case where it can be
+ * stat'ed, chmod'ed or unlinked, and the only case where inode identity (which
+ * the self-heal watch depends on) means anything.
+ */
+export const socketIsFile = process.platform !== 'win32';
+
+/** A short, filename-safe digest of the home directory. */
+function pipeSuffix(home: string): string {
+  let hash = 0;
+  for (let i = 0; i < home.length; i++) hash = (Math.imul(hash, 31) + home.charCodeAt(i)) >>> 0;
+  return hash.toString(36);
+}
 /** Holds the owning pid; created with O_EXCL so only one daemon can win it. */
 export const lockPath = path.join(baseDir, 'daemon.lock');
 export const registryPath = path.join(baseDir, 'registry.json');

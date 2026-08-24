@@ -11,6 +11,7 @@
 // stdin. So the daemon runs it, hands the URL to the extension to open, and
 // feeds back the code the user pastes into a normal input box.
 import fs from 'node:fs';
+import { NO_CLAUDE_MESSAGE } from './claudeExecutable.js';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -69,7 +70,8 @@ export class LoginManager {
   private readonly pending = new Map<string, PendingLogin>();
 
   constructor(
-    private readonly claudeBin: string,
+    /** null when this machine has no Claude Code to run — see claudeExecutable. */
+    private readonly claudeBin: string | null,
     private readonly accountsDir: string,
     private readonly log: (message: string) => void = () => undefined,
   ) {}
@@ -81,13 +83,20 @@ export class LoginManager {
    * which arrives later via submitCode.
    */
   start(name: string): Promise<LoginStarted> {
+    // Nothing to sign in with. Saying so beats `spawn claude ENOENT`, which is
+    // what a macOS or Windows user hit here: the bundled binary is built for
+    // the packaged platform only.
+    if (!this.claudeBin) return Promise.reject(new Error(NO_CLAUDE_MESSAGE));
     if (!/^[a-z0-9-]+$/.test(name)) {
       return Promise.reject(new Error('Account name may use lowercase letters, digits and hyphens only'));
     }
     const configDir = path.join(this.accountsDir, name);
     fs.mkdirSync(configDir, { recursive: true });
 
+    // A Windows install can be a .cmd shim, which CreateProcess cannot run
+    // directly; everything else is spawned without a shell, as before.
     const child = spawn(this.claudeBin, ['auth', 'login', '--claudeai'], {
+      shell: /\.(cmd|bat)$/i.test(this.claudeBin),
       // Piped stdio is what selects the hosted-callback, paste-a-code flow.
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, CLAUDE_CONFIG_DIR: configDir, BROWSER: 'true' },
@@ -196,6 +205,7 @@ export class LoginManager {
   /** Ask the CLI, rather than inferring from files whose shape may change. */
   private isLoggedIn(configDir: string): Promise<boolean> {
     return new Promise((resolve) => {
+      if (!this.claudeBin) return resolve(false);
       const probe = spawn(this.claudeBin, ['auth', 'status', '--json'], {
         stdio: ['ignore', 'pipe', 'ignore'],
         env: { ...process.env, CLAUDE_CONFIG_DIR: configDir },

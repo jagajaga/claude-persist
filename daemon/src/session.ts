@@ -22,6 +22,7 @@ import {
   pruneAgents,
   tasksFromLevelSignal,
 } from './agents.js';
+import { NO_CLAUDE_MESSAGE, claudeExecutable } from './claudeExecutable.js';
 import {
   MAX_ATTEMPTS,
   RESTART_RESUME_MS,
@@ -328,7 +329,9 @@ export class DaemonSession {
     // silently sending an old turn first would be a surprise.
     if (this.pending) this.cancelPendingRetry('superseded by a new message');
 
-    this.ensureQuery();
+    // Nothing to send into: the session already said why, and pushing anyway
+    // would leave it "running" forever against a query that never started.
+    if (!this.ensureQuery()) return;
     const envelope = {
       type: 'user',
       message: { role: 'user', content },
@@ -737,8 +740,19 @@ export class DaemonSession {
     this.activeQuery = null;
   }
 
-  private ensureQuery(): void {
-    if (this.activeQuery) return;
+  /** False when no turn could be started; the caller must not queue input. */
+  private ensureQuery(): boolean {
+    if (this.activeQuery) return true;
+    // Say what is wrong before the SDK does. Its own failure here reads
+    // "Native CLI binary for linux-x64 not found. Reinstall
+    // @anthropic-ai/claude-agent-sdk without --omit=optional" — which is
+    // meaningless to someone who just installed an extension, and is what
+    // every macOS, Windows and ARM user saw as their very first turn.
+    if (!claudeExecutable()) {
+      this.appendEvent({ type: 'status', status: 'error', detail: NO_CLAUDE_MESSAGE });
+      this.setStatus('idle');
+      return false;
+    }
     // null = default account, env stays untouched (SDK falls back to ~/.claude).
     const activeAccountDir = accountsStore.active;
     const activeConcreteDir = accountsStore.activeConcreteDir();
@@ -777,6 +791,7 @@ export class DaemonSession {
       this.callbacks.onMetaChanged();
     }
     this.input = new InputQueue();
+    const claudeBin = claudeExecutable();
     const q = query({
       // The SDK accepts an AsyncIterable of user messages for multi-turn
       // streaming input; the session stays alive between turns.
@@ -792,6 +807,12 @@ export class DaemonSession {
         // mid-session; actual behavior is still governed by permissionMode.
         allowDangerouslySkipPermissions: true,
         canUseTool: this.canUseTool,
+        // Point the SDK at the binary we resolved. Without this it looks only
+        // for the platform package bundled beside it, so a macOS, Windows or
+        // ARM user — who gets the packaged platform's binary, or none — fails
+        // with a message about optional dependencies even when they have
+        // Claude Code installed and working.
+        ...(claudeBin ? { pathToClaudeCodeExecutable: claudeBin } : {}),
         // Don't replace the whole env — CLAUDE_CONFIG_DIR is the only thing
         // that changes between accounts.
         ...(activeAccountDir ? { env: { ...process.env, CLAUDE_CONFIG_DIR: activeAccountDir } } : {}),
@@ -808,6 +829,7 @@ export class DaemonSession {
       })
       .catch(() => undefined);
     void this.consume(q);
+    return true;
   }
 
   private canUseTool = async (

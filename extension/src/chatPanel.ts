@@ -212,6 +212,36 @@ export class ChatPanelManager {
     }
   }
 
+  /**
+   * Sign in, from the Command Palette.
+   *
+   * The login card has to live inside a webview — see addAccountInteractively
+   * for why the code box cannot be a QuickInput — so this needs a panel. A user
+   * who has never used this extension has none, and telling them "open a chat
+   * first, then find the model pill" is exactly the dead end this command
+   * exists to remove. So: use an open panel if there is one, otherwise open the
+   * most recent session, and only ask them to create one if there are none.
+   */
+  async addAccountFromCommand(sessions: SessionInfo[]): Promise<void> {
+    const open = [...this.panels.values()].find((entry) => entry.panel.visible)
+      ?? [...this.panels.values()][0];
+    if (open) {
+      open.panel.reveal();
+      await this.addAccountInteractively(open);
+      return;
+    }
+    const newest = [...sessions].sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0];
+    if (!newest) {
+      void vscode.window.showInformationMessage(
+        'Claude Persist: create a session first — sign-in happens inside a chat panel.',
+      );
+      return;
+    }
+    await this.openSession(newest);
+    const entry = this.panels.get(newest.id);
+    if (entry) await this.addAccountInteractively(entry);
+  }
+
   async openSession(info: SessionInfo): Promise<void> {
     const existing = this.panels.get(info.id);
     if (existing) {

@@ -64,3 +64,49 @@ test('no compiled extension-host file requires a bare package at runtime', () =>
     `Runtime require() of a bare specifier will break activation in the VSIX:\n${offenders.join('\n')}`,
   );
 });
+
+// ---------------------------------------------------------------------------
+// Manifest guarantees a new user depends on
+// ---------------------------------------------------------------------------
+
+const manifest = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'),
+) as {
+  keywords?: string[];
+  capabilities?: { untrustedWorkspaces?: { supported?: boolean; description?: string } };
+  contributes?: { commands?: Array<{ command: string; title: string }> };
+};
+
+/**
+ * With no `capabilities.untrustedWorkspaces` declaration, VS Code defaults an
+ * extension to *not supported* in Restricted Mode and disables it silently.
+ * A freshly cloned folder is untrusted by default, so that is exactly where a
+ * new user starts: the activity-bar icon never appears and nothing explains it.
+ * Declaring it — even as unsupported — is what makes VS Code show the reason.
+ */
+test('workspace trust is declared, with a reason', () => {
+  const trust = manifest.capabilities?.untrustedWorkspaces;
+  assert.ok(trust, 'capabilities.untrustedWorkspaces missing: the extension vanishes in Restricted Mode');
+  assert.equal(typeof trust.supported, 'boolean');
+  assert.ok(
+    (trust.description ?? '').length > 20,
+    'an undeclared reason leaves the user with a disabled extension and no explanation',
+  );
+});
+
+/**
+ * Sign-in used to be reachable only from a menu inside the model pill, inside a
+ * chat panel, which itself only exists once you have created a session. A user
+ * with no Claude credentials had no way to find it.
+ */
+test('signing in is reachable from the Command Palette', () => {
+  const commands = manifest.contributes?.commands ?? [];
+  const addAccount = commands.find((c) => c.command === 'claudePersist.addAccount');
+  assert.ok(addAccount, 'no claudePersist.addAccount command: sign-in is unreachable from a cold start');
+  assert.match(addAccount.title, /^Claude Persist: /, 'palette search relies on the prefix');
+});
+
+test('the listing carries keywords, or marketplace search cannot find it', () => {
+  assert.ok((manifest.keywords ?? []).length >= 3);
+  assert.ok(manifest.keywords?.includes('claude'));
+});

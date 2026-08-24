@@ -64,10 +64,14 @@
     "viewsWelcome": [
       {
         "view": "claudePersist.sessions",
-        "contents": "No Claude sessions yet.\n[New Session](command:claudePersist.newSession)\nSessions run in a server-side daemon and survive window reloads."
+        "contents": "No Claude sessions yet.\n[New Session](command:claudePersist.newSession)\nSessions run in a server-side daemon and survive window reloads.\nNot signed in to Claude yet? Create a session, then use [Add Account](command:claudePersist.addAccount)."
       }
     ],
     "commands": [
+      {
+        "command": "claudePersist.addAccount",
+        "title": "Claude Persist: Add Account (Sign In)"
+      },
       {
         "command": "claudePersist.newSession",
         "title": "Claude Persist: New Session",

@@ -159,7 +159,10 @@ export class LoginManager {
    * CLI's exit code — the credentials file existing and reporting loggedIn is
    * the thing that actually matters to everything downstream.
    */
-  async submitCode(loginId: string, code: string): Promise<{ ok: boolean; error?: string }> {
+  async submitCode(
+    loginId: string,
+    code: string,
+  ): Promise<{ ok: boolean; error?: string; configDir?: string }> {
     const entry = this.pending.get(loginId);
     if (!entry) return { ok: false, error: 'That sign-in is no longer active — start again.' };
     const trimmed = code.trim();
@@ -182,7 +185,10 @@ export class LoginManager {
     const loggedIn = await this.isLoggedIn(entry.configDir);
     if (loggedIn) {
       this.log(`login ${entry.name}: succeeded`);
-      return { ok: true };
+      // The caller activates this directory. A sign-in that leaves you on the
+      // account you could not use is not a sign-in: every message still failed
+      // while the panel said "Signed in".
+      return { ok: true, configDir: entry.configDir };
     }
     const reason = loginFailureReason(entry.output);
     this.log(`login ${entry.name}: failed`);

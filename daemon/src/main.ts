@@ -482,7 +482,15 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
     case 'startLogin':
       return logins.start(req.name);
     case 'submitLoginCode':
-      return logins.submitCode(req.loginId, req.code);
+      return logins.submitCode(req.loginId, req.code).then((result) => {
+        if (!result.ok || !result.configDir) return result;
+        // Make the account we just signed into the one in use. Without this the
+        // panel reported success and every message went on failing against the
+        // unauthenticated default — the single worst first-run experience here.
+        pollAccounts();
+        activateAccount(result.configDir, 'signed in');
+        return result;
+      });
     case 'cancelLogin': {
       logins.cancel(req.loginId);
       return null;

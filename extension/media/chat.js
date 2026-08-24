@@ -1337,7 +1337,7 @@
     if (!loginCard) return;
     if (msg.ok) {
       loginCard.card.replaceChildren(
-        el('div', 'login-title', 'Signed in — pick the account from the model menu.'),
+        el('div', 'login-title', 'Signed in — this account is now active.'),
       );
       setTimeout(dismissLoginPrompt, 6000);
       return;

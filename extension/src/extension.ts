@@ -209,6 +209,17 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(statusItem);
 
   context.subscriptions.push(
+    vscode.commands.registerCommand('claudePersist.addAccount', async () => {
+      try {
+        const c = await ensureClient(context);
+        await panels.addAccountFromCommand(await c.listSessions());
+      } catch (err) {
+        void vscode.window.showErrorMessage(
+          `Claude Persist: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }),
+
     vscode.commands.registerCommand('claudePersist.newSession', async () => {
       try {
         const c = await ensureClient(context);

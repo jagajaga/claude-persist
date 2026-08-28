@@ -146,3 +146,32 @@ test('the walkthrough exists and its media files are really there', () => {
     );
   }
 });
+
+/**
+ * The repo README quotes the suite size as a sign of life. A number that
+ * drifts is worse than no number, and nothing else would ever catch it.
+ */
+test('the README test counts are not stale', () => {
+  const readme = fs.readFileSync(path.join(__dirname, '..', '..', 'README.md'), 'utf8');
+  const claim = /(\d+) daemon \+ (\d+) extension tests/.exec(readme);
+  assert.ok(claim, 'README no longer states the test counts; drop this test or restore the line');
+
+  const count = (dir: string): number =>
+    (fs.readdirSync(dir) as string[])
+      .filter((f) => f.endsWith('.test.ts'))
+      .reduce((n, f) => n + (fs.readFileSync(path.join(dir, f), 'utf8').match(/^test\(/gm)?.length ?? 0), 0);
+
+  const repo = path.join(__dirname, '..', '..');
+  for (const [label, dir, stated] of [
+    ['daemon', path.join(repo, 'daemon', 'src'), Number(claim[1])],
+    ['extension', path.join(repo, 'extension', 'src'), Number(claim[2])],
+  ] as Array<[string, string, number]>) {
+    const actual = count(dir);
+    // Exact is unmaintainable across a single added test; a drift of more than
+    // a tenth means the line has been left behind entirely.
+    assert.ok(
+      Math.abs(actual - stated) <= Math.max(5, actual * 0.1),
+      `README says ${stated} ${label} tests, there are ${actual}`,
+    );
+  }
+});

@@ -1,150 +1,161 @@
 # Claude Persist
 
-Persistent Claude Code sessions that survive window reloads — chat tabs backed
-by a server-side daemon. Built for code-server (VS Code in the browser), where
-a page refresh normally kills any in-flight Claude session.
+Persistent Claude Code sessions that survive window reloads. The conversation
+runs in a background process on the server, not in your window, so refreshing
+the page, closing the tab, losing the connection or switching to your phone
+does not stop it.
 
-Refresh the page mid-generation and the turn keeps running in the daemon; the
-tab replays everything it missed when it comes back.
-
-[**Install from the VS Code Marketplace**](https://marketplace.visualstudio.com/items?itemName=jaga.claude-persist-vscode)
-· [**Open VSX**](https://open-vsx.org/extension/jaga/claude-persist-vscode) (code-server, VSCodium)
-
-## Getting started
-
-1. **Nothing to install first**, on Linux, macOS or Windows — the runtime is
-   bundled. On other platforms see Requirements below.
-2. **Open the panel.** Click the Claude Persist icon in the activity bar, or the
-   "Claude Persist" item in the status bar, or run
-   **Claude Persist: New Session** from the Command Palette.
-3. **Pick a folder** when asked. That is the working directory for the session.
-4. **Sign in**, if you have never used Claude Code on this machine: open the
-   model pill at the bottom of the chat and choose *Log in to another account…*.
-   The panel walks you through it — no terminal needed. If you already use
-   Claude Code here, your existing login is picked up automatically.
-5. **Type a message.** The session now survives reloads, disconnects, and
-   closing the tab.
-
-## Requirements
-
-- **VS Code 1.85+**, or any code-server built on it.
-- **A Claude account**, or `ANTHROPIC_API_KEY`.
-- **Claude Code — only on platforms without a bundled build.** Builds for
-  Linux (x64, arm64), macOS (Intel, Apple silicon) and Windows (x64) carry the
-  Claude Code runtime and need nothing installed; your marketplace picks the
-  right one automatically. Anywhere else — Alpine, ARM Windows, 32-bit — you get
-  the universal build, which drives the Claude Code you already have. Install it
-  from <https://claude.com/download> or with `npm i -g @anthropic-ai/claude-code`,
-  then reload the window.
-- **A trusted folder.** The extension runs Claude against your files, so it
-  stays disabled in Restricted Mode.
+[Install from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=jaga.claude-persist-vscode)
+or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
+(code-server, VSCodium). Not affiliated with Anthropic.
 
 ## Features
 
 ### Sessions
 
-- **Reload-proof.** Turns keep executing with no client attached. Reload the
-  window mid-generation and the tab replays everything it missed, tool calls
-  included.
-- **Native editor tabs**, restored after a window reload, plus an activity-bar
-  sidebar listing every session grouped by folder, with live running/idle state
-  and unread markers.
-- **Any session, from any window.** The daemon is per-user, not per-window.
+- **Reload-proof.** Turns keep running with no window attached. Reload
+  mid-answer and the tab replays everything it missed, tool calls included.
+- **Native editor tabs**, reopened after a reload, plus a sidebar listing every
+  session grouped by folder with running/idle state and unread markers.
+- **Any session, from any window.** One daemon per user, not per window.
 - **Survives its own upgrades.** A turn in flight when the daemon restarts is
-  queued and resumed rather than lost.
-- **Import existing Claude Code sessions** from `~/.claude` and continue them
-  with their full context.
-- **Rename and delete** sessions; long histories load a window at a time with
-  "load earlier".
+  queued and resumed, not lost.
+- **Recovers from a stuck turn.** Twenty minutes of silence from Claude is
+  treated as a stall: the turn is parked and resumed automatically, up to five
+  attempts.
+- **Import your existing Claude Code conversations** and carry on with their
+  full context.
+- **Rename and delete** sessions. Long histories load a window at a time.
 
 ### The chat
 
-- **Claude Code look and feel** — streaming markdown, collapsible tool cards
-  with IN/OUT, inline diffs for Edit and Write, todo checklists, and clickable
-  file paths that open in the editor.
+- Streaming markdown, collapsible tool cards with IN/OUT, inline diffs for Edit
+  and Write, todo checklists, and clickable file paths that open in the editor.
 - **Permissions** — Allow/Deny cards that survive a reload, plus a
   bypass-permissions toggle you can flip mid-turn.
-- **Questions** — AskUserQuestion renders as option cards with a free-text
-  fallback.
-- **Nothing gets lost.** An unanswered question or permission request stays
-  pinned beside the composer while the conversation keeps scrolling.
-- **Jump back through the conversation.** A sticky bar names the exchange you
-  are reading and follows you as you scroll; tap it for a list of every message
-  in the loaded history and jump to one.
-- **Context ring** — live context usage against the model's real window. Click
-  to compact the conversation.
-- **Model and reasoning-effort picker**, per session.
-- **Interrupt** a running turn; per-turn token counts, cost, and duration; a
-  live elapsed timer while Claude works.
+- **Questions** — AskUserQuestion renders as option cards, single or
+  multi-select, with a free-text alternative.
+- **Pinned prompts.** An unanswered question or permission request stays beside
+  the composer while the conversation keeps scrolling, so you cannot miss it.
+- **Prompt bar.** A sticky header names the exchange you are reading and
+  follows you as you scroll. Tap it for a list of every message in the loaded
+  history, and jump to one.
+- **Context ring** — how full the context window is, against the model's real
+  size. Click it to compact the conversation.
+- **Model and reasoning-effort picker**, per session, from the pill at the
+  bottom of the chat.
+- **Interrupt** a running turn from the working row, which also shows how long
+  the turn has been going. Finished turns show their duration and token count.
 - **Git branch and worktree** shown beside the composer.
-- **Offline is visible**, not silent: the panel dims and reconnects by itself.
+- **Connection loss is visible.** A heartbeat runs between the tab and the
+  daemon; when it stops answering, a border pulses around the chat until it
+  recovers.
 
 ### Attachments
 
-- **Images** embed as vision blocks; other files attach as path references.
-- **Drag and drop, paste, or pick** — large files upload in chunks with
-  progress.
+- **Images** are sent to Claude as images. PNG, JPEG, GIF and WebP up to 5 MB;
+  anything larger or of another type is attached as a file path instead.
+- **Add files** by dragging them in, pasting from the clipboard, or from the
+  `+` menu, which can also browse files on the server. Uploads from the browser
+  are chunked, show progress, and are capped at 10 MB.
 - **Inline previews** with a full-size lightbox, including for image paths you
-  simply type or that a tool returns.
+  type or that a tool returns.
 
 ### Accounts and rate limits
 
 - **Several accounts**, switched from the model pill.
-- **Sign in inside the editor** — a link and a box for the code. No terminal,
-  and it works over code-server where a callback to `localhost` cannot.
-- **Sign in to the default account or a named one**; accounts with no
-  credentials are labelled rather than silently failing.
+- **Sign in inside the editor** — a link to open and a box for the code. No
+  terminal, and it works over code-server, where a callback to `localhost`
+  cannot.
 - **Rate limits in the status bar**, with the reset time in the tooltip.
 - **Automatic rotation.** Hit a limit and the turn is parked, the next account
-  is activated, and the conversation resumes on its own. If every account is
-  spent it waits for the soonest reset and resumes then. You do not have to
-  come back and restart it.
-- **Transcripts follow you** between accounts, so a switch mid-conversation
+  with room is activated, and the conversation resumes on its own. If every
+  account is spent it waits for the soonest reset and resumes then. Accounts
+  sharing one login count as one, since they share the quota.
+- **Transcripts follow you** between accounts, so switching mid-conversation
   continues rather than starting over.
-- **One set of rules.** `CLAUDE.md` and skills are shared across every account.
+- **One set of rules.** Your `CLAUDE.md` and skills apply to every account.
 
 ### Subagents
 
-- **A live count** beside the composer while subagents are working.
-- **Click it for the list**, and stop any one of them individually.
-- **Every message is badged** with the subagent that wrote it, colour-coded, so
-  parallel agents writing into one transcript stay legible.
+- **A live count** beside the composer while subagents are working. Open it for
+  the list, and stop any one of them.
+- **Every message is badged** with the subagent that wrote it. Colours are
+  assigned in order of appearance and stay put across a reload, so parallel
+  agents writing into one transcript stay legible.
 
 ### On a phone or tablet
 
 - **Enter makes a new line** on a touch keyboard, where it is the only key that
-  can; Cmd/Ctrl+Enter sends. On a desktop keyboard Enter sends as usual.
+  can. Cmd/Ctrl+Enter sends. On a hardware keyboard Enter sends, as usual.
 - **Swipe** left and right to move between editor tabs.
-- The composer stays in view while the on-screen keyboard is up.
+- The chat resizes itself to whatever the on-screen keyboard leaves visible.
+  (Android plus code-server needs a one-line server-side patch as well; see the
+  repository README.)
 
-### Commands
+## Getting started
 
-`Claude Persist: New Session`, `Open Session`, `Add Account (Sign In)`,
-`Import Claude Code Session`, `Rename Session`, `Delete Session`,
-`Refresh Sessions` — all under the "Claude Persist" category in the Command
-Palette.
+1. **Create a session** — the Claude Persist icon in the activity bar, or
+   **Claude Persist: New Session** in the Command Palette. Pick the folder to
+   work in.
+2. **Sign in**, if you have never used Claude Code on this machine. Run
+   **Claude Persist: Add Account (Sign In)**, or open the model pill at the
+   bottom of the chat and choose *Log in to another account…* — despite the
+   name, that is also how you add your first. You get a link and a box to paste
+   the code into. An existing Claude Code login is picked up automatically.
+3. **Type a message.**
 
-## Troubleshooting
+There is also a **Get Started with Claude Persist** walkthrough in VS Code's
+Welcome page.
 
-| Symptom | What to do |
-| --- | --- |
-| "Claude Code was not found on this machine" | Install Claude Code (see Requirements) and reload the window. |
-| "Could not start claude-persist daemon" | Check `~/.claude-persist/daemon.log`. |
-| The panel is empty and messages fail | You are probably not signed in — use *Log in to another account…* in the model pill. |
-| An outdated daemon is running | The message names the pid; `kill` it and reload the window. |
+## Requirements
 
-Sessions and logs live in `~/.claude-persist/`. Removing that directory resets
-everything.
+- **VS Code 1.85 or newer**, or a code-server built on it.
+- **A Claude account**, or `ANTHROPIC_API_KEY`. On Claude Pro or Max there are
+  no API charges.
+- **Claude Code itself** — but only on platforms without a bundled build:
+
+  | Platform | What you need |
+  | --- | --- |
+  | Linux x64 and arm64, macOS Intel and Apple silicon, Windows x64 | Nothing. The Claude Code runtime is bundled. |
+  | Anything else: Alpine, ARM Windows, 32-bit | Install Claude Code from <https://claude.com/download> or with `npm i -g @anthropic-ai/claude-code`, then reload the window. |
+
+- **A folder you trust.** The extension runs Claude against your files, so it
+  stays disabled in Restricted Mode, and in virtual workspaces where there is
+  no real working directory.
 
 ## Settings
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `claudePersist.switchAccountOnLimit` | `true` | On a rate limit, rotate to the next account and resume automatically. |
-| `claudePersist.defaultModel` | *(empty)* | Model new sessions start with. |
-| `claudePersist.extraModels` | `[]` | Extra model ids to offer in the picker. |
-| `claudePersist.connectionIndicator` | `true` | Show daemon connection state in the status bar. |
-| `claudePersist.daemonEntry` | *(empty)* | Override the daemon entry point. Leave empty. |
+| `claudePersist.switchAccountOnLimit` | `true` | On a rate limit, move to the next account and resume. Applies to every session at once, and the new account starts with a cold prompt cache. |
+| `claudePersist.defaultModel` | *(empty)* | Model new and imported sessions start with. |
+| `claudePersist.extraModels` | `[]` | Extra model ids to offer in the picker, beyond the ones the SDK reports. |
+| `claudePersist.connectionIndicator` | `true` | Pulse a border around the chat when it loses contact with the server. |
+| `claudePersist.daemonEntry` | *(empty)* | Path to a daemon build, for developing this extension. Leave empty otherwise. |
 
-Source, architecture notes, and issues:
+## Commands
+
+All under the **Claude Persist** category in the Command Palette:
+New Session, Open Session, Add Account (Sign In), Import Claude Code Session,
+Rename Session, Delete Session, Refresh Sessions.
+
+## Troubleshooting
+
+| Symptom | What to do |
+| --- | --- |
+| The extension does not appear at all | The folder is untrusted. Trust it, or open a different folder. |
+| "Claude Code was not found on this machine" | Install it (see Requirements) and reload the window. |
+| Messages fail and the account menu says "not signed in" | Run **Claude Persist: Add Account (Sign In)**. |
+| "Could not start claude-persist daemon" | Look at `~/.claude-persist/daemon.log`, and open an issue with what it says. |
+| "An outdated daemon is running" | The message names the process id. Stop it and reload the window. |
+
+Sessions, logs and uploads live in `~/.claude-persist/`; removing it discards
+your conversations. Logins live in `~/.claude` and `~/.claude-accounts` and are
+not touched by that.
+
+Chat transcripts are stored unencrypted, so treat anything you paste into a
+conversation as written to disk.
+
+Source, architecture notes and issues:
 <https://github.com/jagajaga/claude-persist>

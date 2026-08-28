@@ -63,18 +63,56 @@
     if (pinned) scrollToBottom();
   });
 
+  /** The height actually visible to the user; the full frame when unknown. */
+  let visibleHeight = () => window.innerHeight;
+  /** Whether a soft keyboard is currently covering part of the frame. */
+  let keyboardIsUp = () => false;
+
   // Mobile keyboards shrink the visual viewport without changing layout height,
   // which leaves the composer hidden behind the keyboard. Constrain the body to
-  // the actually-visible height so the input stays above the keyboard.
+  // the actually-visible height so the input stays above it.
+  //
+  // The subtlety is that this document is an iframe inside the editor, and
+  // visualViewport reports the *window's* visible height, not this frame's.
+  // Setting the body to it therefore left the frame too tall by exactly the
+  // chrome above us — the browser toolbar and the editor's tab bar — so the
+  // bottom strip of the composer, the row with the send button, stayed under
+  // the keyboard. Close enough to look almost right, which is why it survived.
+  //
+  // That difference is measurable: with no keyboard up, the window's visible
+  // height minus this frame's height is everything around us. Measure it while
+  // the keyboard is down, then subtract it while the keyboard is up.
   if (window.visualViewport) {
     const vv = window.visualViewport;
+    /** Chrome outside this iframe, measured at rest. */
+    let chromeOutside = 0;
+    /** Never shrink to nothing if a measurement goes wrong. */
+    const MIN_BODY_HEIGHT = 200;
+    /** A keyboard is at least this tall; below it, treat the frame as at rest. */
+    const KEYBOARD_MIN = 120;
+
+    const keyboardUp = () => window.innerHeight - (vv.height - chromeOutside) > KEYBOARD_MIN;
+
     const fitViewport = () => {
-      document.body.style.height = `${vv.height}px`;
+      // Re-measure whenever nothing is covering us: rotation, a split editor,
+      // a toolbar hiding on scroll all change it, and a stale measurement is
+      // worse than none.
+      if (document.activeElement !== inputEl && vv.height >= window.innerHeight) {
+        chromeOutside = vv.height - window.innerHeight;
+      }
+      const visible = Math.max(MIN_BODY_HEIGHT, vv.height - chromeOutside);
+      document.body.style.height = `${Math.min(window.innerHeight, visible)}px`;
       if (pinned) scrollToBottom();
     };
+
     vv.addEventListener('resize', fitViewport);
     vv.addEventListener('scroll', fitViewport);
     fitViewport();
+
+    // Exposed for autosize: the textarea must not grow into space the keyboard
+    // is already occupying.
+    visibleHeight = () => Math.min(window.innerHeight, Math.max(MIN_BODY_HEIGHT, vv.height - chromeOutside));
+    keyboardIsUp = keyboardUp;
   }
   // When the field gains focus (keyboard opening), force the composer into
   // view. The webview is an iframe inside code-server's page, so we rely on
@@ -1586,7 +1624,10 @@
 
   function autosize() {
     inputEl.style.height = 'auto';
-    inputEl.style.height = `${Math.min(inputEl.scrollHeight, window.innerHeight * 0.38)}px`;
+    // A fraction of what is visible, not of the frame: with a keyboard up the
+    // frame is mostly covered, and 38% of it is more than the whole gap left.
+    const cap = visibleHeight() * (keyboardIsUp() ? 0.3 : 0.38);
+    inputEl.style.height = `${Math.min(inputEl.scrollHeight, cap)}px`;
     // The growing composer shrinks the messages area; keep the conversation
     // pinned to the bottom so the last lines stay visible while typing.
     if (pinned) scrollToBottom();

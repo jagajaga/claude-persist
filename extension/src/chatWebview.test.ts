@@ -41,6 +41,10 @@ interface JsdomWindow {
   navigator: { onLine: boolean };
   /** Stubbed per harness: chat.js asks it whether this is a touch device. */
   matchMedia: (query: string) => DomNode;
+  /** jsdom has no visual viewport; the soft-keyboard fit needs one. */
+  visualViewport?: DomNode;
+  innerHeight: number;
+  EventTarget: new () => DomNode;
   Date: { now: () => number };
   close(): void;
 }
@@ -193,6 +197,14 @@ function createHarness(
     script.textContent = code;
     window.document.body.appendChild(script);
   };
+  // jsdom implements no visual viewport, and the soft-keyboard fit is entirely
+  // about the difference between it and the frame's own height. An EventTarget
+  // with the two numbers on it is all chat.js reads.
+  const viewport = new window.EventTarget() as DomNode;
+  viewport.height = window.innerHeight;
+  viewport.offsetTop = 0;
+  window.visualViewport = viewport;
+
   // chat.js asks '(pointer: coarse)' to tell a phone from a desktop, which
   // decides whether Enter sends or makes a new line. jsdom's matchMedia answers
   // false to everything, so the device has to be stated here.
@@ -1378,4 +1390,68 @@ test('account menu: an account with no credentials says so', () => {
     'a usable account must not be marked',
   );
   assert.equal(h.document.querySelectorAll('.account-unauthed').length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Soft keyboard fit
+//
+// This document is an iframe inside the editor, and visualViewport reports the
+// WINDOW's visible height, not this frame's. Sizing the body to it left the
+// frame too tall by exactly the chrome above — browser toolbar plus tab bar —
+// so the bottom strip of the composer, the row with the send button, stayed
+// under the keyboard.
+// ---------------------------------------------------------------------------
+
+/** A phone: a 2400px window whose frame starts 200px down, and a keyboard. */
+function withViewport(h: Harness, opts: { windowVisible: number; frame: number }): void {
+  const vv = h.window.visualViewport as DomNode;
+  vv.height = opts.windowVisible;
+  Object.defineProperty(h.window, 'innerHeight', { value: opts.frame, configurable: true });
+  vv.dispatchEvent(new h.window.MessageEvent('resize', { data: null }));
+}
+
+const bodyHeight = (h: Harness): number => parseInt(h.document.body.style.height, 10);
+
+test('keyboard: with no keyboard the body fills the frame', () => {
+  const h = createHarness('kbd-rest');
+  withViewport(h, { windowVisible: 2400, frame: 2200 }); // 200px of chrome above
+  assert.equal(bodyHeight(h), 2200, 'never taller than the frame it lives in');
+});
+
+/**
+ * The bug: window visible height 1300 with 200px of chrome above means only
+ * 1100px of this frame is showing. Using 1300 hid the last 200px — the send
+ * button row.
+ */
+test('keyboard: the body excludes the chrome above the frame', () => {
+  const h = createHarness('kbd-up');
+  withViewport(h, { windowVisible: 2400, frame: 2200 }); // measure at rest
+  withViewport(h, { windowVisible: 1300, frame: 2200 }); // keyboard opens
+  assert.equal(bodyHeight(h), 1100, 'was 1300, hiding the composer row');
+});
+
+test('keyboard: closing it restores the full frame', () => {
+  const h = createHarness('kbd-close');
+  withViewport(h, { windowVisible: 2400, frame: 2200 });
+  withViewport(h, { windowVisible: 1300, frame: 2200 });
+  withViewport(h, { windowVisible: 2400, frame: 2200 });
+  assert.equal(bodyHeight(h), 2200);
+});
+
+/** A wrong measurement must not collapse the panel to nothing. */
+test('keyboard: never collapses below a usable height', () => {
+  const h = createHarness('kbd-floor');
+  withViewport(h, { windowVisible: 2400, frame: 2200 });
+  withViewport(h, { windowVisible: 10, frame: 2200 });
+  assert.ok(bodyHeight(h) >= 200, `collapsed to ${bodyHeight(h)}`);
+});
+
+/** Rotation changes both numbers; a stale measurement is worse than none. */
+test('keyboard: re-measures the chrome when the frame changes at rest', () => {
+  const h = createHarness('kbd-rotate');
+  withViewport(h, { windowVisible: 2400, frame: 2200 }); // 200 chrome, portrait
+  withViewport(h, { windowVisible: 1100, frame: 1000 }); // 100 chrome, landscape
+  assert.equal(bodyHeight(h), 1000, 'landscape at rest fills its frame');
+  withViewport(h, { windowVisible: 600, frame: 1000 }); // keyboard, landscape
+  assert.equal(bodyHeight(h), 500, 'and the new chrome is what gets subtracted');
 });

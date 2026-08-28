@@ -42,7 +42,7 @@ browser tab           server
 ┌───────────────┐   ┌─────────────────────────────────┐
 │ webview tabs  │   │  extension host (thin client)   │
 │ (disposable)  │◄─►│             │                   │
-└───────────────┘   │      unix socket, or a named    │
+└───────────────┘   │      Unix socket, or a named    │
                     │      pipe on Windows            │
                     │             ▼                   │
                     │  claude-persist daemon          │
@@ -73,6 +73,37 @@ several Claude accounts with automatic rotation and resume when one hits its
 rate limit, subagent tracking with per-message attribution, and a UI that works
 on a phone.
 
+## Questions people ask
+
+**Where does the daemon run?** On whatever machine the extension host runs on.
+Locally that is your machine; over Remote-SSH, in a devcontainer, in Codespaces
+or in code-server it is the remote, which is also where your files and your
+Claude Code login are. That is the arrangement this is built for.
+
+**Does it clash with the official Claude Code extension?** No. They share
+nothing but your login, and both can be installed. This one does not replace
+Claude Code; it drives it.
+
+**Does my existing Claude Code setup apply?** Yes. Sessions run through the
+Claude Agent SDK with your own configuration directory, so your `CLAUDE.md`,
+skills, MCP servers, hooks and permission settings are the ones in effect. No
+prompt or tool policy is injected on top, beyond the permission mode you pick in
+the panel.
+
+**Which models can I choose?** Whatever the SDK reports for your account, which
+is queried rather than hardcoded. `claudePersist.extraModels` adds ids the list
+does not include.
+
+**Do sessions survive a server reboot?** The conversation does: it is on disk in
+`~/.claude-persist/sessions/`. A turn that was mid-flight is re-sent when the
+daemon comes back. The daemon itself starts again with the first window that
+asks for it, or at boot if you install the systemd unit below.
+
+**How do I stop it?** Uninstalling the extension leaves the daemon running until
+the machine restarts, because it is deliberately not a child of VS Code. Stop it
+with `pkill -f 'claude-persist.*daemon/dist/main.js'`, and delete
+`~/.claude-persist/` to remove the conversations.
+
 ## Build from source
 
 ```bash
@@ -90,7 +121,7 @@ rather than the bundled daemon, point `claudePersist.daemonEntry` at
 
 | Path | What it is |
 |---|---|
-| `daemon/` | Session daemon: Agent SDK sessions, the ndjson socket protocol, event log, permission bridge, accounts and rotation, transcript importer |
+| `daemon/` | Session daemon: Agent SDK sessions, the newline-delimited JSON socket protocol, event log, permission bridge, accounts and rotation, transcript importer |
 | `extension/` | VS Code extension: daemon client, chat webview (`media/`), sidebar tree, panel serializer |
 | `shared/` | Wire protocol types and the version constant, shared by both |
 | `scripts/package.sh` | Builds a `.vsix`, optionally with a platform runtime |

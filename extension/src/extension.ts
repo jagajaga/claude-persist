@@ -309,7 +309,9 @@ export function activate(context: vscode.ExtensionContext): void {
         const candidates = await c.listClaudeSessions();
         if (candidates.length === 0) {
           void vscode.window.showInformationMessage(
-            'No Claude Code sessions found under ~/.claude/projects.',
+            // The importer scans every account's transcripts, not just ~/.claude, so
+            // naming one directory sent people to look in the wrong place.
+            'No Claude Code conversations found to import.',
           );
           return;
         }

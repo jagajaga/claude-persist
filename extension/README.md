@@ -1,9 +1,9 @@
 # Claude Persist
 
 Persistent Claude Code sessions that survive window reloads. The conversation
-runs in a background process on the server, not in your window, so refreshing
-the page, closing the tab, losing the connection or switching to your phone
-does not stop it.
+runs in a background process on the server — a daemon — rather than inside your
+editor window, so refreshing the page, closing the tab, losing the connection or
+switching to your phone does not stop it.
 
 [Install from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=jaga.claude-persist-vscode)
 or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
@@ -20,9 +20,9 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
 - **Any session, from any window.** One daemon per user, not per window.
 - **Survives its own upgrades.** A turn in flight when the daemon restarts is
   queued and resumed, not lost.
-- **Recovers from a stuck turn.** Twenty minutes of silence from Claude is
-  treated as a stall: the turn is parked and resumed automatically, up to five
-  attempts.
+- **Recovers from a stuck turn.** Twenty minutes of silence from Claude counts
+  as a stall: the message is held and re-sent automatically, up to five
+  attempts, instead of leaving you staring at a spinner.
 - **Import your existing Claude Code conversations** and carry on with their
   full context.
 - **Rename and delete** sessions. Long histories load a window at a time.
@@ -33,17 +33,18 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
   and Write, todo checklists, and clickable file paths that open in the editor.
 - **Permissions** — Allow/Deny cards that survive a reload, plus a
   bypass-permissions toggle you can flip mid-turn.
-- **Questions** — AskUserQuestion renders as option cards, single or
-  multi-select, with a free-text alternative.
+- **Questions** — when Claude asks you to choose, you get option cards, single
+  or multi-select, with a free-text alternative.
 - **Pinned prompts.** An unanswered question or permission request stays beside
   the composer while the conversation keeps scrolling, so you cannot miss it.
 - **Prompt bar.** A sticky header names the exchange you are reading and
   follows you as you scroll. Tap it for a list of every message in the loaded
   history, and jump to one.
 - **Context ring** — how full the context window is, against the model's real
-  size. Click it to compact the conversation.
-- **Model and reasoning-effort picker**, per session, from the pill at the
-  bottom of the chat.
+  size. Click it to have Claude summarise the conversation so far and free the
+  space back up.
+- **Model and reasoning-effort picker**, per session, from the model pill —
+  the button showing the current model at the bottom of the chat.
 - **Interrupt** a running turn from the working row, which also shows how long
   the turn has been going. Finished turns show their duration and token count.
 - **Git branch and worktree** shown beside the composer.
@@ -68,8 +69,8 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
   terminal, and it works over code-server, where a callback to `localhost`
   cannot.
 - **Rate limits in the status bar**, with the reset time in the tooltip.
-- **Automatic rotation.** Hit a limit and the turn is parked, the next account
-  with room is activated, and the conversation resumes on its own. If every
+- **Automatic rotation.** Hit a limit and your message is held, the next
+  account with room is activated, and the conversation resumes on its own. If every
   account is spent it waits for the soonest reset and resumes then. Accounts
   sharing one login count as one, since they share the quota.
 - **Transcripts follow you** between accounts, so switching mid-conversation

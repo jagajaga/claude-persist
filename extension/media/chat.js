@@ -1200,8 +1200,12 @@
       if (account.signedIn === false) item.classList.add('account-unauthed');
       modelMenu.appendChild(item);
     }
+    // "another" is wrong when you have none, which is exactly when someone is
+    // hunting for this item: a new user reads it, concludes it is not what they
+    // want, and goes looking for a sign-in that does not exist.
+    const signedInAlready = accountInfos.some((a) => a.signedIn !== false);
     modelMenu.appendChild(
-      menuChoice('Log in to another account…', false, () => {
+      menuChoice(signedInAlready ? 'Log in to another account…' : 'Sign in to Claude…', false, () => {
         vscode.postMessage({ type: 'addAccount' });
         modelMenu.hidden = true;
       }),

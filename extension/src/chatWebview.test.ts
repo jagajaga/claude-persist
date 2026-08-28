@@ -1455,3 +1455,31 @@ test('keyboard: re-measures the chrome when the frame changes at rest', () => {
   withViewport(h, { windowVisible: 600, frame: 1000 }); // keyboard, landscape
   assert.equal(bodyHeight(h), 500, 'and the new chrome is what gets subtracted');
 });
+
+/**
+ * "Log in to another account…" is wrong when you have none, which is exactly
+ * when someone is hunting for this item: a new user reads it, concludes it is
+ * not what they want, and goes looking for a sign-in that does not exist.
+ */
+test('account menu: the sign-in item does not say "another" when there are none', () => {
+  const h = createHarness('signin-wording-none');
+  h.send({
+    type: 'accounts',
+    accounts: [{ name: 'default', configDir: null, active: true, signedIn: false }],
+  });
+  h.document.getElementById('model-pill').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  const labels = [...h.document.querySelectorAll('.menu-item')].map((i: DomNode) => i.textContent);
+  assert.ok(labels.some((l: string) => /Sign in to Claude/.test(l)), labels.join(' | '));
+  assert.ok(!labels.some((l: string) => /another account/.test(l)));
+});
+
+test('account menu: it does say "another" once one account works', () => {
+  const h = createHarness('signin-wording-some');
+  h.send({
+    type: 'accounts',
+    accounts: [{ name: 'work', configDir: '/acc/work', active: true, signedIn: true }],
+  });
+  h.document.getElementById('model-pill').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  const labels = [...h.document.querySelectorAll('.menu-item')].map((i: DomNode) => i.textContent);
+  assert.ok(labels.some((l: string) => /another account/.test(l)), labels.join(' | '));
+});

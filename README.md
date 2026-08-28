@@ -109,33 +109,51 @@ that are still waiting, while nobody was connected.
 
 ## Install
 
-Grab `claude-persist-<version>.vsix` from
-[Releases](https://github.com/jagajaga/claude-persist/releases) and:
+Search **Claude Persist** in the Extensions view and click Install. It is
+published on both registries — [the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=jaga.claude-persist-vscode)
+for desktop VS Code, [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
+for code-server and VSCodium — and your editor downloads the build for its own
+platform.
+
+Then reload the window and click the Claude Persist icon in the activity bar.
+The daemon starts on its own, detached from VS Code, and replaces itself when
+the extension updates.
+
+On Linux, macOS and Windows the Claude Code runtime is bundled and there is
+nothing else to install. Anywhere else — Alpine, ARM Windows, 32-bit — you get
+a 1 MB build with no runtime, which drives the Claude Code you already have:
+install it from <https://claude.com/download> or with
+`npm i -g @anthropic-ai/claude-code`.
+
+### Installing by hand
+
+Only if you cannot reach a registry. Take the file matching your machine from
+[Releases](https://github.com/jagajaga/claude-persist/releases) — the release
+page lists which is which — and:
 
 ```bash
-code-server --install-extension claude-persist-<version>.vsix
-# or in desktop VS Code: Extensions → … → Install from VSIX
+code-server --install-extension claude-persist-<version>-linux-x64.vsix
+# desktop VS Code: Extensions → … → Install from VSIX
 ```
 
-Reload the window, click the Claude Persist icon in the activity bar, and
-create a session. The daemon starts automatically (detached from VS Code) and
-self-replaces on extension upgrades.
+The unsuffixed `claude-persist-<version>.vsix` is the runtime-less build; the
+suffixed ones bundle it and are around 100 MB.
 
-Search **Claude Persist** in the Extensions view — the extension is on both
-registries, [the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=jaga.claude-persist-vscode)
-(desktop VS Code) and [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
-(code-server, VSCodium), and your editor picks the build for your machine.
+## Build from source
 
-Every release publishes one `.vsix` per platform, each built on that platform:
-**linux-x64**, **linux-arm64**, **darwin-x64**, **darwin-arm64** and
-**win32-x64** bundle the Claude Agent SDK runtime (~100 MB, nothing to install),
-and a **universal** build (~1 MB) carries no runtime and drives whatever Claude
-Code is already installed. Marketplaces hand each machine the build that targets
-it and everyone else the universal one, so Alpine, ARM Windows and anything else
-still works — with Claude Code installed separately.
+```bash
+npm install
+npm run build          # tsc for shared + daemon + extension
+./scripts/package.sh   # → claude-persist-<version>.vsix (universal, no runtime)
+```
 
-To build one yourself, `CP_TARGET` selects the target triple and the matching
-runtime; leaving it empty produces the universal build:
+Requirements: Node 18+, a Claude Code login on the machine that runs the
+daemon.
+
+### Packaging a .vsix
+
+`CP_TARGET` selects the target triple and the matching Claude Code runtime;
+leaving it empty produces the runtime-less universal build:
 
 ```sh
 CP_TARGET=darwin-arm64 ./scripts/package.sh   # bundles the macOS arm64 runtime
@@ -143,19 +161,9 @@ CP_SDK_PLATFORMS=none  ./scripts/package.sh   # universal, no runtime
 ```
 
 The runtime ships as one npm package per platform and npm installs only the
-host's, so a bundled build has to run on the platform it targets — which is what
-the release matrix does.
-
-## Build from source
-
-```bash
-npm install
-npm run build          # tsc for shared + daemon + extension
-./scripts/package.sh   # → claude-persist-<version>.vsix
-```
-
-Requirements: Node 18+, a Claude Code login on the machine that runs the
-daemon.
+host's, so a bundled build has to be packaged on the platform it targets. That
+is what the release matrix does: one runner per target, plus the universal
+build, published to both registries on every push to main.
 
 ### Repo layout
 

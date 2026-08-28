@@ -23,6 +23,8 @@ about how it works and how to hack on it.
 This is a community project. It is not affiliated with, or endorsed by,
 Anthropic.
 
+![Claude Persist: sessions grouped by folder in the sidebar, a running turn with tool cards, and the composer showing model, branch and permission mode](extension/media/screenshot.png)
+
 ## Why
 
 A VS Code extension's processes die with the extension host. In code-server

@@ -175,3 +175,30 @@ test('the README test counts are not stale', () => {
     );
   }
 });
+
+/**
+ * The marketplace does not resolve relative image paths — a `![](media/x.png)`
+ * renders as a broken image there while looking perfectly fine in every local
+ * preview and on GitHub, so nothing but a check catches it.
+ */
+test('the listing screenshot ships, and is referenced absolutely', () => {
+  const media = path.join(__dirname, '..', 'media');
+  const listing = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
+
+  const images = [...listing.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)].map((m) => m[1]);
+  assert.ok(images.length > 0, 'the listing has no screenshot at all');
+  for (const src of images) {
+    assert.match(src, /^https:\/\//, `${src} is relative; the marketplace will not render it`);
+  }
+
+  // The absolute URL points back into this repo, so the file has to be here
+  // and has to ship, or the listing shows a broken image after release.
+  for (const src of images) {
+    const inRepo = /raw\.githubusercontent\.com\/[^/]+\/[^/]+\/[^/]+\/extension\/(.+)$/.exec(src);
+    if (!inRepo) continue;
+    const local = path.join(__dirname, '..', inRepo[1]);
+    assert.ok(fs.existsSync(local), `${src} points at ${inRepo[1]}, which is not in the extension`);
+    assert.ok(fs.statSync(local).size < 2_000_000, `${inRepo[1]} is too heavy to ship`);
+  }
+  assert.ok(fs.existsSync(path.join(media, 'screenshot.png')));
+});

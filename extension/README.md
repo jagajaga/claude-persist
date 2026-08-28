@@ -9,6 +9,8 @@ switching to your phone does not stop it.
 or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
 (code-server, VSCodium). Not affiliated with Anthropic.
 
+![Claude Persist: sessions in the sidebar, a chat with tool cards, and the composer](https://raw.githubusercontent.com/jagajaga/claude-persist/main/extension/media/screenshot.png)
+
 ## Features
 
 ### Sessions

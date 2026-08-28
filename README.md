@@ -10,6 +10,14 @@
   the session keeps running on the server and the chat picks up where it left off.
 </p>
 
+<p align="center">
+  <a href="https://open-vsx.org/extension/jaga/claude-persist-vscode"><img alt="Open VSX downloads" src="https://img.shields.io/open-vsx/dt/jaga/claude-persist-vscode?style=flat-square&label=open%20vsx%20downloads&color=blue"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=jaga.claude-persist-vscode"><img alt="VS Code Marketplace installs" src="https://vsmarketplacebadges.dev/installs-short/jaga.claude-persist-vscode.svg?style=flat-square&color=blue"></a>
+  <a href="https://github.com/jagajaga/claude-persist/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/jagajaga/claude-persist?style=flat-square&color=blue"></a>
+  <a href="https://github.com/jagajaga/claude-persist/actions/workflows/auto-release.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/jagajaga/claude-persist/auto-release.yml?branch=main&style=flat-square"></a>
+  <img alt="MIT licence" src="https://img.shields.io/github/license/jagajaga/claude-persist?style=flat-square">
+</p>
+
 ---
 
 **Install:** search **Claude Persist** in the Extensions view, or from

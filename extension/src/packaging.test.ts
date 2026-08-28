@@ -67,6 +67,10 @@ test('no compiled extension-host file requires a bare package at runtime', () =>
 // Manifest guarantees a new user depends on
 // ---------------------------------------------------------------------------
 
+const manifestFull = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'),
+) as { publisher: string; name: string };
+
 const manifest = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'),
 ) as {
@@ -201,4 +205,29 @@ test('the listing screenshot ships, and is referenced absolutely', () => {
     assert.ok(fs.statSync(local).size < 2_000_000, `${inRepo[1]} is too heavy to ship`);
   }
   assert.ok(fs.existsSync(path.join(media, 'screenshot.png')));
+});
+
+/**
+ * Badges are the one part of a README that silently rots: the publisher or
+ * extension name changes, every badge keeps returning a valid image, and it
+ * reports someone else's numbers — or none — forever. shields.io has already
+ * retired its Visual Studio Marketplace badges once.
+ */
+test('README badges point at this extension', () => {
+  const readme = fs.readFileSync(path.join(__dirname, '..', '..', 'README.md'), 'utf8');
+  const badges = [...readme.matchAll(/src="(https:\/\/[^"]*(?:shields\.io|vsmarketplacebadges|badgen)[^"]*)"/g)]
+    .map((m) => m[1]);
+  assert.ok(badges.length >= 3, `only ${badges.length} badges found; expected the row`);
+
+  const id = `${manifestFull.publisher}.${manifestFull.name}`;
+  const openVsxId = `${manifestFull.publisher}/${manifestFull.name}`;
+  for (const url of badges) {
+    if (/marketplace|vs-marketplace/.test(url)) {
+      assert.ok(url.includes(id), `${url} does not name ${id}`);
+    }
+    if (/open-vsx/.test(url)) {
+      assert.ok(url.includes(openVsxId), `${url} does not name ${openVsxId}`);
+    }
+    assert.ok(!url.includes('visual-studio-marketplace/'), `${url} uses the retired shields badge`);
+  }
 });

@@ -28,6 +28,7 @@
   const modelPillLabel = document.getElementById('model-pill-label');
   const promptBar = document.getElementById('prompt-bar');
   const composerEl = document.getElementById('composer');
+  const composerRow = document.getElementById('composer-row');
   const branchChip = document.getElementById('branch-chip');
 
   const RING_CIRCUMFERENCE = 47.1;
@@ -102,12 +103,23 @@
      * Guessing high is the safe direction: too large only wastes some space
      * above the keyboard, while too small hides the send button again.
      */
-    // Measured against a real device: with 0.45 the composer sat a visible gap
-    // above the keyboard. The keyboard took ~36% of the frame there, so this
-    // keeps a small margin without wasting a strip of screen.
-    const ASSUMED_KEYBOARD = 0.38;
-    let sawRealShrink = false;
+    /**
+     * How tall the keyboard is, measured rather than assumed.
+     *
+     * Firefox on Android never shrinks a nested frame's visual viewport, so
+     * there is no API here that will say. The browser still knows: it keeps a
+     * focused field above the keyboard. So give the document room to scroll,
+     * let the browser put the field where it wants it, and read that back --
+     * the bottom edge it chose IS the bottom of the visible area.
+     *
+     * Measured once per frame size and remembered, so the probe runs on the
+     * first focus after opening or rotating, and never again.
+     */
+    let measured = 0;
+    let measuredFor = 0;
+    let probing = false;
     let assumed = 0;
+    let sawRealShrink = false;
 
     const coarsePointer = (() => {
       try {
@@ -121,40 +133,78 @@
       assumed > 0 || window.innerHeight - (vv.height - chromeOutside) > KEYBOARD_MIN;
 
     const fitViewport = () => {
+      if (probing) return; // the probe owns the body height while it runs
       // Re-measure whenever nothing is covering us: rotation, a split editor,
       // a toolbar hiding on scroll all change it, and a stale measurement is
       // worse than none.
       if (document.activeElement !== inputEl && vv.height >= window.innerHeight) {
         chromeOutside = vv.height - window.innerHeight;
       }
-      const measured = vv.height - chromeOutside;
-      if (window.innerHeight - measured > KEYBOARD_MIN) sawRealShrink = true;
-      const visible = Math.max(MIN_BODY_HEIGHT, Math.min(window.innerHeight, measured) - assumed);
-      document.body.style.height = `${visible}px`;
+      const visible = vv.height - chromeOutside;
+      if (window.innerHeight - visible > KEYBOARD_MIN) sawRealShrink = true;
+      document.body.style.height =
+        `${Math.max(MIN_BODY_HEIGHT, Math.min(window.innerHeight, visible) - assumed)}px`;
       if (pinned) scrollToBottom();
     };
 
-    /** Apply or drop the assumed keyboard, when nothing else reports one. */
-    const assumeKeyboard = (on) => {
-      const next = on && coarsePointer && !sawRealShrink
-        ? Math.round(window.innerHeight * ASSUMED_KEYBOARD)
-        : 0;
-      if (next === assumed) return;
-      assumed = next;
-      fitViewport();
+    /**
+     * Run the probe: make the page scrollable, let the browser scroll the
+     * focused field into view, and read where it landed.
+     */
+    const probe = () => {
+      const frame = window.innerHeight;
+      probing = true;
+      // Twice the frame is simply "definitely enough to scroll"; the answer
+      // does not depend on it.
+      document.body.style.height = `${frame * 2}px`;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const bottom = inputEl.getBoundingClientRect().bottom;
+          const inset = Math.round(frame - bottom);
+          probing = false;
+          // A field the browser left below the fold, or one it never moved,
+          // measures nothing. Reserve nothing rather than invent a number.
+          if (inset > 0 && inset < frame) {
+            measured = inset;
+            measuredFor = frame;
+          }
+          assumed = measured;
+          fitViewport();
+        });
+      });
     };
-    // Focus is only a proxy for "the keyboard is up", and on Android it is a
-    // poor one in the closing direction: dismissing the keyboard with the back
-    // button does not blur the field, so the space stayed reserved and the
-    // panel ended a third of the way up the screen with nothing under it.
-    //
-    // So: blur still releases it, but so does touching the conversation, which
-    // is what you do once the keyboard is gone. Typing puts it back, and
-    // typing is proof the keyboard is really there.
-    inputEl.addEventListener('focus', () => assumeKeyboard(true));
-    inputEl.addEventListener('blur', () => assumeKeyboard(false));
-    inputEl.addEventListener('keydown', () => assumeKeyboard(true));
-    messagesEl.addEventListener('touchstart', () => assumeKeyboard(false), { passive: true });
+
+    /**
+     * Focus is only a proxy for "the keyboard is up", and on Android it is a
+     * poor one in the closing direction: dismissing the keyboard with the back
+     * button does not blur the field, so the space stayed reserved and the
+     * panel ended a third of the way up the screen with nothing under it.
+     *
+     * So: blur releases it, and so does touching the conversation, which is
+     * what you do once the keyboard is gone. Typing puts it back, and typing
+     * is proof the keyboard is really there.
+     */
+    const useKeyboard = (on) => {
+      if (!on) {
+        if (assumed === 0) return;
+        assumed = 0;
+        fitViewport();
+        return;
+      }
+      if (!coarsePointer || sawRealShrink) return; // the viewport reports it itself
+      if (measured && measuredFor === window.innerHeight) {
+        if (assumed === measured) return;
+        assumed = measured;
+        fitViewport();
+        return;
+      }
+      if (!probing) probe();
+    };
+
+    inputEl.addEventListener('focus', () => useKeyboard(true));
+    inputEl.addEventListener('keydown', () => useKeyboard(true));
+    inputEl.addEventListener('blur', () => useKeyboard(false));
+    messagesEl.addEventListener('touchstart', () => useKeyboard(false), { passive: true });
 
     vv.addEventListener('resize', fitViewport);
     vv.addEventListener('scroll', fitViewport);
@@ -1678,30 +1728,38 @@
     autosize();
   }
 
-  /** One line. The textarea is never squeezed below what you are typing into. */
-  const MIN_INPUT_HEIGHT = 24;
+  /** One line of whatever the theme's font is, so it is never squeezed to nothing. */
+  function oneLine() {
+    const style = getComputedStyle(inputEl);
+    const line = parseFloat(style.lineHeight);
+    if (Number.isFinite(line) && line > 0) return line;
+    // 'normal' line-height reports nothing useful; derive it from the font
+    // rather than from scrollHeight, which is the height of everything typed
+    // and would refuse to shrink at all.
+    const font = parseFloat(style.fontSize);
+    return Number.isFinite(font) && font > 0 ? Math.round(font * 1.5) : 24;
+  }
 
   function autosize() {
     inputEl.style.height = 'auto';
-    // A fraction of what is visible, not of the frame: with a keyboard up the
-    // frame is mostly covered, and 38% of it is more than the whole gap left.
-    const cap = visibleHeight() * (keyboardIsUp() ? 0.3 : 0.38);
-    let height = Math.min(inputEl.scrollHeight, cap);
+    let height = inputEl.scrollHeight;
     inputEl.style.height = `${height}px`;
 
-    // Hard stop, measured rather than assumed.
+    // Then take back whatever does not fit. Both limits are measured from the
+    // page, so there is no fraction to guess wrong on a device I cannot see.
     //
-    // An empty composer sat correctly above the keyboard and typing pushed the
-    // row beneath the textarea -- send, model, permission mode -- off the
-    // bottom of the screen. The browser reveals the composer once, when it
-    // takes focus, and never again as it grows, so every added line moved that
-    // row further past the fold with nothing to put it back.
-    //
-    // Whatever the cap allows, the composer has to end inside the visible
-    // area. Ask where it actually ends and give back the difference.
+    //  - The composer must end inside the visible area. The browser reveals it
+    //    once, when it takes focus, and never again as it grows, so without
+    //    this every added line pushed the row beneath the textarea -- send,
+    //    model, permission mode -- further past the bottom of the screen.
+    //  - The conversation keeps at least as much room as the composer's own
+    //    controls occupy, so a long message cannot swallow the thread whole.
     const overflow = composerEl.getBoundingClientRect().bottom - visibleHeight();
-    if (overflow > 0) {
-      height = Math.max(MIN_INPUT_HEIGHT, height - overflow);
+    const starved =
+      composerRow.getBoundingClientRect().height - messagesEl.getBoundingClientRect().height;
+    const give = Math.max(overflow, starved);
+    if (give > 0) {
+      height = Math.max(oneLine(), height - give);
       inputEl.style.height = `${height}px`;
     }
 

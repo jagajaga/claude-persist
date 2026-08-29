@@ -1483,3 +1483,48 @@ test('account menu: it does say "another" once one account works', () => {
   const labels = [...h.document.querySelectorAll('.menu-item')].map((i: DomNode) => i.textContent);
   assert.ok(labels.some((l: string) => /another account/.test(l)), labels.join(' | '));
 });
+
+/**
+ * Firefox on Android never shrinks a nested frame's visual viewport when the
+ * keyboard opens. Every measurement above therefore reports "no keyboard", the
+ * body stays full height, and the composer sits underneath it -- which is
+ * exactly what the fix for Chrome did not solve.
+ */
+function focusComposer(h: Harness, on: boolean): void {
+  const input = h.document.getElementById('input');
+  input.dispatchEvent(new h.window.MessageEvent(on ? 'focus' : 'blur', { data: null }));
+}
+
+test('keyboard: a viewport that never shrinks still makes room, on touch', async () => {
+  const h = createHarness('kbd-assume', { coarsePointer: true });
+  withViewport(h, { windowVisible: 2400, frame: 2200 });
+  assert.equal(bodyHeight(h), 2200);
+
+  focusComposer(h, true);
+  assert.ok(bodyHeight(h) < 2200 * 0.6, `still full height: ${bodyHeight(h)}`);
+  assert.ok(bodyHeight(h) > 200, 'and not collapsed');
+
+  focusComposer(h, false);
+  assert.equal(bodyHeight(h), 2200, 'the room is given back when focus leaves');
+});
+
+/** A desktop keyboard takes no space; assuming one there would be a bug. */
+test('keyboard: nothing is assumed on a fine pointer', () => {
+  const h = createHarness('kbd-no-assume', { coarsePointer: false });
+  withViewport(h, { windowVisible: 2400, frame: 2200 });
+  focusComposer(h, true);
+  assert.equal(bodyHeight(h), 2200);
+});
+
+/**
+ * When the browser does report a real shrink, that measurement is the truth
+ * and the guess must not be added on top of it.
+ */
+test('keyboard: a measured shrink wins over the assumption', () => {
+  const h = createHarness('kbd-measured-wins', { coarsePointer: true });
+  withViewport(h, { windowVisible: 2400, frame: 2200 });
+  withViewport(h, { windowVisible: 1300, frame: 2200 }); // a real keyboard, measured
+  assert.equal(bodyHeight(h), 1100);
+  focusComposer(h, true);
+  assert.equal(bodyHeight(h), 1100, 'the guess must not stack on the measurement');
+});

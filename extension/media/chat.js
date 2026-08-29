@@ -91,7 +91,30 @@
     /** A keyboard is at least this tall; below it, treat the frame as at rest. */
     const KEYBOARD_MIN = 120;
 
-    const keyboardUp = () => window.innerHeight - (vv.height - chromeOutside) > KEYBOARD_MIN;
+    /**
+     * Firefox on Android never shrinks a nested frame's visual viewport when
+     * the keyboard opens, so on that browser everything above measures no
+     * change and the composer stays underneath it. There is no API left to
+     * ask, so when the viewport has never once reported a shrink and the
+     * composer has focus on a touch keyboard, assume one.
+     *
+     * Guessing high is the safe direction: too large only wastes some space
+     * above the keyboard, while too small hides the send button again.
+     */
+    const ASSUMED_KEYBOARD = 0.45;
+    let sawRealShrink = false;
+    let assumed = 0;
+
+    const coarsePointer = (() => {
+      try {
+        return window.matchMedia('(pointer: coarse)').matches;
+      } catch {
+        return false;
+      }
+    })();
+
+    const keyboardUp = () =>
+      assumed > 0 || window.innerHeight - (vv.height - chromeOutside) > KEYBOARD_MIN;
 
     const fitViewport = () => {
       // Re-measure whenever nothing is covering us: rotation, a split editor,
@@ -100,10 +123,24 @@
       if (document.activeElement !== inputEl && vv.height >= window.innerHeight) {
         chromeOutside = vv.height - window.innerHeight;
       }
-      const visible = Math.max(MIN_BODY_HEIGHT, vv.height - chromeOutside);
-      document.body.style.height = `${Math.min(window.innerHeight, visible)}px`;
+      const measured = vv.height - chromeOutside;
+      if (window.innerHeight - measured > KEYBOARD_MIN) sawRealShrink = true;
+      const visible = Math.max(MIN_BODY_HEIGHT, Math.min(window.innerHeight, measured) - assumed);
+      document.body.style.height = `${visible}px`;
       if (pinned) scrollToBottom();
     };
+
+    /** Apply or drop the assumed keyboard, when nothing else reports one. */
+    const assumeKeyboard = (on) => {
+      const next = on && coarsePointer && !sawRealShrink
+        ? Math.round(window.innerHeight * ASSUMED_KEYBOARD)
+        : 0;
+      if (next === assumed) return;
+      assumed = next;
+      fitViewport();
+    };
+    inputEl.addEventListener('focus', () => assumeKeyboard(true));
+    inputEl.addEventListener('blur', () => assumeKeyboard(false));
 
     vv.addEventListener('resize', fitViewport);
     vv.addEventListener('scroll', fitViewport);
@@ -111,7 +148,8 @@
 
     // Exposed for autosize: the textarea must not grow into space the keyboard
     // is already occupying.
-    visibleHeight = () => Math.min(window.innerHeight, Math.max(MIN_BODY_HEIGHT, vv.height - chromeOutside));
+    visibleHeight = () =>
+      Math.max(MIN_BODY_HEIGHT, Math.min(window.innerHeight, vv.height - chromeOutside) - assumed);
     keyboardIsUp = keyboardUp;
   }
   // When the field gains focus (keyboard opening), force the composer into

@@ -102,7 +102,10 @@
      * Guessing high is the safe direction: too large only wastes some space
      * above the keyboard, while too small hides the send button again.
      */
-    const ASSUMED_KEYBOARD = 0.45;
+    // Measured against a real device: with 0.45 the composer sat a visible gap
+    // above the keyboard. The keyboard took ~36% of the frame there, so this
+    // keeps a small margin without wasting a strip of screen.
+    const ASSUMED_KEYBOARD = 0.38;
     let sawRealShrink = false;
     let assumed = 0;
 
@@ -140,8 +143,18 @@
       assumed = next;
       fitViewport();
     };
+    // Focus is only a proxy for "the keyboard is up", and on Android it is a
+    // poor one in the closing direction: dismissing the keyboard with the back
+    // button does not blur the field, so the space stayed reserved and the
+    // panel ended a third of the way up the screen with nothing under it.
+    //
+    // So: blur still releases it, but so does touching the conversation, which
+    // is what you do once the keyboard is gone. Typing puts it back, and
+    // typing is proof the keyboard is really there.
     inputEl.addEventListener('focus', () => assumeKeyboard(true));
     inputEl.addEventListener('blur', () => assumeKeyboard(false));
+    inputEl.addEventListener('keydown', () => assumeKeyboard(true));
+    messagesEl.addEventListener('touchstart', () => assumeKeyboard(false), { passive: true });
 
     vv.addEventListener('resize', fitViewport);
     vv.addEventListener('scroll', fitViewport);

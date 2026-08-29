@@ -1502,8 +1502,11 @@ test('keyboard: a viewport that never shrinks still makes room, on touch', async
   assert.equal(bodyHeight(h), 2200);
 
   focusComposer(h, true);
-  assert.ok(bodyHeight(h) < 2200 * 0.6, `still full height: ${bodyHeight(h)}`);
-  assert.ok(bodyHeight(h) > 200, 'and not collapsed');
+  // A plausible keyboard, not an exact fraction: the constant is tuned against
+  // real devices and must be free to move without breaking this.
+  const reserved = 2200 - bodyHeight(h);
+  assert.ok(reserved > 2200 * 0.25, `reserved only ${reserved}px; the composer stays buried`);
+  assert.ok(reserved < 2200 * 0.55, `reserved ${reserved}px; that is more than any keyboard`);
 
   focusComposer(h, false);
   assert.equal(bodyHeight(h), 2200, 'the room is given back when focus leaves');
@@ -1572,4 +1575,36 @@ test('composer: growth is still capped when geometry says everything fits', () =
   withViewport(h, { windowVisible: 1000, frame: 1000 });
   const height = grow(h, 100000, 100); // absurd content, composer reports tiny
   assert.ok(height <= 1000 * 0.38, `uncapped at ${height}px`);
+});
+
+/**
+ * Dismissing an Android keyboard with the back button does not blur the field.
+ * The reserved space stayed reserved, so the panel ended a third of the way up
+ * the screen with a dead white area beneath it and no way to get it back.
+ */
+test('keyboard: touching the conversation gives the space back', () => {
+  const h = createHarness('kbd-release-on-touch', { coarsePointer: true });
+  withViewport(h, { windowVisible: 2400, frame: 2200 });
+  focusComposer(h, true);
+  const reserved = bodyHeight(h);
+  assert.ok(reserved < 2200, 'space was never reserved');
+
+  h.document.getElementById('messages').dispatchEvent(new h.window.MessageEvent('touchstart', { data: null }));
+  assert.equal(bodyHeight(h), 2200, 'the dead area under the panel is still there');
+});
+
+/** Typing is proof the keyboard is really up, so it must come back. */
+test('keyboard: typing reserves the space again', () => {
+  const h = createHarness('kbd-retake', { coarsePointer: true });
+  withViewport(h, { windowVisible: 2400, frame: 2200 });
+  focusComposer(h, true);
+  const reserved = bodyHeight(h);
+
+  h.document.getElementById('messages').dispatchEvent(new h.window.MessageEvent('touchstart', { data: null }));
+  assert.equal(bodyHeight(h), 2200);
+
+  h.document.getElementById('input').dispatchEvent(
+    new h.window.KeyboardEvent('keydown', { key: 'a', bubbles: true }),
+  );
+  assert.equal(bodyHeight(h), reserved, 'typing did not bring the room back');
 });

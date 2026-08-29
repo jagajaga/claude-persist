@@ -27,6 +27,7 @@
   const modelPill = document.getElementById('model-pill');
   const modelPillLabel = document.getElementById('model-pill-label');
   const promptBar = document.getElementById('prompt-bar');
+  const composerEl = document.getElementById('composer');
   const branchChip = document.getElementById('branch-chip');
 
   const RING_CIRCUMFERENCE = 47.1;
@@ -1664,12 +1665,33 @@
     autosize();
   }
 
+  /** One line. The textarea is never squeezed below what you are typing into. */
+  const MIN_INPUT_HEIGHT = 24;
+
   function autosize() {
     inputEl.style.height = 'auto';
     // A fraction of what is visible, not of the frame: with a keyboard up the
     // frame is mostly covered, and 38% of it is more than the whole gap left.
     const cap = visibleHeight() * (keyboardIsUp() ? 0.3 : 0.38);
-    inputEl.style.height = `${Math.min(inputEl.scrollHeight, cap)}px`;
+    let height = Math.min(inputEl.scrollHeight, cap);
+    inputEl.style.height = `${height}px`;
+
+    // Hard stop, measured rather than assumed.
+    //
+    // An empty composer sat correctly above the keyboard and typing pushed the
+    // row beneath the textarea -- send, model, permission mode -- off the
+    // bottom of the screen. The browser reveals the composer once, when it
+    // takes focus, and never again as it grows, so every added line moved that
+    // row further past the fold with nothing to put it back.
+    //
+    // Whatever the cap allows, the composer has to end inside the visible
+    // area. Ask where it actually ends and give back the difference.
+    const overflow = composerEl.getBoundingClientRect().bottom - visibleHeight();
+    if (overflow > 0) {
+      height = Math.max(MIN_INPUT_HEIGHT, height - overflow);
+      inputEl.style.height = `${height}px`;
+    }
+
     // The growing composer shrinks the messages area; keep the conversation
     // pinned to the bottom so the last lines stay visible while typing.
     if (pinned) scrollToBottom();

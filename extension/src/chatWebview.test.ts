@@ -185,7 +185,8 @@ function createHarness(
   // 0 and makes an unpositioned box "at the top" by default.
   window.Element.prototype.getBoundingClientRect = function (this: DomNode) {
     const top = Number(this.dataset?.top ?? 0);
-    return { top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top };
+    const height = Number(this.dataset?.height ?? 0);
+    return { top, bottom: top + height, left: 0, right: 0, width: 0, height, x: 0, y: top };
   };
   const scrollIntoViewCalls: DomNode[] = [];
   window.Element.prototype.scrollIntoView = function (this: DomNode): void {
@@ -1527,4 +1528,48 @@ test('keyboard: a measured shrink wins over the assumption', () => {
   assert.equal(bodyHeight(h), 1100);
   focusComposer(h, true);
   assert.equal(bodyHeight(h), 1100, 'the guess must not stack on the measurement');
+});
+
+// ---------------------------------------------------------------------------
+// The composer must not grow off the bottom of the screen
+//
+// An empty composer sat correctly above the keyboard; typing pushed the row
+// beneath the textarea -- send, model, permission mode -- past the fold. The
+// browser reveals the composer once, when it takes focus, and never again as
+// it grows.
+// ---------------------------------------------------------------------------
+
+/** Types into the composer with a stated content height, and lays the composer out. */
+function grow(h: Harness, scrollHeight: number, composerBottom: number): number {
+  const input = h.document.getElementById('input') as DomNode;
+  const composer = h.document.getElementById('composer') as DomNode;
+  Object.defineProperty(input, 'scrollHeight', { value: scrollHeight, configurable: true });
+  composer.dataset.top = '0';
+  composer.dataset.height = String(composerBottom);
+  input.value = 'a'.repeat(200);
+  input.dispatchEvent(new h.window.MessageEvent('input', { data: null }));
+  return parseInt(input.style.height, 10);
+}
+
+test('composer: a textarea that would overflow the visible area is cut back', () => {
+  const h = createHarness('grow-clamped', { coarsePointer: true });
+  withViewport(h, { windowVisible: 1000, frame: 1000 });
+  // The composer reports ending 300px below the visible bottom.
+  const height = grow(h, 400, 1300);
+  assert.ok(height < 400, `textarea kept its full ${height}px and pushed the send row off`);
+  assert.ok(height >= 24, 'but never below one line');
+});
+
+test('composer: a textarea that fits is left alone', () => {
+  const h = createHarness('grow-fits', { coarsePointer: true });
+  withViewport(h, { windowVisible: 1000, frame: 1000 });
+  const height = grow(h, 120, 400); // ends well inside the visible area
+  assert.equal(height, 120);
+});
+
+test('composer: growth is still capped when geometry says everything fits', () => {
+  const h = createHarness('grow-capped', { coarsePointer: true });
+  withViewport(h, { windowVisible: 1000, frame: 1000 });
+  const height = grow(h, 100000, 100); // absurd content, composer reports tiny
+  assert.ok(height <= 1000 * 0.38, `uncapped at ${height}px`);
 });

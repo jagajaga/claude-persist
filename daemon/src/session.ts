@@ -360,15 +360,21 @@ export class DaemonSession {
     if (attempts > MAX_ATTEMPTS) {
       this.consecutiveRetries = 0;
       // Stop rather than loop: whatever keeps failing is not clearing on its own.
+      // Name the actual cause. Reporting a stall as a rate limit sent someone
+      // looking at their quota for two hours while the real problem was a query
+      // that had stopped answering.
+      const cause = opts.stalled ? 'stopped responding' : 'rate limited';
       this.callbacks.log(
-        `session ${this.meta.id} giving up after ${MAX_ATTEMPTS} rate-limit retries`,
+        `session ${this.meta.id} giving up after ${MAX_ATTEMPTS} retries (${cause})`,
       );
       this.pending = null;
       this.clearPersistedPending();
       this.appendEvent({
         type: 'status',
         status: 'error',
-        detail: `Still rate limited after ${MAX_ATTEMPTS} automatic retries — giving up. Send the message again when you're ready.`,
+        detail: opts.stalled
+          ? `This turn stopped responding and did not recover after ${MAX_ATTEMPTS} automatic restarts — giving up. This is not a rate limit. Send the message again when you're ready.`
+          : `Still rate limited after ${MAX_ATTEMPTS} automatic retries — giving up. Send the message again when you're ready.`,
       });
       return;
     }
@@ -387,12 +393,24 @@ export class DaemonSession {
     const decision = opts.stalled
       ? { retryAt: plan.at, switchedTo: null as string | null, why: 'stalled' }
       : this.callbacks.onLimited(plan.at);
+    if (opts.stalled) {
+      // Tear the query down before retrying into it.
+      //
+      // The retry goes through sendMessage, which reuses whatever query is
+      // installed -- and a stalled one is installed and not answering. So
+      // "restart and continue" was pushed into a queue nobody was reading, the
+      // watchdog fired twenty minutes later, and the session repeated that five
+      // times over two hours before giving up. A stall is exactly the case
+      // where the existing query cannot be reused.
+      this.disposeActiveQuery();
+    }
     this.consecutiveRetries = attempts;
     this.pending = { text, retryAt: decision.retryAt, attempts };
     this.persistPending();
     this.callbacks.log(
-      `session ${this.meta.id} rate limited; retry #${attempts} at ${new Date(decision.retryAt).toISOString()} ` +
-        `(reset ${plan.source}${decision.switchedTo ? `, switched to ${decision.switchedTo}` : ''})`,
+      `session ${this.meta.id} ${opts.stalled ? 'stopped responding' : 'rate limited'}; ` +
+        `retry #${attempts} at ${new Date(decision.retryAt).toISOString()} ` +
+        `(${plan.source}${decision.switchedTo ? `, switched to ${decision.switchedTo}` : ''})`,
     );
     this.appendEvent({
       type: 'status',

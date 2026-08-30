@@ -392,3 +392,76 @@ test('only the main thread streams into the live preview', () => {
 
   assert.deepEqual(deltas, ['main ', 'thread']);
 });
+
+// ---------------------------------------------------------------------------
+// A stalled turn
+//
+// Observed in blooper2.0-dima, 02:13 to 04:03: five "restart and continue"
+// messages, each followed by exactly twenty more minutes of silence, then the
+// session gave up and the user restarted it by hand. The retry was being
+// pushed into the very query that had stopped answering.
+// ---------------------------------------------------------------------------
+
+function stall(session: InstanceType<typeof DaemonSession>): void {
+  (session as unknown as { parkForLimit(t: string, o: { stalled?: boolean }): void }).parkForLimit('', {
+    stalled: true,
+  });
+}
+
+test('a stalled turn drops its query, so the retry starts a fresh one', () => {
+  const session = makeSession(`stall-dispose-${Date.now()}`);
+  session.status = 'running';
+  const query = { closed: false, close(): void { this.closed = true; } };
+  (session as unknown as { activeQuery: unknown }).activeQuery = query;
+
+  stall(session);
+
+  assert.equal(query.closed, true, 'the stalled query was left installed');
+  assert.equal(
+    (session as unknown as { activeQuery: unknown }).activeQuery,
+    null,
+    'sendMessage would reuse it and the retry would go nowhere',
+  );
+});
+
+/** A rate limit is different: that query is fine and the account is the problem. */
+test('a rate-limited turn keeps its query', () => {
+  const session = makeSession(`limit-keeps-${Date.now()}`);
+  session.status = 'running';
+  const query = { closed: false, close(): void { this.closed = true; } };
+  (session as unknown as { activeQuery: unknown }).activeQuery = query;
+
+  (session as unknown as { parkForLimit(t: string, o: Record<string, unknown>): void }).parkForLimit(
+    "You've hit your session limit · resets 3:10pm (UTC)",
+    {},
+  );
+
+  assert.equal(query.closed, false);
+});
+
+test('a stall does not report itself as a rate limit', () => {
+  const session = makeSession(`stall-words-${Date.now()}`);
+  session.status = 'running';
+  stall(session);
+
+  const notice = session.eventsSince(0, 10).events.at(-1)?.event as { detail?: string };
+  assert.doesNotMatch(notice.detail ?? '', /rate limit/i, 'a stall is not a limit');
+  assert.match(notice.detail ?? '', /stopped responding/i);
+});
+
+/**
+ * Giving up told the user they were "still rate limited" after a stall, which
+ * sent them to look at a quota that was never the problem.
+ */
+test('giving up after stalls says what actually happened', () => {
+  const session = makeSession(`stall-giveup-${Date.now()}`);
+  session.status = 'running';
+  for (let i = 0; i < 7; i++) stall(session);
+
+  const details = session
+    .eventsSince(0, 40)
+    .events.map((e) => (e.event as { detail?: string }).detail ?? '');
+  const giveUp = details.find((d) => /giving up/i.test(d));
+  assert.ok(giveUp, 'never gave up');
+  assert.match(giveUp, /not a rate limit/i);
+});

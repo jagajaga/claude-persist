@@ -119,7 +119,7 @@ with `pkill -f 'claude-persist.*daemon/dist/main.js'`, and delete
 ```bash
 npm install
 npm run build          # tsc for shared, daemon and extension
-npm test               # 221 daemon + 217 extension tests
+npm test               # 221 daemon + 221 extension tests
 ./scripts/package.sh   # -> claude-persist-<version>.vsix, no bundled runtime
 ```
 
@@ -161,6 +161,11 @@ main that touches code, and a separate daily job bumps the Agent SDK.
 
 The daemon starts itself, detached from VS Code, and replaces itself when the
 extension updates. Nothing needs to be installed or supervised.
+
+An upgrade that only changes the daemon's build waits until no session is
+running before swapping, so a turn in progress is not thrown away for it; one
+that changes the wire protocol cannot wait, since nothing could talk to the old
+daemon in the meantime.
 
 - **Logs:** `~/.claude-persist/daemon.log`
 - **State:** `~/.claude-persist/` — sessions, uploads, the session registry,

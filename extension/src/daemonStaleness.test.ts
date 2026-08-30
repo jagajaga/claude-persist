@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { compareVersions, stalenessReason } from './daemonClient';
+import { compareVersions, stalenessOf, stalenessReason } from './daemonClient';
 
 const OURS = 19;
 
@@ -113,4 +113,40 @@ test('compareVersions orders releases numerically, not as text', () => {
   assert.equal(compareVersions('2.0.0', '1.9.9'), 1);
   assert.equal(compareVersions('1.0', '1.0.0'), 0, 'a missing part is zero');
   assert.equal(compareVersions('junk', 'junk'), 0, 'unparseable is not a licence to kill');
+});
+
+// ---------------------------------------------------------------------------
+// Some upgrades can wait, and some cannot
+//
+// Replacing the daemon mid-turn does not lose the work -- the turn is parked
+// and resumed -- but it throws away whatever the model was part-way through,
+// for every session at once.
+// ---------------------------------------------------------------------------
+
+test('a protocol mismatch cannot wait: nothing can talk to that daemon', () => {
+  const stale = stalenessOf({ protocolVersion: 28, pid: 1, entry: __filename, version: '1.0.22' }, 30, '1.0.22');
+  assert.equal(stale?.urgent, true);
+});
+
+test('a deleted install cannot wait either', () => {
+  const stale = stalenessOf(
+    { protocolVersion: 30, pid: 1, entry: '/gone/daemon/dist/main.js', version: '1.0.22' },
+    30,
+    '1.0.22',
+  );
+  assert.equal(stale?.urgent, true);
+});
+
+/** Same protocol, older build: it works, it is only missing fixes. */
+test('an older build can wait for a quiet moment', () => {
+  const stale = stalenessOf({ protocolVersion: 30, pid: 1, entry: __filename, version: '1.0.13' }, 30, '1.0.22');
+  assert.equal(stale?.urgent, false);
+  assert.match(stale?.reason ?? '', /older build/);
+});
+
+test('a daemon that is not stale has nothing to wait for', () => {
+  assert.equal(
+    stalenessOf({ protocolVersion: 30, pid: 1, entry: __filename, version: '1.0.22' }, 30, '1.0.22'),
+    null,
+  );
 });

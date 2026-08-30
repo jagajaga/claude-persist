@@ -48,6 +48,15 @@ const EXPECTED_PROTOCOL = 30;
 /** How long to wait for a reply before treating the daemon as wedged. */
 const REQUEST_TIMEOUT_MS = 30_000;
 /** The handshake is the first thing sent; a wedged daemon shouldn't cost 30s per retry. */
+/** How often a deferred upgrade asks whether the machine has gone quiet. */
+const IDLE_POLL_MS = 30_000;
+/**
+ * How long an upgrade waits for a quiet moment before going ahead anyway. A
+ * turn still running after this is stuck rather than working, and a stuck turn
+ * is exactly the kind of thing the newer build may fix.
+ */
+const UPGRADE_DEFER_LIMIT_MS = 2 * 60 * 60_000;
+
 const HELLO_TIMEOUT_MS = 5_000;
 /** Total budget for connect(), including killing and replacing an outdated daemon. */
 const CONNECT_ATTEMPTS = 40;
@@ -112,29 +121,56 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-export function stalenessReason(
+export interface Staleness {
+  reason: string;
+  /**
+   * True when this daemon cannot be used at all and must go now; false when it
+   * still works and is merely out of date, which can wait for a quiet moment.
+   */
+  urgent: boolean;
+}
+
+export function stalenessOf(
   info: HelloResult,
   expectedProtocol: number,
   ourVersion: string | null = null,
-): string | null {
+): Staleness | null {
   if (info.protocolVersion !== expectedProtocol) {
-    return `Outdated daemon (protocol ${info.protocolVersion} vs ${expectedProtocol})`;
+    // Nothing can be deferred here: the extension cannot speak this daemon's
+    // wire format, so waiting for a quiet moment would mean waiting forever
+    // with no working connection in the meantime.
+    return {
+      reason: `Outdated daemon (protocol ${info.protocolVersion} vs ${expectedProtocol})`,
+      urgent: true,
+    };
+  }
+  if (info.entry && !fs.existsSync(info.entry)) {
+    return { reason: `Daemon running from a deleted install (${info.entry})`, urgent: true };
   }
   // Only older, never merely different: two windows on different builds would
   // otherwise kill each other's daemon forever. Older loses, so this converges
   // on the newest build rather than oscillating.
   if (ourVersion && info.version && compareVersions(info.version, ourVersion) < 0) {
-    return `Daemon from an older build (${info.version} vs ${ourVersion})`;
-  }
-  // Only "the file it was launched from no longer exists" counts. Comparing it
-  // against our own resolved entry instead would make two windows configured
-  // with different daemonEntry paths kill each other's daemon forever — the
-  // same mutual-murder shape the protocol check already had once.
-  if (info.entry && !fs.existsSync(info.entry)) {
-    return `Daemon running from a deleted install (${info.entry})`;
+    // It speaks the same protocol, so it works; it is only missing fixes.
+    // Replacing it mid-turn throws away whatever the model was part-way
+    // through, so this one waits until nothing is running.
+    return {
+      reason: `Daemon from an older build (${info.version} vs ${ourVersion})`,
+      urgent: false,
+    };
   }
   return null;
 }
+
+/** The reason alone, for callers that do not care whether it can wait. */
+export function stalenessReason(
+  info: HelloResult,
+  expectedProtocol: number,
+  ourVersion: string | null = null,
+): string | null {
+  return stalenessOf(info, expectedProtocol, ourVersion)?.reason ?? null;
+}
+
 
 /** Is anything currently accepting connections on the socket? */
 function socketAlive(): Promise<boolean> {
@@ -245,8 +281,25 @@ export class DaemonClient {
       { op: 'hello', protocolVersion: EXPECTED_PROTOCOL },
       HELLO_TIMEOUT_MS,
     );
-    const reason = this.stalenessReason(info);
-    if (!reason) return;
+    const outdated = this.staleness(info);
+    if (!outdated) {
+      this.stopIdleWatch();
+      return;
+    }
+    // Out of date but still usable: let the running turns finish first.
+    if (!outdated.urgent) {
+      let busy = false;
+      try {
+        busy = await this.anySessionRunning();
+      } catch {
+        busy = false; // if it cannot answer, treat it as idle and replace it
+      }
+      if (busy) {
+        this.deferUpgrade(outdated.reason, info.pid);
+        return;
+      }
+    }
+    const reason = outdated.reason;
     // Clear the field *before* destroying: 'close' fires asynchronously, and
     // onGone only reports a disconnect for the socket it still believes is
     // current. Dropping it first keeps our own deliberate teardown from
@@ -276,8 +329,61 @@ export class DaemonClient {
     throw new Error(`${reason} — restarting`);
   }
 
-  private stalenessReason(info: HelloResult): string | null {
-    return stalenessReason(info, EXPECTED_PROTOCOL, this.version);
+  private staleness(info: HelloResult): Staleness | null {
+    return stalenessOf(info, EXPECTED_PROTOCOL, this.version);
+  }
+
+  /** Set while an upgrade is waiting for every session to stop working. */
+  private idleWatch: NodeJS.Timeout | null = null;
+
+  private async anySessionRunning(): Promise<boolean> {
+    const sessions = await this.request<Array<{ status?: string }>>({ op: 'listSessions' });
+    return sessions.some((session) => session.status === 'running');
+  }
+
+  /**
+   * Hold an upgrade back until nothing is running.
+   *
+   * Replacing the daemon mid-turn does not lose the work -- the turn is parked
+   * and resumed -- but it throws away whatever the model was part-way through,
+   * and it does that to every session at once. A build that differs only by
+   * version speaks the same protocol, so there is no hurry: keep using it, and
+   * swap the moment the machine is quiet.
+   *
+   * Stopping the daemon is all this has to do. The socket closes with it, which
+   * is an ordinary disconnect, and the reconnect that follows spawns the new
+   * build through the path every other restart already uses.
+   */
+  private deferUpgrade(reason: string, pid: number): void {
+    if (this.idleWatch) return;
+    const since = Date.now();
+    this.idleWatch = setInterval(() => {
+      void (async () => {
+        let busy: boolean;
+        try {
+          busy = await this.anySessionRunning();
+        } catch {
+          return; // ask again next tick rather than act on a failed question
+        }
+        // A turn still running hours later is stuck rather than working, and a
+        // stuck turn is exactly what a newer build may be carrying the fix for.
+        if (busy && Date.now() - since < UPGRADE_DEFER_LIMIT_MS) return;
+        this.stopIdleWatch();
+        try {
+          process.kill(pid, 'SIGTERM');
+        } catch {
+          // gone already, or not ours to stop: either way stop watching
+        }
+      })();
+    }, IDLE_POLL_MS);
+    this.idleWatch.unref?.();
+  }
+
+  private stopIdleWatch(): void {
+    if (this.idleWatch) {
+      clearInterval(this.idleWatch);
+      this.idleWatch = null;
+    }
   }
 
   private tryConnect(): Promise<void> {

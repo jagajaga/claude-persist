@@ -43,7 +43,7 @@ const socketPath =
 // package is ESM, so the constant can't be require()d from this CJS module).
 // protocolVersion.test.ts asserts the two stay equal — desyncing them makes
 // the extension kill every daemon it spawns.
-const EXPECTED_PROTOCOL = 30;
+const EXPECTED_PROTOCOL = 31;
 
 /** How long to wait for a reply before treating the daemon as wedged. */
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -337,8 +337,13 @@ export class DaemonClient {
   private idleWatch: NodeJS.Timeout | null = null;
 
   private async anySessionRunning(): Promise<boolean> {
-    const sessions = await this.request<Array<{ status?: string }>>({ op: 'listSessions' });
-    return sessions.some((session) => session.status === 'running');
+    const sessions = await this.request<Array<{ status?: string; busy?: boolean }>>({
+      op: 'listSessions',
+    });
+    // `busy` covers the sessions whose subagents are working while the session
+    // itself reports idle; without it an upgrade would call the machine quiet
+    // and take the daemon out from under them.
+    return sessions.some((session) => session.busy || session.status === 'running');
   }
 
   /**

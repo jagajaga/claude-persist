@@ -527,3 +527,53 @@ test('a turn already queued for its own limit is not re-queued', () => {
   const pending = JSON.parse(fs.readFileSync(pendingFile, 'utf8')) as { attempts: number };
   assert.equal(pending.attempts, 3, 'the limit-driven schedule wins');
 });
+
+// ---------------------------------------------------------------------------
+// "Working" is not the same question as "status is running"
+//
+// Observed 2026-08-30 22:09: five sessions were working, three reported idle
+// because their subagents were doing the work, and the daemon restart queued
+// only the two marked running. The other three were killed with nothing
+// scheduled and were restarted by hand. One of them had gone idle at 21:14 and
+// produced a result at 21:37 -- twenty-three minutes of work, while idle.
+// ---------------------------------------------------------------------------
+
+test('a session with live subagents is busy, whatever its status says', () => {
+  const session = makeSession(`busy-agents-${Date.now()}`);
+  session.status = 'idle';
+  (session as unknown as { agents: Map<string, unknown> }).agents = new Map([
+    ['toolu_a', { id: 'toolu_a', description: 'reviewing', lastActivityAt: Date.now() }],
+  ]);
+  assert.equal(session.busy, true);
+});
+
+test('a session the SDK is still talking to is busy', () => {
+  const session = makeSession(`busy-sdk-${Date.now()}`);
+  session.status = 'idle';
+  (session as unknown as { lastSdkActivityAt: number }).lastSdkActivityAt = Date.now();
+  assert.equal(session.busy, true);
+});
+
+test('a genuinely idle session is not busy', () => {
+  const session = makeSession(`busy-not-${Date.now()}`);
+  session.status = 'idle';
+  (session as unknown as { lastSdkActivityAt: number }).lastSdkActivityAt = Date.now() - 10 * 60_000;
+  assert.equal(session.busy, false);
+});
+
+/** The whole point: this is what gets queued across a restart. */
+test('a restart queues a session whose subagents are working', () => {
+  const id = `busy-restart-${Date.now()}`;
+  const session = makeSession(id);
+  session.status = 'idle';
+  (session as unknown as { lastSdkActivityAt: number }).lastSdkActivityAt = Date.now();
+
+  assert.equal(session.parkForRestart(), true, 'this work would be lost silently');
+  assert.equal(fs.existsSync(path.join(sessionsDir(), `${id}.pending.json`)), true);
+});
+
+test('a restart still leaves a genuinely idle session alone', () => {
+  const session = makeSession(`busy-restart-idle-${Date.now()}`);
+  session.status = 'idle';
+  assert.equal(session.parkForRestart(), false);
+});

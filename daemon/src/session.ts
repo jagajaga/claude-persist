@@ -344,6 +344,26 @@ export class DaemonSession {
     this.armStallWatchdog();
   }
 
+  /**
+   * Is this session actually doing anything?
+   *
+   * `status` is not the answer. A turn that dispatches async subagents gets its
+   * result and is marked idle while the subagents carry on working -- one
+   * session here sat "idle" for twenty-three minutes and then produced a result.
+   * Two decisions trusted the status and were wrong for exactly those sessions:
+   * a daemon restart queued only the turns marked running, so the rest were
+   * killed with nothing scheduled and had to be restarted by hand, and an
+   * upgrade waiting for a quiet moment thought the machine was already quiet.
+   */
+  get busy(): boolean {
+    if (this.status === 'running') return true;
+    const now = Date.now();
+    if (activeAgents(this.agents, now).length > 0) return true;
+    // Nothing named as an agent, but the SDK is still talking to us: background
+    // tasks report through the same channel and are just as much work in flight.
+    return this.lastSdkActivityAt > 0 && now - this.lastSdkActivityAt < AGENT_ACTIVE_MS;
+  }
+
   /** Epoch ms a parked turn will be retried, or null. Surfaced in SessionInfo. */
   get retryAt(): number | null {
     return this.pending?.retryAt ?? null;
@@ -526,7 +546,7 @@ export class DaemonSession {
    * was queued.
    */
   parkForRestart(): boolean {
-    if (this.status !== 'running') return false;
+    if (!this.busy) return false;
     if (this.pending) return true; // already queued for a limit or a stall
     this.pending = {
       text: 'daemon restart',
@@ -555,7 +575,7 @@ export class DaemonSession {
    * @returns true when a turn was queued.
    */
   parkForAccountSwitch(retryAt: number, account: string | null, reason: string): boolean {
-    if (this.status !== 'running') return false;
+    if (!this.busy) return false;
     if (this.pending) return true; // the session that was refused, already queued
     this.pending = { text: 'account switch', retryAt, attempts: 0 };
     this.persistPending();

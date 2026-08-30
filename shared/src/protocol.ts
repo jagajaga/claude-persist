@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 30;
+export const PROTOCOL_VERSION = 31;
 
 /**
  * Reply to `hello`. `entry` is the module path the daemon was launched from;
@@ -38,6 +38,13 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | '
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface SessionInfo {
+  /**
+   * Working, whatever `status` says: a turn in flight, live subagents, or the
+   * SDK still producing. A session that dispatched async subagents reports
+   * `idle` while they run, so `status` alone cannot answer "is it safe to
+   * restart the daemon".
+   */
+  busy?: boolean;
   id: string;
   title: string;
   cwd: string;

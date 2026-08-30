@@ -542,6 +542,34 @@ export class DaemonSession {
     return true;
   }
 
+  /**
+   * Queue a turn that an account switch is about to cut off.
+   *
+   * Rotating on a rate limit disposes every session's query, not just the one
+   * that was refused -- they all share the account. Only the refused session was
+   * parked, so the others were killed mid-turn with nothing scheduled: no
+   * error, no retry, no notice. Three sessions were left dead this way in one
+   * evening and restarted by hand, twice each, because the first message after
+   * a dead query returns error_during_execution.
+   *
+   * @returns true when a turn was queued.
+   */
+  parkForAccountSwitch(retryAt: number, account: string | null, reason: string): boolean {
+    if (this.status !== 'running') return false;
+    if (this.pending) return true; // the session that was refused, already queued
+    this.pending = { text: 'account switch', retryAt, attempts: 0 };
+    this.persistPending();
+    this.appendEvent({
+      type: 'status',
+      status: 'error',
+      detail:
+        `The active account changed${account ? ` to "${account}"` : ''} mid-turn (${reason}). ` +
+        `This turn will continue automatically — you don't need to come back.`,
+    });
+    this.scheduleRetry();
+    return true;
+  }
+
   /** Called by the daemon at startup for sessions with a parked turn on disk. */
   restorePending(): void {
     try {

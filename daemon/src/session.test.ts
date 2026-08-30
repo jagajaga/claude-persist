@@ -465,3 +465,65 @@ test('giving up after stalls says what actually happened', () => {
   assert.ok(giveUp, 'never gave up');
   assert.match(giveUp, /not a rate limit/i);
 });
+
+// ---------------------------------------------------------------------------
+// An account switch cuts off every session, not just the one that was refused
+//
+// Observed on 2026-08-30: sasha hit a spend limit at 19:19 and was parked and
+// resumed automatically. Three other sessions were running on the same account
+// and were disposed with nothing scheduled -- no error, no retry, no notice.
+// They were restarted by hand, twice each, because the first message after a
+// dead query returns error_during_execution.
+// ---------------------------------------------------------------------------
+
+test('a running turn is queued when the account changes under it', () => {
+  const id = `switch-${Date.now()}`;
+  const session = makeSession(id);
+  session.status = 'running';
+
+  assert.equal(session.parkForAccountSwitch(Date.now() + 5_000, 'serokell', 'rate limit'), true);
+
+  const pendingFile = path.join(sessionsDir(), `${id}.pending.json`);
+  assert.equal(fs.existsSync(pendingFile), true, 'nothing would resume this turn');
+  const pending = JSON.parse(fs.readFileSync(pendingFile, 'utf8')) as { retryAt: number };
+  assert.ok(pending.retryAt > Date.now(), 'queued for the near future');
+
+  const notice = session.eventsSince(0, 10).events.at(-1)?.event as { detail?: string };
+  assert.match(notice.detail ?? '', /continue automatically/);
+  assert.match(notice.detail ?? '', /serokell/, 'say where it went');
+});
+
+/** The reason is passed through: a user picking another account is not a limit. */
+test('the notice states why the account changed', () => {
+  const session = makeSession(`switch-reason-${Date.now()}`);
+  session.status = 'running';
+  session.parkForAccountSwitch(Date.now() + 5_000, 'work', 'signed in');
+
+  const notice = session.eventsSince(0, 10).events.at(-1)?.event as { detail?: string };
+  assert.match(notice.detail ?? '', /signed in/);
+  assert.doesNotMatch(notice.detail ?? '', /rate limit/i);
+});
+
+test('an idle session has no turn to carry across', () => {
+  const session = makeSession(`switch-idle-${Date.now()}`);
+  assert.equal(session.parkForAccountSwitch(Date.now() + 5_000, 'work', 'rate limit'), false);
+  assert.equal(session.eventCount, 0, 'and says nothing about it');
+});
+
+/** The refused session parked itself already; that schedule must win. */
+test('a turn already queued for its own limit is not re-queued', () => {
+  const id = `switch-already-${Date.now()}`;
+  const session = makeSession(id);
+  session.status = 'running';
+  const pendingFile = path.join(sessionsDir(), `${id}.pending.json`);
+  fs.writeFileSync(pendingFile, JSON.stringify({ text: 'limit', retryAt: 4102444800000, attempts: 3 }));
+  (session as unknown as { pending: unknown }).pending = {
+    text: 'limit',
+    retryAt: 4102444800000,
+    attempts: 3,
+  };
+
+  assert.equal(session.parkForAccountSwitch(Date.now() + 5_000, 'work', 'rate limit'), true);
+  const pending = JSON.parse(fs.readFileSync(pendingFile, 'utf8')) as { attempts: number };
+  assert.equal(pending.attempts, 3, 'the limit-driven schedule wins');
+});

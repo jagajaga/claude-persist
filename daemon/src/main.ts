@@ -28,6 +28,7 @@ import { applyRateLimitEvent, applyUsageResponse } from './usage.js';
 import {
   type IdentityOf,
   type RotationState,
+  SWITCH_SETTLE_MS,
   accountForRetry,
   accountKey,
   planAfterLimit,
@@ -225,10 +226,19 @@ const rotation: RotationState = { limited: new Map(), lastSwitchAt: 0 };
 function activateAccount(configDir: string | null, reason: string): void {
   const accounts = accountsStore.setActive(configDir);
   rotation.lastSwitchAt = Date.now();
-  for (const session of sessions.values()) session.disposeActiveQuery();
+  const name = accounts.find((a) => a.active)?.name ?? String(configDir);
+  // Every session shares the account, so a rotation cuts off every live turn --
+  // not only the one that was refused. Queue the others before disposing them,
+  // or they die here with nothing scheduled and wait for someone to notice.
+  const resumeAt = Date.now() + SWITCH_SETTLE_MS;
+  let carried = 0;
+  for (const session of sessions.values()) {
+    if (session.parkForAccountSwitch(resumeAt, name, reason)) carried++;
+    session.disposeActiveQuery();
+  }
+  if (carried > 0) logLine(`carrying ${carried} running turn(s) across the switch to ${name}`);
   broadcastAccounts(accounts);
   broadcastAll({ kind: 'sessions_changed' });
-  const name = accounts.find((a) => a.active)?.name ?? String(configDir);
   logLine(`switched to account ${name} (${reason})`);
 }
 

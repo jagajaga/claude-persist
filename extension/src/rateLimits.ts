@@ -223,3 +223,37 @@ export function formatTooltip(
   if (subscriptionType) lines.unshift(`Plan: ${subscriptionType}`);
   return lines.join('\n');
 }
+
+/**
+ * The short limit label shown beside an account in the picker: the window that
+ * will bite first and how full it is, e.g. "7d 21%".
+ *
+ * Only the active account has a current reading — usage can only be read from a
+ * live query — so everything else carries the age of its last one. A stale
+ * number with its age attached is useful; a stale number pretending to be
+ * current is not.
+ */
+export function formatAccountUsage(
+  reading: { windows: RawWindows; at: number } | null | undefined,
+  now: number,
+  isActive: boolean,
+): string | null {
+  if (!reading) return null;
+  const next = pickNextLimit(reading.windows);
+  const label = next
+    ? `${windowLabel(next.kind)} ${Math.round(next.utilization)}%`
+    : formatStatusBarFallback(reading.windows, now)?.replace(/^\$\([a-z-]+\)\s*/, '') ?? null;
+  if (!label) return null;
+  return isActive ? label : `${label} · ${formatAge(reading.at, now)}`;
+}
+
+/** "just now", "2h ago", "3d ago" — enough to judge whether to trust it. */
+export function formatAge(at: number, now: number): string {
+  const ms = Math.max(0, now - at);
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 2) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}

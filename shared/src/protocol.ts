@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 29;
+export const PROTOCOL_VERSION = 30;
 
 /**
  * Reply to `hello`. `entry` is the module path the daemon was launched from;
@@ -205,6 +205,14 @@ export interface AccountInfo {
   name: string;
   configDir: string | null;
   active: boolean;
+  /**
+   * What this account's limits looked like when we last had a live query on it.
+   *
+   * Usage can only be read from a running query, so only the active account has
+   * a current reading; the rest carry their last one with the time it was taken,
+   * which the menu shows so a stale number is never mistaken for a fresh one.
+   */
+  lastUsage?: { windows: RateLimits; at: number } | null;
   /**
    * Whether this account has credentials to use.
    *

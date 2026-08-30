@@ -992,3 +992,13 @@ button.secondary {
   color: var(--vscode-descriptionForeground);
 }
 #branch-chip { cursor: pointer; }
+
+/* The limit reading beside an account in the picker. Pushed to the right so the
+   names stay in one column and the numbers can be compared down the list. */
+.account-usage {
+  margin-left: auto;
+  padding-left: 12px;
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
+}

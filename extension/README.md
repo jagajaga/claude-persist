@@ -69,7 +69,10 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
 
 ### Accounts and rate limits
 
-- **Several accounts**, switched from the model pill.
+- **Several accounts**, switched from the model pill, each showing the limit
+  that will bite it first — `5h 12%`, `7d 88%` — so you can see which has room
+  before switching. Only the account in use has a live reading; the others carry
+  theirs with its age, since usage can only be read from a running session.
 - **Sign in inside the editor** — a link to open and a box for the code. No
   terminal, and it works over code-server, where a callback to `localhost`
   cannot.

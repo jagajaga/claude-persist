@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  formatAccountUsage,
+  formatAge,
   formatRelativeReset,
   formatStatusBarFallback,
   formatStatusBarText,
@@ -314,4 +316,70 @@ test('formatStatusBarFallback: follows WINDOW_ORDER, five_hour first', () => {
     now,
   );
   assert.match(text ?? '', /^\$\(sparkle\) 5h/);
+});
+
+// ---------------------------------------------------------------------------
+// The limit reading beside each account in the picker
+// ---------------------------------------------------------------------------
+
+const reading = (windows: Record<string, unknown>, at: number) =>
+  ({ windows, at }) as Parameters<typeof formatAccountUsage>[0];
+const NOW = Date.parse('2026-08-30T22:00:00Z');
+
+test('formatAccountUsage: the active account shows its reading with no age', () => {
+  const label = formatAccountUsage(
+    reading({ seven_day: { utilization: 21, resets_at: null, status: 'allowed' } }, NOW - 60_000),
+    NOW,
+    true,
+  );
+  assert.equal(label, '7d 21%');
+});
+
+/** Every other account's number was taken at some point in the past. */
+test('formatAccountUsage: an inactive account carries how old its reading is', () => {
+  const label = formatAccountUsage(
+    reading({ seven_day: { utilization: 88, resets_at: null, status: 'allowed' } }, NOW - 2 * 3600_000),
+    NOW,
+    false,
+  );
+  assert.equal(label, '7d 88% · 2h ago');
+});
+
+test('formatAccountUsage: the window that bites first is the one shown', () => {
+  const label = formatAccountUsage(
+    reading(
+      {
+        five_hour: { utilization: 90, resets_at: null, status: 'allowed' },
+        seven_day: { utilization: 30, resets_at: null, status: 'allowed' },
+      },
+      NOW,
+    ),
+    NOW,
+    true,
+  );
+  assert.match(label ?? '', /^5h 90%/);
+});
+
+test('formatAccountUsage: an account never seen has nothing to say', () => {
+  assert.equal(formatAccountUsage(null, NOW, false), null);
+  assert.equal(formatAccountUsage(undefined, NOW, true), null);
+});
+
+/** No utilization anywhere still beats showing nothing, if a reset is known. */
+test('formatAccountUsage: falls back to what the window does say', () => {
+  const label = formatAccountUsage(
+    reading({ five_hour: { utilization: null, resets_at: new Date(NOW + 3600_000).toISOString(), status: 'rejected' } }, NOW),
+    NOW,
+    true,
+  );
+  assert.ok(label && label.length > 0);
+  assert.doesNotMatch(label, /\$\(/, 'the status-bar icon must not leak into a menu row');
+});
+
+test('formatAge: reads at the scale a person judges staleness on', () => {
+  assert.equal(formatAge(NOW, NOW), 'just now');
+  assert.equal(formatAge(NOW - 30 * 60_000, NOW), '30m ago');
+  assert.equal(formatAge(NOW - 5 * 3600_000, NOW), '5h ago');
+  assert.equal(formatAge(NOW - 3 * 86400_000, NOW), '3d ago');
+  assert.equal(formatAge(NOW + 60_000, NOW), 'just now', 'a clock skew is not a negative age');
 });

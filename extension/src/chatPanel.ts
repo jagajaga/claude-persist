@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { formatAccountUsage } from './rateLimits';
 import { resourceRootPaths } from './resourceRoots';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -194,8 +195,15 @@ export class ChatPanelManager {
   /** Broadcast from the daemon whenever the active/known accounts change. */
   handleAccounts(accounts: AccountInfo[]): void {
     this.lastAccounts = accounts;
+    // Formatted here rather than in the webview so the picker and the status
+    // bar cannot disagree about which window is closest or how it reads.
+    const now = Date.now();
+    const withUsage = accounts.map((account) => ({
+      ...account,
+      usageLabel: formatAccountUsage(account.lastUsage ?? null, now, account.active),
+    }));
     for (const entry of this.panels.values()) {
-      this.post(entry, { type: 'accounts', accounts });
+      this.post(entry, { type: 'accounts', accounts: withUsage });
     }
   }
 

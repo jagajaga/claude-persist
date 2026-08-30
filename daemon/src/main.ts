@@ -16,6 +16,7 @@ import type {
 import type { HelloResult } from '@claude-persist/shared';
 import { PROTOCOL_VERSION } from '@claude-persist/shared';
 import { NO_CLAUDE_MESSAGE, claudeExecutable } from './claudeExecutable.js';
+import { AccountUsageStore } from './accountUsage.js';
 import { ensureDirs, socketPath, socketIsFile, lockPath, sessionLogPath, logPath, pendingTurnSessionIds, pendingTurnPath } from './paths.js';
 import { releaseLock } from './lock.js';
 import { claimOwnership } from './ownership.js';
@@ -182,9 +183,18 @@ const ACCOUNTS_POLL_MS = 5000;
 let lastAccountsJson = '';
 
 /** Broadcast the account list, remembering it so the poller only fires on change. */
+/** The account list, each entry carrying the last limits we saw for it. */
+function accountsWithUsage(accounts: AccountInfo[] = accountsStore.list()): AccountInfo[] {
+  return accounts.map((account) => ({
+    ...account,
+    lastUsage: accountUsage.get(accountKey(account.configDir)) ?? null,
+  }));
+}
+
 function broadcastAccounts(accounts: AccountInfo[]): void {
-  lastAccountsJson = JSON.stringify(accounts);
-  broadcastAll({ kind: 'accounts', accounts });
+  const withUsage = accountsWithUsage(accounts);
+  lastAccountsJson = JSON.stringify(withUsage);
+  broadcastAll({ kind: 'accounts', accounts: withUsage });
 }
 
 /**
@@ -218,6 +228,9 @@ const logins = new LoginManager(
   logLine,
   accountsStore.dirs.claudeDir,
 );
+
+/** Last limits seen per account, so the menu can show them all. */
+const accountUsage = new AccountUsageStore();
 
 /** Which accounts are known spent, and when we last rotated. */
 const rotation: RotationState = { limited: new Map(), lastSwitchAt: 0 };
@@ -516,7 +529,7 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
     case 'stopAgent':
       return getSession(req.sessionId).stopAgent(req.taskId);
     case 'listAccounts':
-      return accountsStore.list();
+      return accountsWithUsage();
     case 'setAccount': {
       const accounts = accountsStore.setActive(req.configDir);
       // Live queries were launched with the previous account's env (or none);

@@ -1206,6 +1206,12 @@
         modelMenu.hidden = true;
       });
       if (account.signedIn === false) item.classList.add('account-unauthed');
+      // Which window bites first and how full it is, so "which of these has
+      // room" is answerable without switching to find out. Only the active
+      // account's reading is current; the rest carry their age.
+      if (account.usageLabel) {
+        item.appendChild(el('span', 'account-usage', account.usageLabel));
+      }
       modelMenu.appendChild(item);
     }
     // "another" is wrong when you have none, which is exactly when someone is

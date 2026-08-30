@@ -11,33 +11,40 @@ import {
   chipLabel,
   findGitDir,
   readBranch,
+  workPlaces,
+  type GitInfo,
+  type WorkPlace,
 } from './gitBranch';
 
-test('chipLabel: a plain checkout shows its branch', () => {
-  assert.deepEqual(chipLabel('main', null, []), { text: 'main', worktree: false });
+/** A place, as workPlaces() reports one. */
+function place(over: Partial<WorkPlace> = {}): WorkPlace {
+  return { name: 'main', branch: 'main', path: '/repo', worktree: false, current: true, ...over };
+}
+
+test('chipLabel: one place shows its name', () => {
+  assert.deepEqual(chipLabel([place()]), { text: 'main', worktree: false });
 });
 
-test('chipLabel: inside a worktree, only the worktree name shows', () => {
-  assert.deepEqual(chipLabel('hotfix', 'feature-x', []), { text: 'feature-x', worktree: true });
+test('chipLabel: one worktree shows its name, marked as a worktree', () => {
+  const wt = place({ name: 'fix-1130', branch: 'fix/1130', worktree: true });
+  assert.deepEqual(chipLabel([wt]), { text: 'fix-1130', worktree: true });
 });
 
-test('chipLabel: one held worktree replaces the branch', () => {
-  assert.deepEqual(chipLabel('main', null, ['agent-budget-liveness']), {
-    text: 'agent-budget-liveness',
-    worktree: true,
-  });
-});
-
-test('chipLabel: several held worktrees collapse to a count', () => {
-  assert.deepEqual(chipLabel('main', null, ['a', 'b', 'c']), { text: '3', worktree: true });
-});
-
-test('chipLabel: being in a worktree outranks held ones', () => {
-  assert.deepEqual(chipLabel('hotfix', 'mine', ['other']), { text: 'mine', worktree: true });
+/**
+ * Once subagents take worktrees of their own, no single name is the answer.
+ * The chip counts and the list behind it says which.
+ */
+test('chipLabel: several places collapse to a count', () => {
+  const chip = chipLabel([
+    place(),
+    place({ name: 'fix-1130', worktree: true, current: false }),
+    place({ name: 'fix-1131', worktree: true, current: false }),
+  ]);
+  assert.deepEqual(chip, { text: '3', worktree: true });
 });
 
 test('chipLabel: nothing to show is null', () => {
-  assert.equal(chipLabel(null, null, []), null);
+  assert.equal(chipLabel([]), null);
 });
 
 test('parseHead: symbolic ref to a branch', () => {
@@ -164,4 +171,68 @@ test('heldWorktrees: a repository with no linked worktrees is empty', () => {
   };
   assert.deepEqual(heldWorktrees(info), []);
   fs.rmSync(repo, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// workPlaces: everywhere this conversation has work in progress
+// ---------------------------------------------------------------------------
+
+/** A repository with `n` locked agent worktrees, each on its own branch. */
+function repoWithWorktrees(names: string[]): { root: string; info: GitInfo } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-places-'));
+  fs.mkdirSync(path.join(root, '.git', 'worktrees'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  for (const name of names) {
+    const checkout = path.join(root, '.claude', 'worktrees', name);
+    fs.mkdirSync(checkout, { recursive: true });
+    const reg = path.join(root, '.git', 'worktrees', name);
+    fs.mkdirSync(reg, { recursive: true });
+    fs.writeFileSync(path.join(reg, 'locked'), '');
+    fs.writeFileSync(path.join(reg, 'gitdir'), `${path.join(checkout, '.git')}\n`);
+    fs.writeFileSync(path.join(reg, 'HEAD'), `ref: refs/heads/fix/${name}\n`);
+  }
+  const info = findGitDir(root);
+  assert.ok(info);
+  return { root, info };
+}
+
+test('workPlaces: a plain checkout is one place, named by its branch', () => {
+  const { root, info } = repoWithWorktrees([]);
+  const places = workPlaces(info, root);
+  assert.equal(places.length, 1);
+  assert.deepEqual(
+    { name: places[0].name, branch: places[0].branch, worktree: places[0].worktree, current: places[0].current },
+    { name: 'main', branch: 'main', worktree: false, current: true },
+  );
+});
+
+test('workPlaces: each held agent worktree is listed, with the branch it is on', () => {
+  const { root, info } = repoWithWorktrees(['1130', '1131']);
+  const places = workPlaces(info, root);
+  assert.deepEqual(places.map((p) => p.name), ['main', '1130', '1131']);
+  assert.deepEqual(places.map((p) => p.branch), ['main', 'fix/1130', 'fix/1131']);
+  assert.deepEqual(places.map((p) => p.current), [true, false, false]);
+  assert.ok(places.every((p) => p.path.length > 0));
+});
+
+/**
+ * The path comes from git's own `gitdir` pointer rather than from the name: a
+ * worktree's directory need not be called what the worktree is called, and a
+ * guessed path would send the user somewhere that does not exist.
+ */
+test('workPlaces: the path is read from git, not built from the name', () => {
+  const { root, info } = repoWithWorktrees(['1130']);
+  const reg = path.join(root, '.git', 'worktrees', '1130');
+  const elsewhere = path.join(root, '.claude', 'worktrees', 'renamed-on-disk');
+  fs.mkdirSync(elsewhere, { recursive: true });
+  fs.writeFileSync(path.join(reg, 'gitdir'), `${path.join(elsewhere, '.git')}\n`);
+
+  const places = workPlaces(info, root);
+  assert.equal(places[1].path, elsewhere);
+});
+
+test('workPlaces: an unreadable worktree is skipped rather than faked', () => {
+  const { root, info } = repoWithWorktrees(['1130']);
+  fs.rmSync(path.join(root, '.git', 'worktrees', '1130', 'gitdir'));
+  assert.deepEqual(workPlaces(info, root).map((p) => p.name), ['main']);
 });

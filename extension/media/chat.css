@@ -971,3 +971,24 @@ button.secondary {
 /* An account with no credentials is still listed — it can become usable — but
    it must not look like a working choice. */
 .menu-item.account-unauthed { color: var(--vscode-descriptionForeground); font-style: italic; }
+
+/* ---------- where this conversation is working ----------------------------- */
+
+.branch-menu { max-height: 55vh; overflow-y: auto; max-width: min(92vw, 460px); }
+.place-item { cursor: default; }
+.place-item:hover { background: transparent; }
+.place-glyph { flex: none; color: var(--vscode-descriptionForeground); }
+.place-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The branch a worktree sits on, when that is not just its name again. */
+.place-branch {
+  flex: none;
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+}
+#branch-chip { cursor: pointer; }

@@ -12,7 +12,7 @@ import type {
 } from '@claude-persist/shared';
 import type { DaemonClient } from './daemonClient';
 import { mergeExtraModels } from './models';
-import { chipLabel, findGitDir, formatBranch, heldWorktrees, readBranch } from './gitBranch';
+import { chipLabel, findGitDir, heldWorktrees, workPlaces } from './gitBranch';
 
 export const VIEW_TYPE = 'claudePersist.chat';
 
@@ -711,16 +711,15 @@ export class ChatPanelManager {
     // Read from git's registry, not from remembered hook events: worktrees
     // created before this daemon started are just as real as ones created after.
     const held = info ? heldWorktrees(info) : [];
-    const chip = info
-      ? chipLabel(
-          formatBranch(readBranch(info)),
-          info.isWorktree ? path.basename(info.root) : null,
-          held,
-        )
-      : null;
-    // fs.watch fires several times per write; posting unconditionally spams
-    // the channel and re-renders the composer for nothing.
-    const key = `${chip?.text ?? ''}|${chip?.worktree ?? false}`;
+    const places = info ? workPlaces(info, cwd) : [];
+    const chip = chipLabel(places);
+    // The list is part of the key: a subagent taking another worktree may
+    // leave the chip's text alone, and the panel still has to hear about it.
+    const key = [
+      chip?.text ?? '',
+      String(chip?.worktree ?? false),
+      ...places.map((place) => `${place.name}@${place.branch ?? ''}`),
+    ].join('|');
     if (entry.branchKey === key) return;
     entry.branchKey = key;
     this.post(entry, {
@@ -729,6 +728,7 @@ export class ChatPanelManager {
       worktree: chip?.worktree ?? false,
       held,
       path: cwd,
+      places,
     });
   }
 

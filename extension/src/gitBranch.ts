@@ -116,21 +116,14 @@ export interface ChipState {
 /**
  * Decide the chip.
  *
- * A worktree wins outright: when one is in play its name *is* the answer to
- * "where is this working", and pairing it with a branch only crowds a chip
- * that has to survive a phone-width composer.
+ * One place: name it, and the name is the whole answer to "where is this
+ * working". Several: no single name is the answer, so show the worktree glyph
+ * and how many there are, and let the list say the rest.
  */
-export function chipLabel(
-  branch: string | null,
-  worktreeName: string | null,
-  held: string[],
-): ChipState | null {
-  if (worktreeName) return { text: worktreeName, worktree: true };
-  if (held.length === 1) return { text: held[0], worktree: true };
-  // Several at once: no single name is the answer, so report how many.
-  if (held.length > 1) return { text: String(held.length), worktree: true };
-  if (branch) return { text: branch, worktree: false };
-  return null;
+export function chipLabel(places: WorkPlace[]): ChipState | null {
+  if (places.length === 0) return null;
+  if (places.length === 1) return { text: places[0].name, worktree: places[0].worktree };
+  return { text: String(places.length), worktree: true };
 }
 
 /** Where Claude Code puts the worktrees it manages for subagents. */
@@ -165,6 +158,60 @@ export function heldWorktrees(info: GitInfo): string[] {
     if (target.includes(AGENT_WORKTREE_SEGMENT)) held.push(name);
   }
   return held.sort();
+}
+
+/** A place this conversation has work in: its own checkout, or an agent worktree. */
+export interface WorkPlace {
+  /** Worktree name, or the branch name when this is the checkout itself. */
+  name: string;
+  /** The branch checked out there, when it is on one. */
+  branch: string | null;
+  /** Absolute path to the working directory. */
+  path: string;
+  /** True for a linked worktree, false for the repository checkout. */
+  worktree: boolean;
+  /** True for the directory this session itself runs in. */
+  current: boolean;
+}
+
+/**
+ * Every place this conversation has work in progress: the directory the session
+ * runs in, plus each agent worktree the repository is holding.
+ *
+ * The chip could only ever name one of them, and collapsed the rest to a count
+ * with the names hidden in a tooltip -- which does not exist on a phone. This
+ * is the same information, listable.
+ */
+export function workPlaces(info: GitInfo, cwd: string): WorkPlace[] {
+  const here: WorkPlace = {
+    name: info.isWorktree ? path.basename(info.root) : (formatBranch(readBranch(info)) ?? path.basename(info.root)),
+    branch: formatBranch(readBranch(info)),
+    path: info.root,
+    worktree: info.isWorktree,
+    current: true,
+  };
+  const places = [here];
+  const dir = path.join(info.commonDir, 'worktrees');
+  for (const name of heldWorktrees(info)) {
+    let root: string;
+    try {
+      // `gitdir` points at the worktree's own .git file; its directory is the
+      // checkout. Reading it is what makes the path real rather than guessed
+      // from the name, which need not match the folder.
+      root = path.dirname(fs.readFileSync(path.join(dir, name, 'gitdir'), 'utf8').trim());
+    } catch {
+      continue;
+    }
+    if (path.resolve(root) === path.resolve(here.path)) continue; // already listed
+    let branch: string | null = null;
+    try {
+      branch = formatBranch(parseHead(fs.readFileSync(path.join(dir, name, 'HEAD'), 'utf8')));
+    } catch {
+      branch = null;
+    }
+    places.push({ name, branch, path: root, worktree: true, current: false });
+  }
+  return places;
 }
 
 export function readBranch(info: GitInfo): HeadState {

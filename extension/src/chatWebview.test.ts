@@ -1504,3 +1504,73 @@ test('keyboard: a shrinking frame is followed, not just a shrinking viewport', (
   withViewport(h, { windowVisible: 2400, frame: 1300 });
   assert.equal(bodyHeight(h), 1300);
 });
+
+// ---------------------------------------------------------------------------
+// The branch chip lists where the conversation is working
+//
+// The chip can only ever name one place, and once subagents take worktrees of
+// their own it names none of them -- it counts. The names lived in a tooltip,
+// which does not exist on a touch screen.
+// ---------------------------------------------------------------------------
+
+function sendPlaces(h: Harness, name: string, worktree: boolean, places: unknown[]): void {
+  h.send({ type: 'branch', name, worktree, path: '/repo', held: [], places });
+}
+
+const openChip = (h: Harness): void =>
+  h.document.getElementById('branch-chip').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+
+test('branch chip: one place shows its name and lists just that', () => {
+  const h = createHarness('branch-one');
+  sendPlaces(h, 'main', false, [
+    { name: 'main', branch: 'main', path: '/repo', worktree: false, current: true },
+  ]);
+  assert.match(h.document.getElementById('branch-chip').textContent, /main/);
+
+  openChip(h);
+  const names = [...h.document.querySelectorAll('.place-name')].map((n: DomNode) => n.textContent);
+  assert.deepEqual(names, ['main']);
+});
+
+test('branch chip: several places are all listed, with the current one marked', () => {
+  const h = createHarness('branch-many');
+  sendPlaces(h, '3', true, [
+    { name: 'main', branch: 'main', path: '/repo', worktree: false, current: true },
+    { name: '1130', branch: 'fix/1130', path: '/repo/.claude/worktrees/1130', worktree: true, current: false },
+    { name: '1131', branch: 'fix/1131', path: '/repo/.claude/worktrees/1131', worktree: true, current: false },
+  ]);
+  // The chip counts rather than naming one of three.
+  assert.match(h.document.getElementById('branch-chip').textContent, /3/);
+
+  openChip(h);
+  const names = [...h.document.querySelectorAll('.place-name')].map((n: DomNode) => n.textContent);
+  assert.deepEqual(names, ['main', '1130', '1131']);
+
+  const checked = [...h.document.querySelectorAll('.place-item')]
+    .filter((row: DomNode) => row.querySelector('.menu-check').textContent === '✓')
+    .map((row: DomNode) => row.querySelector('.place-name').textContent);
+  assert.deepEqual(checked, ['main'], 'the session should mark where it is itself');
+});
+
+/** A worktree is named for the task it was cut for, not the branch it is on. */
+test('branch chip: a worktree shows its branch beside its name', () => {
+  const h = createHarness('branch-branchname');
+  sendPlaces(h, '2', true, [
+    { name: 'main', branch: 'main', path: '/repo', worktree: false, current: true },
+    { name: '1130', branch: 'fix/1130', path: '/w/1130', worktree: true, current: false },
+  ]);
+  openChip(h);
+  const branches = [...h.document.querySelectorAll('.place-branch')].map((n: DomNode) => n.textContent);
+  assert.deepEqual(branches, ['fix/1130'], 'a branch equal to the name would be noise');
+});
+
+test('branch chip: tapping again closes the list', () => {
+  const h = createHarness('branch-toggle');
+  sendPlaces(h, 'main', false, [
+    { name: 'main', branch: 'main', path: '/repo', worktree: false, current: true },
+  ]);
+  openChip(h);
+  assert.equal(h.document.querySelector('.branch-menu').hidden, false);
+  openChip(h);
+  assert.equal(h.document.querySelector('.branch-menu').hidden, true);
+});

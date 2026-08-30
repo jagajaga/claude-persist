@@ -1222,9 +1222,14 @@
 
   // Where this conversation is working — not the window's repo, and not
   // necessarily the directory the session started in.
-  function renderBranch(name, worktree, dir, held) {
+  /** Everywhere this conversation has work: its own checkout and any worktrees. */
+  let workPlaces = [];
+
+  function renderBranch(name, worktree, dir, held, places) {
+    workPlaces = Array.isArray(places) ? places : [];
     if (!name) {
       branchChip.hidden = true;
+      branchMenu.hidden = true;
       return;
     }
     // The host already decided what this chip says: a worktree name when one is
@@ -1232,12 +1237,57 @@
     // splitting off the main one.
     branchChip.textContent = `${worktree ? '⋔' : '⎇'} ${name}`;
     branchChip.classList.toggle('wt', !!worktree);
-    const agents = Array.isArray(held) ? held : [];
-    branchChip.title = agents.length
-      ? `${dir}\nagent worktrees: ${agents.join(', ')}`
-      : dir;
+    branchChip.title =
+      workPlaces.length > 1 ? `${workPlaces.length} worktrees — tap to list them` : dir;
     branchChip.hidden = false;
   }
+
+  /**
+   * The list behind the chip.
+   *
+   * The chip can only ever name one place, and once subagents take worktrees of
+   * their own it names none of them — it counts. The names lived in a tooltip,
+   * which does not exist on a touch screen, so the one device where the count
+   * is least informative was also the one that could not see past it.
+   */
+  const branchMenu = el('div', 'attach-menu branch-menu');
+  branchMenu.hidden = true;
+  document.getElementById('composer').appendChild(branchMenu);
+
+  function renderBranchMenu() {
+    branchMenu.replaceChildren();
+    if (workPlaces.length === 0) {
+      branchMenu.appendChild(el('div', 'menu-title', 'Not in a repository'));
+      return;
+    }
+    branchMenu.appendChild(
+      el('div', 'menu-title', workPlaces.length === 1 ? 'Working in' : `Working in ${workPlaces.length} places`),
+    );
+    for (const place of workPlaces) {
+      const row = el('div', 'menu-item place-item');
+      row.appendChild(el('span', 'menu-check', place.current ? '✓' : ''));
+      row.appendChild(el('span', 'place-glyph', place.worktree ? '⋔' : '⎇'));
+      const label = el('span', 'place-name', place.name);
+      label.title = place.path;
+      row.appendChild(label);
+      // A worktree's name is usually the task it was cut for, not the branch it
+      // is on, so both are worth showing when they differ.
+      if (place.branch && place.branch !== place.name) {
+        row.appendChild(el('span', 'place-branch', place.branch));
+      }
+      branchMenu.appendChild(row);
+    }
+  }
+
+  branchChip.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!branchMenu.hidden) {
+      branchMenu.hidden = true;
+      return;
+    }
+    renderBranchMenu();
+    branchMenu.hidden = false;
+  });
 
   // A long transcript is replayed in a window, newest first, because sending
   // and rendering tens of thousands of events blocks the webview outright.
@@ -1616,7 +1666,7 @@
         if (!modelMenu.hidden) renderModelMenu();
         break;
       case 'branch':
-        renderBranch(msg.name, msg.worktree, msg.path, msg.held);
+        renderBranch(msg.name, msg.worktree, msg.path, msg.held, msg.places);
         break;
     }
   });
@@ -1820,6 +1870,9 @@
     }
     if (!promptMenu.hidden && !promptMenu.contains(e.target) && !promptBar.contains(e.target)) {
       promptMenu.hidden = true;
+    }
+    if (!branchMenu.hidden && !branchMenu.contains(e.target) && !branchChip.contains(e.target)) {
+      branchMenu.hidden = true;
     }
   });
 

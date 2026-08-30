@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-  heldWorktrees,
+  registeredWorktrees,
   parseHead,
   parseGitFile,
   formatBranch,
@@ -134,29 +134,32 @@ test('readBranch: missing HEAD file is unknown, not a throw', () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-test('heldWorktrees: only locked agent worktrees count', () => {
-  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-held-'));
+/**
+ * Unfiltered on purpose. The previous version required a `locked` marker and a
+ * path under .claude/worktrees; against a real repository that matched none of
+ * 38 worktrees, because agents create them with a plain `git worktree add`.
+ */
+test('registeredWorktrees: every registration is returned, lock or not', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-reg-'));
   const reg = path.join(repo, '.git', 'worktrees');
   const add = (name: string, target: string, locked: boolean): void => {
     const d = path.join(reg, name);
     fs.mkdirSync(d, { recursive: true });
     fs.writeFileSync(path.join(d, 'gitdir'), `${target}\n`);
+    fs.writeFileSync(path.join(d, 'HEAD'), `ref: refs/heads/topic/${name}\n`);
     if (locked) fs.writeFileSync(path.join(d, 'locked'), '');
   };
-  const agent = path.join(repo, '.claude', 'worktrees');
-  add('held', path.join(agent, 'held', '.git'), true);
-  add('idle', path.join(agent, 'idle', '.git'), false); // agent, but not locked
-  add('mine', path.join(repo, '..', 'mine', '.git'), true); // locked, but not an agent worktree
+  fs.mkdirSync(reg, { recursive: true });
+  fs.writeFileSync(path.join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  add('anywhere', '/home/coder/wt/anywhere/.git', false);
+  add('locked-one', '/srv/checkouts/locked-one/.git', true);
 
-  const info = {
-    gitDir: path.join(repo, '.git'),
-    headFile: path.join(repo, '.git', 'HEAD'),
-    isWorktree: false,
-    root: repo,
-    commonDir: path.join(repo, '.git'),
-  };
-  assert.deepEqual(heldWorktrees(info), ['held']);
-  fs.rmSync(repo, { recursive: true, force: true });
+  const info = findGitDir(repo);
+  assert.ok(info);
+  const found = registeredWorktrees(info);
+  assert.deepEqual(found.map((w) => w.name), ['anywhere', 'locked-one']);
+  assert.deepEqual(found.map((w) => w.path), ['/home/coder/wt/anywhere', '/srv/checkouts/locked-one']);
+  assert.deepEqual(found.map((w) => w.branch), ['topic/anywhere', 'topic/locked-one']);
 });
 
 test('heldWorktrees: a repository with no linked worktrees is empty', () => {
@@ -169,7 +172,7 @@ test('heldWorktrees: a repository with no linked worktrees is empty', () => {
     root: repo,
     commonDir: path.join(repo, '.git'),
   };
-  assert.deepEqual(heldWorktrees(info), []);
+  assert.deepEqual(registeredWorktrees(info), []);
   fs.rmSync(repo, { recursive: true, force: true });
 });
 
@@ -177,7 +180,7 @@ test('heldWorktrees: a repository with no linked worktrees is empty', () => {
 // workPlaces: everywhere this conversation has work in progress
 // ---------------------------------------------------------------------------
 
-/** A repository with `n` locked agent worktrees, each on its own branch. */
+/** A repository with worktrees on disk, each on its own branch. */
 function repoWithWorktrees(names: string[]): { root: string; info: GitInfo } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-places-'));
   fs.mkdirSync(path.join(root, '.git', 'worktrees'), { recursive: true });
@@ -187,7 +190,6 @@ function repoWithWorktrees(names: string[]): { root: string; info: GitInfo } {
     fs.mkdirSync(checkout, { recursive: true });
     const reg = path.join(root, '.git', 'worktrees', name);
     fs.mkdirSync(reg, { recursive: true });
-    fs.writeFileSync(path.join(reg, 'locked'), '');
     fs.writeFileSync(path.join(reg, 'gitdir'), `${path.join(checkout, '.git')}\n`);
     fs.writeFileSync(path.join(reg, 'HEAD'), `ref: refs/heads/fix/${name}\n`);
   }
@@ -198,7 +200,7 @@ function repoWithWorktrees(names: string[]): { root: string; info: GitInfo } {
 
 test('workPlaces: a plain checkout is one place, named by its branch', () => {
   const { root, info } = repoWithWorktrees([]);
-  const places = workPlaces(info, root);
+  const places = workPlaces(info, root, []);
   assert.equal(places.length, 1);
   assert.deepEqual(
     { name: places[0].name, branch: places[0].branch, worktree: places[0].worktree, current: places[0].current },
@@ -206,9 +208,10 @@ test('workPlaces: a plain checkout is one place, named by its branch', () => {
   );
 });
 
-test('workPlaces: each held agent worktree is listed, with the branch it is on', () => {
+test('workPlaces: a worktree in use is listed, with the branch it is on', () => {
   const { root, info } = repoWithWorktrees(['1130', '1131']);
-  const places = workPlaces(info, root);
+  const inUse = ['1130', '1131'].map((n) => path.join(root, '.claude', 'worktrees', n));
+  const places = workPlaces(info, root, inUse);
   assert.deepEqual(places.map((p) => p.name), ['main', '1130', '1131']);
   assert.deepEqual(places.map((p) => p.branch), ['main', 'fix/1130', 'fix/1131']);
   assert.deepEqual(places.map((p) => p.current), [true, false, false]);
@@ -227,12 +230,25 @@ test('workPlaces: the path is read from git, not built from the name', () => {
   fs.mkdirSync(elsewhere, { recursive: true });
   fs.writeFileSync(path.join(reg, 'gitdir'), `${path.join(elsewhere, '.git')}\n`);
 
-  const places = workPlaces(info, root);
+  const places = workPlaces(info, root, [elsewhere]);
   assert.equal(places[1].path, elsewhere);
 });
 
 test('workPlaces: an unreadable worktree is skipped rather than faked', () => {
   const { root, info } = repoWithWorktrees(['1130']);
+  const wt = path.join(root, '.claude', 'worktrees', '1130');
   fs.rmSync(path.join(root, '.git', 'worktrees', '1130', 'gitdir'));
-  assert.deepEqual(workPlaces(info, root).map((p) => p.name), ['main']);
+  assert.deepEqual(workPlaces(info, root, [wt]).map((p) => p.name), ['main']);
+});
+
+/**
+ * The point of the rewrite: a registered worktree nobody is in is not somewhere
+ * this conversation is working. One repository here had 38 registered and two
+ * in use.
+ */
+test('workPlaces: registered but idle worktrees are not listed', () => {
+  const { root, info } = repoWithWorktrees(['1130', '1131']);
+  assert.deepEqual(workPlaces(info, root, []).map((p) => p.name), ['main']);
+  const one = path.join(root, '.claude', 'worktrees', '1131');
+  assert.deepEqual(workPlaces(info, root, [one]).map((p) => p.name), ['main', '1131']);
 });

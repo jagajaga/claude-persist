@@ -1225,7 +1225,7 @@
   /** Everywhere this conversation has work: its own checkout and any worktrees. */
   let workPlaces = [];
 
-  function renderBranch(name, worktree, dir, held, places) {
+  function renderBranch(name, worktree, dir, places) {
     workPlaces = Array.isArray(places) ? places : [];
     if (!name) {
       branchChip.hidden = true;
@@ -1666,7 +1666,7 @@
         if (!modelMenu.hidden) renderModelMenu();
         break;
       case 'branch':
-        renderBranch(msg.name, msg.worktree, msg.path, msg.held, msg.places);
+        renderBranch(msg.name, msg.worktree, msg.path, msg.places);
         break;
     }
   });

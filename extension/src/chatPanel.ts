@@ -12,7 +12,8 @@ import type {
 } from '@claude-persist/shared';
 import type { DaemonClient } from './daemonClient';
 import { mergeExtraModels } from './models';
-import { chipLabel, findGitDir, heldWorktrees, workPlaces } from './gitBranch';
+import { chipLabel, findGitDir, registeredWorktrees, workPlaces } from './gitBranch';
+import { dirsInUse } from './activeDirs';
 
 export const VIEW_TYPE = 'claudePersist.chat';
 
@@ -101,6 +102,12 @@ interface PanelEntry {
   branchWatcher?: fs.FSWatcher;
   /** Last value pushed to the webview, so repeated fs events post once. */
   branchKey?: string;
+  /**
+   * Worktrees seen in use since this turn began. An agent between two commands
+   * has no process in its worktree for that instant; without this the list
+   * would blink entries in and out while it works.
+   */
+  worktreesThisTurn: Set<string>;
   /** Watches the worktree registry, so held worktrees update live. */
   registryWatcher?: fs.FSWatcher;
   /** How many events this panel asks for; grows when the user loads earlier. */
@@ -154,6 +161,13 @@ export class ChatPanelManager {
     // Reflect the working state in the editor tab title, so it's visible
     // even when the tab is not focused.
     if (event.event.type === 'status') {
+      // A finished turn releases its worktrees: keeping them would turn the
+      // list into everywhere this chat has ever worked.
+      if (event.event.status !== 'running') {
+        entry.worktreesThisTurn.clear();
+        entry.branchKey = undefined;
+        this.updateBranch(entry);
+      }
       entry.panel.title =
         (event.event.status === 'running' ? '⧗ ' : '') + entry.baseTitle;
       if (entry.panel.visible) this.onViewed?.(sessionId);
@@ -276,6 +290,7 @@ export class ChatPanelManager {
       ready: false,
       queue: [],
       baseTitle: title ?? panel.title,
+      worktreesThisTurn: new Set<string>(),
       pendingAttachments: [],
       uploads: new Map(),
       replayLimit: REPLAY_LIMIT,
@@ -708,28 +723,31 @@ export class ChatPanelManager {
     const cwd = entry.cwd;
     if (!cwd) return;
     const info = findGitDir(cwd);
-    // Read from git's registry, not from remembered hook events: worktrees
-    // created before this daemon started are just as real as ones created after.
-    const held = info ? heldWorktrees(info) : [];
-    const places = info ? workPlaces(info, cwd) : [];
-    const chip = chipLabel(places);
-    // The list is part of the key: a subagent taking another worktree may
-    // leave the chip's text alone, and the panel still has to hear about it.
-    const key = [
-      chip?.text ?? '',
-      String(chip?.worktree ?? false),
-      ...places.map((place) => `${place.name}@${place.branch ?? ''}`),
-    ].join('|');
-    if (entry.branchKey === key) return;
-    entry.branchKey = key;
-    this.post(entry, {
-      type: 'branch',
-      name: chip?.text ?? null,
-      worktree: chip?.worktree ?? false,
-      held,
-      path: cwd,
-      places,
-    });
+      // Which worktrees this conversation is using is a question about
+      // processes, not about git: the registry says a checkout exists, not that
+      // anyone is in it. Sticky for the length of a turn, because an agent
+      // between two commands has no process in its worktree for that moment and
+      // must not vanish from the list and come back.
+      const registered = info ? registeredWorktrees(info) : [];
+      for (const dir of dirsInUse(registered.map((w) => w.path))) entry.worktreesThisTurn.add(dir);
+      const places = info ? workPlaces(info, cwd, entry.worktreesThisTurn) : [];
+      const chip = chipLabel(places);
+      // The list is part of the key: a subagent taking another worktree may
+      // leave the chip's text alone, and the panel still has to hear about it.
+      const key = [
+        chip?.text ?? '',
+        String(chip?.worktree ?? false),
+        ...places.map((place) => `${place.name}@${place.branch ?? ''}`),
+      ].join('|');
+      if (entry.branchKey === key) return;
+      entry.branchKey = key;
+      this.post(entry, {
+        type: 'branch',
+        name: chip?.text ?? null,
+        worktree: chip?.worktree ?? false,
+        path: cwd,
+        places,
+      });
   }
 
   /**

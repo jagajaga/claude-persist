@@ -126,18 +126,28 @@ export function chipLabel(places: WorkPlace[]): ChipState | null {
   return { text: String(places.length), worktree: true };
 }
 
-/** Where Claude Code puts the worktrees it manages for subagents. */
-const AGENT_WORKTREE_SEGMENT = `${path.sep}.claude${path.sep}worktrees${path.sep}`;
+/** A linked worktree as git's registry records it. */
+export interface WorktreeEntry {
+  name: string;
+  /** The checkout directory, read from git rather than built from the name. */
+  path: string;
+  branch: string | null;
+}
 
 /**
- * Names of agent worktrees the repository currently *holds* — registered under
- * .claude/worktrees and locked, which is how Claude Code marks one as in use.
+ * Every linked worktree the repository knows about.
  *
- * Read from git's own registry rather than from SDK hook events: the registry
- * is true regardless of which process created the worktree or when, so this
- * survives a daemon restart. Hook-based counting did not.
+ * Deliberately unfiltered. This used to require a `locked` marker and a path
+ * under .claude/worktrees, on the belief that Claude Code managed them that
+ * way. It does not: agents run a plain `git worktree add` wherever they like,
+ * which locks nothing -- in the repository this was written against, 38
+ * worktrees were registered, none were locked, and none were under that path,
+ * so the filter matched every time and found nothing forever.
+ *
+ * Deciding which of these is actually in use is a question about processes,
+ * not about git; see activeDirs.ts.
  */
-export function heldWorktrees(info: GitInfo): string[] {
+export function registeredWorktrees(info: GitInfo): WorktreeEntry[] {
   const dir = path.join(info.commonDir, 'worktrees');
   let names: string[];
   try {
@@ -145,19 +155,25 @@ export function heldWorktrees(info: GitInfo): string[] {
   } catch {
     return []; // no linked worktrees, or no repository
   }
-  const held: string[] = [];
-  for (const name of names) {
-    // `locked` marks a worktree as actively held; an idle leftover has none.
-    if (!fs.existsSync(path.join(dir, name, 'locked'))) continue;
-    let target: string;
+  const out: WorktreeEntry[] = [];
+  for (const name of names.sort()) {
+    let root: string;
     try {
-      target = fs.readFileSync(path.join(dir, name, 'gitdir'), 'utf8').trim();
+      // `gitdir` points at the worktree's own .git file; its directory is the
+      // checkout. A worktree's folder need not be named after the worktree.
+      root = path.dirname(fs.readFileSync(path.join(dir, name, 'gitdir'), 'utf8').trim());
     } catch {
       continue;
     }
-    if (target.includes(AGENT_WORKTREE_SEGMENT)) held.push(name);
+    let branch: string | null = null;
+    try {
+      branch = formatBranch(parseHead(fs.readFileSync(path.join(dir, name, 'HEAD'), 'utf8')));
+    } catch {
+      branch = null;
+    }
+    out.push({ name, path: root, branch });
   }
-  return held.sort();
+  return out;
 }
 
 /** A place this conversation has work in: its own checkout, or an agent worktree. */
@@ -182,34 +198,23 @@ export interface WorkPlace {
  * with the names hidden in a tooltip -- which does not exist on a phone. This
  * is the same information, listable.
  */
-export function workPlaces(info: GitInfo, cwd: string): WorkPlace[] {
+export function workPlaces(info: GitInfo, cwd: string, activePaths: Iterable<string> = []): WorkPlace[] {
   const here: WorkPlace = {
-    name: info.isWorktree ? path.basename(info.root) : (formatBranch(readBranch(info)) ?? path.basename(info.root)),
+    name: info.isWorktree
+      ? path.basename(info.root)
+      : (formatBranch(readBranch(info)) ?? path.basename(info.root)),
     branch: formatBranch(readBranch(info)),
     path: info.root,
     worktree: info.isWorktree,
     current: true,
   };
   const places = [here];
-  const dir = path.join(info.commonDir, 'worktrees');
-  for (const name of heldWorktrees(info)) {
-    let root: string;
-    try {
-      // `gitdir` points at the worktree's own .git file; its directory is the
-      // checkout. Reading it is what makes the path real rather than guessed
-      // from the name, which need not match the folder.
-      root = path.dirname(fs.readFileSync(path.join(dir, name, 'gitdir'), 'utf8').trim());
-    } catch {
-      continue;
-    }
-    if (path.resolve(root) === path.resolve(here.path)) continue; // already listed
-    let branch: string | null = null;
-    try {
-      branch = formatBranch(parseHead(fs.readFileSync(path.join(dir, name, 'HEAD'), 'utf8')));
-    } catch {
-      branch = null;
-    }
-    places.push({ name, branch, path: root, worktree: true, current: false });
+  const active = new Set([...activePaths].map((p) => path.resolve(p)));
+  if (active.size === 0) return places;
+  for (const wt of registeredWorktrees(info)) {
+    if (!active.has(path.resolve(wt.path))) continue;
+    if (path.resolve(wt.path) === path.resolve(here.path)) continue; // already listed
+    places.push({ name: wt.name, branch: wt.branch, path: wt.path, worktree: true, current: false });
   }
   return places;
 }

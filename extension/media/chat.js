@@ -67,154 +67,60 @@
 
   /** The height actually visible to the user; the full frame when unknown. */
   let visibleHeight = () => window.innerHeight;
-  /** Whether a soft keyboard is currently covering part of the frame. */
-  let keyboardIsUp = () => false;
 
-  // Mobile keyboards shrink the visual viewport without changing layout height,
-  // which leaves the composer hidden behind the keyboard. Constrain the body to
-  // the actually-visible height so the input stays above it.
+  // Keep the panel inside whatever the on-screen keyboard leaves visible.
   //
-  // The subtlety is that this document is an iframe inside the editor, and
-  // visualViewport reports the *window's* visible height, not this frame's.
-  // Setting the body to it therefore left the frame too tall by exactly the
-  // chrome above us — the browser toolbar and the editor's tab bar — so the
-  // bottom strip of the composer, the row with the send button, stayed under
-  // the keyboard. Close enough to look almost right, which is why it survived.
+  // Platforms disagree about which viewport a keyboard shrinks. Chrome shrinks
+  // the visual viewport; a host whose page carries
+  // `interactive-widget=resizes-content` shrinks the layout viewport instead,
+  // and this frame simply gets a smaller innerHeight. Taking the smaller of the
+  // two needs to know neither which happened nor by how much.
   //
-  // That difference is measurable: with no keyboard up, the window's visible
-  // height minus this frame's height is everything around us. Measure it while
-  // the keyboard is down, then subtract it while the keyboard is up.
+  // The one correction that is needed: this document is an iframe inside the
+  // editor, and visualViewport reports the *window's* visible height, not this
+  // frame's. Sizing the body to it left the frame too tall by exactly the
+  // chrome above us -- browser toolbar plus tab bar -- so the bottom strip of
+  // the composer stayed under the keyboard. That difference is measurable while
+  // nothing covers us, and subtracted while something does.
+  //
+  // Where a host does neither -- Firefox on Android against an unpatched
+  // code-server -- nothing here can see the keyboard at all. Guessing its size
+  // produced a worse bug than the one it fixed: space reserved on a screen with
+  // no keyboard on it. scripts/fix-mobile-keyboard.sh is the fix for that, and
+  // it belongs on the server rather than in this file.
   if (window.visualViewport) {
     const vv = window.visualViewport;
     /** Chrome outside this iframe, measured at rest. */
     let chromeOutside = 0;
     /** Never shrink to nothing if a measurement goes wrong. */
     const MIN_BODY_HEIGHT = 200;
-    /** A keyboard is at least this tall; below it, treat the frame as at rest. */
-    const KEYBOARD_MIN = 120;
-
-    /**
-     * Firefox on Android never shrinks a nested frame's visual viewport when
-     * the keyboard opens, so on that browser everything above measures no
-     * change and the composer stays underneath it. There is no API left to
-     * ask, so when the viewport has never once reported a shrink and the
-     * composer has focus on a touch keyboard, assume one.
-     *
-     * Guessing high is the safe direction: too large only wastes some space
-     * above the keyboard, while too small hides the send button again.
-     */
-    /**
-     * How tall the keyboard is, measured rather than assumed.
-     *
-     * Firefox on Android never shrinks a nested frame's visual viewport, so
-     * there is no API here that will say. The browser still knows: it keeps a
-     * focused field above the keyboard. So give the document room to scroll,
-     * let the browser put the field where it wants it, and read that back --
-     * the bottom edge it chose IS the bottom of the visible area.
-     *
-     * Measured once per frame size and remembered, so the probe runs on the
-     * first focus after opening or rotating, and never again.
-     */
-    let measured = 0;
-    let measuredFor = 0;
-    let probing = false;
-    let assumed = 0;
-    let sawRealShrink = false;
-
-    const coarsePointer = (() => {
-      try {
-        return window.matchMedia('(pointer: coarse)').matches;
-      } catch {
-        return false;
-      }
-    })();
-
-    const keyboardUp = () =>
-      assumed > 0 || window.innerHeight - (vv.height - chromeOutside) > KEYBOARD_MIN;
 
     const fitViewport = () => {
-      if (probing) return; // the probe owns the body height while it runs
       // Re-measure whenever nothing is covering us: rotation, a split editor,
       // a toolbar hiding on scroll all change it, and a stale measurement is
       // worse than none.
       if (document.activeElement !== inputEl && vv.height >= window.innerHeight) {
         chromeOutside = vv.height - window.innerHeight;
       }
-      const visible = vv.height - chromeOutside;
-      if (window.innerHeight - visible > KEYBOARD_MIN) sawRealShrink = true;
-      document.body.style.height =
-        `${Math.max(MIN_BODY_HEIGHT, Math.min(window.innerHeight, visible) - assumed)}px`;
+      // Whichever is smaller: the frame we were given, or the part of the
+      // window still showing. A soft keyboard shrinks one or the other
+      // depending on the platform, and taking the minimum needs to know
+      // neither which nor by how much.
+      const visible = Math.min(window.innerHeight, vv.height - chromeOutside);
+      document.body.style.height = `${Math.max(MIN_BODY_HEIGHT, visible)}px`;
       if (pinned) scrollToBottom();
     };
 
-    /**
-     * Run the probe: make the page scrollable, let the browser scroll the
-     * focused field into view, and read where it landed.
-     */
-    const probe = () => {
-      const frame = window.innerHeight;
-      probing = true;
-      // Twice the frame is simply "definitely enough to scroll"; the answer
-      // does not depend on it.
-      document.body.style.height = `${frame * 2}px`;
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          const bottom = inputEl.getBoundingClientRect().bottom;
-          const inset = Math.round(frame - bottom);
-          probing = false;
-          // A field the browser left below the fold, or one it never moved,
-          // measures nothing. Reserve nothing rather than invent a number.
-          if (inset > 0 && inset < frame) {
-            measured = inset;
-            measuredFor = frame;
-          }
-          assumed = measured;
-          fitViewport();
-        });
-      });
-    };
-
-    /**
-     * Focus is only a proxy for "the keyboard is up", and on Android it is a
-     * poor one in the closing direction: dismissing the keyboard with the back
-     * button does not blur the field, so the space stayed reserved and the
-     * panel ended a third of the way up the screen with nothing under it.
-     *
-     * So: blur releases it, and so does touching the conversation, which is
-     * what you do once the keyboard is gone. Typing puts it back, and typing
-     * is proof the keyboard is really there.
-     */
-    const useKeyboard = (on) => {
-      if (!on) {
-        if (assumed === 0) return;
-        assumed = 0;
-        fitViewport();
-        return;
-      }
-      if (!coarsePointer || sawRealShrink) return; // the viewport reports it itself
-      if (measured && measuredFor === window.innerHeight) {
-        if (assumed === measured) return;
-        assumed = measured;
-        fitViewport();
-        return;
-      }
-      if (!probing) probe();
-    };
-
-    inputEl.addEventListener('focus', () => useKeyboard(true));
-    inputEl.addEventListener('keydown', () => useKeyboard(true));
-    inputEl.addEventListener('blur', () => useKeyboard(false));
-    messagesEl.addEventListener('touchstart', () => useKeyboard(false), { passive: true });
-
     vv.addEventListener('resize', fitViewport);
     vv.addEventListener('scroll', fitViewport);
+    // A keyboard that resizes the layout viewport arrives here rather than on
+    // the visual viewport, and is the case a correctly configured host gives.
+    window.addEventListener('resize', fitViewport);
     fitViewport();
 
-    // Exposed for autosize: the textarea must not grow into space the keyboard
-    // is already occupying.
     visibleHeight = () =>
-      Math.max(MIN_BODY_HEIGHT, Math.min(window.innerHeight, vv.height - chromeOutside) - assumed);
-    keyboardIsUp = keyboardUp;
+      Math.max(MIN_BODY_HEIGHT, Math.min(window.innerHeight, vv.height - chromeOutside));
+
   }
   // When the field gains focus (keyboard opening), force the composer into
   // view. The webview is an iframe inside code-server's page, so we rely on

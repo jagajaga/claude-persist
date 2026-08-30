@@ -178,17 +178,21 @@ the roadmap, not in the product.
 ### Mobile (Android) keyboard
 
 The chat resizes itself to whatever the on-screen keyboard leaves visible, but
-Android Chrome overlays the keyboard on code-server's fixed-position workbench
-(`resizes-visual` by default), so the surrounding editor does not move and the
-result is cramped. To make the whole workbench resize, run once on the server,
-and again after each code-server upgrade:
+only if the platform says what that is. Android browsers overlay the keyboard on
+code-server's fixed-position workbench (`resizes-visual` by default) and Firefox
+does not report the change to a nested frame at all, so from inside the panel
+there is nothing to measure and nothing that can compensate for it.
+
+Run this once on the server, and again after each code-server upgrade:
 
 ```bash
 ./scripts/fix-mobile-keyboard.sh
 ```
 
-It adds `interactive-widget=resizes-content` to code-server's viewport meta.
-Hard-reload the browser afterwards.
+It adds `interactive-widget=resizes-content` to code-server's viewport meta, so
+the keyboard shrinks the layout viewport and the whole workbench — editors,
+terminals and this extension's composer — stays above it. Hard-reload the
+browser afterwards; the HTML is cached.
 
 ### Optional: daemon under systemd
 

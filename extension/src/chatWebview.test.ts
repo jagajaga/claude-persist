@@ -1486,111 +1486,21 @@ test('account menu: it does say "another" once one account works', () => {
 });
 
 /**
- * Firefox on Android never shrinks a nested frame's visual viewport when the
- * keyboard opens. Every measurement above therefore reports "no keyboard", the
- * body stays full height, and the composer sits underneath it -- which is
- * exactly what the fix for Chrome did not solve.
+ * A host carrying `interactive-widget=resizes-content` shrinks the LAYOUT
+ * viewport rather than the visual one, so this frame simply gets a smaller
+ * innerHeight. Taking the smaller of the two means the panel follows either,
+ * without needing to know which the platform did.
+ *
+ * Where a host does neither, nothing here can see the keyboard, and the
+ * guesses that stood in for it reserved space on screens with no keyboard on
+ * them. That is the server's job now, not this file's.
  */
-function focusComposer(h: Harness, on: boolean): void {
-  const input = h.document.getElementById('input');
-  input.dispatchEvent(new h.window.MessageEvent(on ? 'focus' : 'blur', { data: null }));
-}
-
-/** The probe spans two animation frames; one flush is not long enough. */
-async function settle(h: Harness): Promise<void> {
-  await h.flush();
-  await h.flush();
-}
-
-/** States where the browser left the focused field, which is what the probe reads. */
-function fieldLandsAt(h: Harness, bottom: number): void {
-  const input = h.document.getElementById('input') as DomNode;
-  input.dataset.top = String(bottom - 40);
-  input.dataset.height = '40';
-}
-
-test('keyboard: the reserved space is measured from where the field lands', async () => {
-  const h = createHarness('kbd-measure', { coarsePointer: true });
+test('keyboard: a shrinking frame is followed, not just a shrinking viewport', () => {
+  const h = createHarness('kbd-layout-shrink');
   withViewport(h, { windowVisible: 2400, frame: 2200 });
   assert.equal(bodyHeight(h), 2200);
 
-  // The browser keeps a focused field above the keyboard, so a field ending at
-  // 1400 in a 2200 frame means 800px of keyboard.
-  fieldLandsAt(h, 1400);
-  focusComposer(h, true);
-  await settle(h);
-  assert.equal(bodyHeight(h), 1400, 'the measurement was not used');
-
-  focusComposer(h, false);
-  assert.equal(bodyHeight(h), 2200, 'the room is given back when focus leaves');
-});
-
-/** A field the browser never moved measures nothing, and nothing is invented. */
-test('keyboard: an unmoved field reserves nothing', async () => {
-  const h = createHarness('kbd-nomeasure', { coarsePointer: true });
-  withViewport(h, { windowVisible: 2400, frame: 2200 });
-  fieldLandsAt(h, 4400); // still at the bottom of the doubled page: no scroll
-  focusComposer(h, true);
-  await settle(h);
-  assert.equal(bodyHeight(h), 2200);
-});
-
-/** A desktop keyboard takes no space; probing there would be a bug. */
-test('keyboard: nothing is reserved on a fine pointer', async () => {
-  const h = createHarness('kbd-no-assume', { coarsePointer: false });
-  withViewport(h, { windowVisible: 2400, frame: 2200 });
-  fieldLandsAt(h, 1400);
-  focusComposer(h, true);
-  await h.flush();
-  assert.equal(bodyHeight(h), 2200);
-});
-
-/**
- * When the browser does report a real shrink, that measurement is the truth
- * and the probe must not run on top of it.
- */
-test('keyboard: a reported shrink wins over the probe', async () => {
-  const h = createHarness('kbd-measured-wins', { coarsePointer: true });
-  withViewport(h, { windowVisible: 2400, frame: 2200 });
-  withViewport(h, { windowVisible: 1300, frame: 2200 }); // a real keyboard, reported
-  assert.equal(bodyHeight(h), 1100);
-  fieldLandsAt(h, 1400);
-  focusComposer(h, true);
-  await h.flush();
-  assert.equal(bodyHeight(h), 1100, 'the probe must not override what was reported');
-});
-
-/**
- * Dismissing an Android keyboard with the back button does not blur the field.
- * The reserved space stayed reserved, so the panel ended a third of the way up
- * the screen with a dead white area beneath it and no way to get it back.
- */
-test('keyboard: touching the conversation gives the space back', async () => {
-  const h = createHarness('kbd-release-on-touch', { coarsePointer: true });
-  withViewport(h, { windowVisible: 2400, frame: 2200 });
-  fieldLandsAt(h, 1400);
-  focusComposer(h, true);
-  await settle(h);
-  assert.ok(bodyHeight(h) < 2200, 'space was never reserved');
-
-  h.document.getElementById('messages').dispatchEvent(new h.window.MessageEvent('touchstart', { data: null }));
-  assert.equal(bodyHeight(h), 2200, 'the dead area under the panel is still there');
-});
-
-/** Typing is proof the keyboard is really up, so it must come back. */
-test('keyboard: typing reserves the space again', async () => {
-  const h = createHarness('kbd-retake', { coarsePointer: true });
-  withViewport(h, { windowVisible: 2400, frame: 2200 });
-  fieldLandsAt(h, 1400);
-  focusComposer(h, true);
-  await settle(h);
-  const reserved = bodyHeight(h);
-
-  h.document.getElementById('messages').dispatchEvent(new h.window.MessageEvent('touchstart', { data: null }));
-  assert.equal(bodyHeight(h), 2200);
-
-  h.document.getElementById('input').dispatchEvent(
-    new h.window.KeyboardEvent('keydown', { key: 'a', bubbles: true }),
-  );
-  assert.equal(bodyHeight(h), reserved, 'typing did not bring the room back');
+  // The keyboard resized the workbench: the frame shrank, the window did not.
+  withViewport(h, { windowVisible: 2400, frame: 1300 });
+  assert.equal(bodyHeight(h), 1300);
 });

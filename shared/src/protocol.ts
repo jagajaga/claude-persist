@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 28;
+export const PROTOCOL_VERSION = 29;
 
 /**
  * Reply to `hello`. `entry` is the module path the daemon was launched from;
@@ -18,6 +18,15 @@ export interface HelloResult {
   protocolVersion: number;
   pid: number;
   entry: string;
+  /**
+   * The extension build this daemon was launched by, when it was told.
+   *
+   * Without it a daemon is replaced only when the protocol changes or its entry
+   * file is deleted -- and old extension directories are never pruned, so a
+   * daemon kept serving from a build six releases old while every fix shipped
+   * since sat unused on disk.
+   */
+  version?: string | null;
 }
 
 export type SessionStatus = 'idle' | 'running' | 'error';

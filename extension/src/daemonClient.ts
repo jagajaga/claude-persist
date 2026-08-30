@@ -43,7 +43,7 @@ const socketPath =
 // package is ESM, so the constant can't be require()d from this CJS module).
 // protocolVersion.test.ts asserts the two stay equal — desyncing them makes
 // the extension kill every daemon it spawns.
-const EXPECTED_PROTOCOL = 28;
+const EXPECTED_PROTOCOL = 29;
 
 /** How long to wait for a reply before treating the daemon as wedged. */
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -101,9 +101,30 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  *
  * Exported for tests; the deliberate narrowness is the interesting part.
  */
-export function stalenessReason(info: HelloResult, expectedProtocol: number): string | null {
+/** -1, 0, 1 for a.b.c version strings; unparseable sorts as equal. */
+export function compareVersions(a: string, b: string): number {
+  const parts = (v: string): number[] => v.split('.').map((n) => Number.parseInt(n, 10) || 0);
+  const [x, y] = [parts(a), parts(b)];
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const diff = (x[i] ?? 0) - (y[i] ?? 0);
+    if (diff !== 0) return diff < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+export function stalenessReason(
+  info: HelloResult,
+  expectedProtocol: number,
+  ourVersion: string | null = null,
+): string | null {
   if (info.protocolVersion !== expectedProtocol) {
     return `Outdated daemon (protocol ${info.protocolVersion} vs ${expectedProtocol})`;
+  }
+  // Only older, never merely different: two windows on different builds would
+  // otherwise kill each other's daemon forever. Older loses, so this converges
+  // on the newest build rather than oscillating.
+  if (ourVersion && info.version && compareVersions(info.version, ourVersion) < 0) {
+    return `Daemon from an older build (${info.version} vs ${ourVersion})`;
   }
   // Only "the file it was launched from no longer exists" counts. Comparing it
   // against our own resolved entry instead would make two windows configured
@@ -158,10 +179,13 @@ export class DaemonClient {
   private pending = new Map<number, { resolve(v: unknown): void; reject(e: Error): void }>();
   private handler: PushHandler;
   private daemonEntry: string;
+  /** This extension's version, handed to the daemon so upgrades can be seen. */
+  private version: string | null;
 
-  constructor(daemonEntry: string, handler: PushHandler) {
+  constructor(daemonEntry: string, handler: PushHandler, version: string | null = null) {
     this.daemonEntry = daemonEntry;
     this.handler = handler;
+    this.version = version;
   }
 
   get connected(): boolean {
@@ -253,7 +277,7 @@ export class DaemonClient {
   }
 
   private stalenessReason(info: HelloResult): string | null {
-    return stalenessReason(info, EXPECTED_PROTOCOL);
+    return stalenessReason(info, EXPECTED_PROTOCOL, this.version);
   }
 
   private tryConnect(): Promise<void> {

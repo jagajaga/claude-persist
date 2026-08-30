@@ -395,6 +395,8 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
       return {
         protocolVersion: PROTOCOL_VERSION,
         pid: process.pid,
+        // Told to us by the extension that spawned us; absent in a dev checkout.
+        version: process.env.CLAUDE_PERSIST_VERSION ?? null,
         // process.argv[1] is the daemon entry the extension spawned us with.
         // The client checks it still exists: an upgrade that doesn't change
         // the protocol keeps this daemon alive on purpose, but VS Code has by

@@ -114,7 +114,11 @@ async function doConnect(context: vscode.ExtensionContext): Promise<DaemonClient
       sessionsProvider.refresh();
       scheduleReconnect(context);
     },
-  });
+  },
+  // So a daemon left over from an older build is replaced rather than kept:
+  // old extension directories are never pruned, so its entry file goes on
+  // existing and nothing else would ever notice it is out of date.
+  (context.extension.packageJSON as { version?: string }).version ?? null);
   await fresh.connect();
   client = fresh;
   // The daemon has no access to VS Code settings, so anything it acts on has to

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { stalenessReason } from './daemonClient';
+import { compareVersions, stalenessReason } from './daemonClient';
 
 const OURS = 19;
 
@@ -60,4 +60,57 @@ test('a daemon launched from a different but existing entry is left alone', () =
 
 test('an empty entry (a daemon that could not report one) is not treated as deleted', () => {
   assert.equal(stalenessReason({ protocolVersion: OURS, pid: 1, entry: '' }, OURS), null);
+});
+
+// ---------------------------------------------------------------------------
+// A daemon from an older build must be replaced
+//
+// It was replaced only when the protocol changed or its entry file vanished.
+// Old extension directories are never pruned, so the entry goes on existing:
+// a daemon spawned by 1.0.13 was still serving after six releases, and every
+// daemon-side fix in them sat on disk doing nothing.
+// ---------------------------------------------------------------------------
+
+test('an older daemon build is stale even on a matching protocol', () => {
+  const reason = stalenessReason(
+    { protocolVersion: 29, pid: 1, entry: __filename, version: '1.0.13' },
+    29,
+    '1.0.20',
+  );
+  assert.match(reason ?? '', /older build/);
+  assert.match(reason ?? '', /1\.0\.13/);
+});
+
+test('the same build is not stale', () => {
+  assert.equal(
+    stalenessReason({ protocolVersion: 29, pid: 1, entry: __filename, version: '1.0.20' }, 29, '1.0.20'),
+    null,
+  );
+});
+
+/**
+ * Only older, never merely different. Two windows on different builds would
+ * otherwise kill each other's daemon forever -- the same mutual-murder shape
+ * the protocol check already had once. Older loses, so this converges.
+ */
+test('a newer daemon is left alone by an older window', () => {
+  assert.equal(
+    stalenessReason({ protocolVersion: 29, pid: 1, entry: __filename, version: '1.0.21' }, 29, '1.0.20'),
+    null,
+  );
+});
+
+test('a daemon that never reported a build is judged on protocol alone', () => {
+  assert.equal(
+    stalenessReason({ protocolVersion: 29, pid: 1, entry: __filename, version: null }, 29, '1.0.20'),
+    null,
+  );
+});
+
+test('compareVersions orders releases numerically, not as text', () => {
+  assert.equal(compareVersions('1.0.9', '1.0.10'), -1, '10 is after 9, not before it');
+  assert.equal(compareVersions('1.0.20', '1.0.20'), 0);
+  assert.equal(compareVersions('2.0.0', '1.9.9'), 1);
+  assert.equal(compareVersions('1.0', '1.0.0'), 0, 'a missing part is zero');
+  assert.equal(compareVersions('junk', 'junk'), 0, 'unparseable is not a licence to kill');
 });

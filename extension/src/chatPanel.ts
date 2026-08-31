@@ -14,7 +14,7 @@ import type {
 import type { DaemonClient } from './daemonClient';
 import { mergeExtraModels } from './models';
 import { chipLabel, findGitDir, registeredWorktrees, workPlaces } from './gitBranch';
-import { dirsInUse } from './activeDirs';
+import { dirsInUseBySession } from './activeDirs';
 
 export const VIEW_TYPE = 'claudePersist.chat';
 
@@ -737,7 +737,19 @@ export class ChatPanelManager {
       // between two commands has no process in its worktree for that moment and
       // must not vanish from the list and come back.
       const registered = info ? registeredWorktrees(info) : [];
-      for (const dir of dirsInUse(registered.map((w) => w.path))) entry.worktreesThisTurn.add(dir);
+      // Attributed, not merely occupied. Every session in a repository used to
+      // list every other session's worktrees, because "someone is working here"
+      // cannot tell two conversations apart. The daemon stamps its session id
+      // onto the CLI it launches, so the processes inside a worktree say whose
+      // it is; a worktree nobody claims is left to the session that is in it.
+      const owners = dirsInUseBySession(registered.map((w) => w.path));
+      for (const [dir, sessions] of owners) {
+        // Strictly this session's. An untagged worktree -- a terminal someone
+        // opened there, or work from a daemon older than the tag -- is somebody
+        // else's business; showing it to everyone is the bug being fixed, and
+        // showing it to nobody is merely a smaller list.
+        if (sessions.has(entry.sessionId)) entry.worktreesThisTurn.add(dir);
+      }
       const places = info ? workPlaces(info, cwd, entry.worktreesThisTurn) : [];
       const chip = chipLabel(places);
       // The list is part of the key: a subagent taking another worktree may

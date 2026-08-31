@@ -51,8 +51,8 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
   the turn has been going. Finished turns show their duration and token count.
 - **Git branch and worktrees** beside the composer: the branch name when there
   is one place, a count when subagents have taken worktrees of their own. Tap it
-  for the list -- every worktree, the branch each sits on, and which one this
-  conversation is in.
+  for the list -- the worktrees this conversation's agents are working in, the
+  branch each sits on, and which one the session itself is in.
 - **Connection loss is visible.** A heartbeat runs between the tab and the
   daemon; when it stops answering, a border pulses around the chat until it
   recovers.

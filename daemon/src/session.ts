@@ -890,6 +890,11 @@ export class DaemonSession {
         env: {
           ...process.env,
           CLAUDE_CONFIG_DIR: activeAccountDir ?? accountsStore.dirs.claudeDir,
+          // Stamps this session onto the CLI and everything it spawns, so a
+          // worktree can be traced back to the conversation working in it.
+          // Without it the panel could only ask "is anyone in this worktree",
+          // and every session in a repository saw every other session's.
+          CLAUDE_PERSIST_SESSION: this.meta.id,
         },
       },
     });

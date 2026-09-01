@@ -17,6 +17,12 @@ export const SIGN_IN_HINT =
 
 const AUTH = [
   /invalid api key/i,
+  // What an expired refresh token looks like coming back from the CLI. Seen
+  // when rotation moved to an account whose login had lapsed: the turn died
+  // and the only advice was to go and find a command.
+  /oauth session expired/i,
+  /could not be refreshed/i,
+  /failed to authenticate/i,
   /please run \/login/i,
   /\bnot logged in\b/i,
   /authentication[_ ]error/i,
@@ -47,4 +53,10 @@ export function friendlyError(message: string): string {
 export function isSetupFailure(message: string): boolean {
   const text = String(message ?? '');
   return [...AUTH, ...MISSING_BINARY].some((re) => re.test(text));
+}
+
+/** True when the fix is to sign in again, rather than to install something. */
+export function needsSignIn(message: string): boolean {
+  const text = String(message ?? '');
+  return AUTH.some((re) => re.test(text));
 }

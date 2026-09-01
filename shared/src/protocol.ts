@@ -104,7 +104,21 @@ export type ChatEvent =
       }>;
     }
   | { type: 'permission_resolved'; requestId: string; allowed: boolean; answers?: Record<string, string> }
-  | { type: 'status'; status: SessionStatus; detail?: string }
+  | {
+      type: 'status';
+      status: SessionStatus;
+      detail?: string;
+      /**
+       * Something the user can do about it, offered as a button.
+       *
+       * "Run this from the Command Palette" is not a fix, it is homework --
+       * and for an expired login it is homework the panel could have done,
+       * since it already knows which account stopped working.
+       */
+      action?: 'signin';
+      /** The account the action applies to; null means the default one. */
+      account?: string | null;
+    }
   | {
       type: 'result';
       summary: string;

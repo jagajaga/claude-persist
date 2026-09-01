@@ -23,7 +23,7 @@ import {
   tasksFromLevelSignal,
 } from './agents.js';
 import { NO_CLAUDE_MESSAGE, claudeExecutable } from './claudeExecutable.js';
-import { friendlyError, isSetupFailure } from './errorHints.js';
+import { friendlyError, isSetupFailure, needsSignIn } from './errorHints.js';
 import {
   MAX_ATTEMPTS,
   RESTART_RESUME_MS,
@@ -1223,6 +1223,10 @@ export class DaemonSession {
             type: 'status',
             status: 'error',
             detail: friendlyError(summaryText),
+            // The account that just refused is the one to sign in to again, and
+            // the panel knows enough to offer that as a button rather than as
+            // an instruction about the Command Palette.
+            ...(needsSignIn(summaryText) ? { action: 'signin' as const, account: accountsStore.activeName } : {}),
           });
         }
         const textLooksLimited = isLimitNotice(summaryText);

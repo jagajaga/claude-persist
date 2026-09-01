@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SIGN_IN_HINT, friendlyError, isSetupFailure } from './errorHints.js';
+import { SIGN_IN_HINT, friendlyError, isSetupFailure, needsSignIn } from './errorHints.js';
 
 /**
  * The two failures a new user hits before anything else. Both used to arrive
@@ -60,4 +60,29 @@ test('empty and nullish messages are safe', () => {
 test('the hint names both routes to sign-in, since only one exists per context', () => {
   assert.match(SIGN_IN_HINT, /Command Palette/);
   assert.match(SIGN_IN_HINT, /model pill/);
+});
+
+/**
+ * What an expired refresh token looks like coming back from the CLI. Rotation
+ * moved to an account whose login had lapsed; the turn died and the only advice
+ * was to go and find a command in the palette.
+ */
+test('an expired OAuth session is recognised as a sign-in problem', () => {
+  for (const text of [
+    'Failed to authenticate: OAuth session expired and could not be refreshed',
+    'OAuth session expired',
+  ]) {
+    assert.equal(needsSignIn(text), true, text);
+    assert.equal(isSetupFailure(text), true, text);
+    assert.match(friendlyError(text), /Add Account|model pill/);
+  }
+});
+
+test('a missing binary is not a sign-in problem', () => {
+  assert.equal(needsSignIn('Native CLI binary for linux-x64 not found'), false);
+  assert.equal(isSetupFailure('Native CLI binary for linux-x64 not found'), true);
+});
+
+test('ordinary prose is neither', () => {
+  assert.equal(needsSignIn('I refreshed the OAuth docs page'), false);
 });

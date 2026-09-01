@@ -480,6 +480,11 @@ export class AccountsStore {
     }));
   }
 
+  /** The active account's name, for messages that need to name it. */
+  get activeName(): string | null {
+    return this.list().find((a) => a.active)?.name ?? null;
+  }
+
   setActive(configDir: string | null): AccountInfo[] {
     this.activeConfigDir = configDir;
     this.persist();

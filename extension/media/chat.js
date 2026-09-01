@@ -1056,7 +1056,20 @@
           settlePreviews();
           setRunning(false);
           if (event.status === 'error') {
-            threadEl.appendChild(el('div', 'meta error', `⚠︎ ${event.detail || 'error'}`));
+            const notice = el('div', 'meta error', `⚠︎ ${event.detail || 'error'}`);
+            // An expired login is one click away from fixed, and the panel
+            // knows which account stopped working. Telling someone to go and
+            // find a command instead is homework, not a fix.
+            if (event.action === 'signin') {
+              const button = el('button', 'notice-action',
+                event.account ? `Sign in to "${event.account}"` : 'Sign in to Claude');
+              button.addEventListener('click', () => {
+                button.disabled = true;
+                vscode.postMessage({ type: 'addAccount', account: event.account ?? null });
+              });
+              notice.appendChild(button);
+            }
+            threadEl.appendChild(notice);
           }
         }
         break;

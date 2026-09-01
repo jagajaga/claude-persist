@@ -380,7 +380,9 @@ export class ChatPanelManager {
         return;
       }
       if (msg.type === 'addAccount') {
-        await this.addAccountInteractively(entry);
+        // A name means "this account's login has lapsed, renew it": there is
+        // nothing to choose and nothing to name, so skip straight to the code.
+        await this.addAccountInteractively(entry, typeof msg.account === 'string' ? msg.account : undefined);
         return;
       }
       if (msg.type === 'loginCode') {
@@ -600,11 +602,54 @@ export class ChatPanelManager {
    * browser is on the user's machine and the CLI is on the server. So the user
    * gets a link and a box to paste the code into, and never sees a shell.
    */
-  private async addAccountInteractively(entry: PanelEntry): Promise<void> {
+  /**
+   * Start a sign-in for one named account and hand the code box to the panel.
+   *
+   * Shared by adding an account and renewing one whose login has lapsed: both
+   * are the same exchange, and the second has nothing left to ask.
+   */
+  private async startLoginFor(entry: PanelEntry, name: string): Promise<void> {
+    const client = await this.requireClient();
+    if (!client) {
+      void vscode.window.showWarningMessage('Claude Persist: daemon not reachable — try again in a moment.');
+      return;
+    }
+    let login: { loginId: string; url: string };
+    try {
+      login = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Preparing sign-in for "${name}"…` },
+        () => client.startLogin(name),
+      );
+    } catch (err) {
+      void vscode.window.showErrorMessage(
+        `Could not start sign-in: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    // openExternal goes through the remote's port/URI forwarding, so it opens on
+    // the machine the user is actually sitting at.
+    await vscode.env.openExternal(vscode.Uri.parse(login.url));
+    // The code box lives in the panel rather than a QuickInput. VS Code binds
+    // Ctrl+V in its own inputs to a command that reads the clipboard through
+    // navigator.clipboard.readText(), which Firefox does not grant to web pages
+    // — so under code-server the paste silently did nothing and only
+    // Ctrl+Shift+V (the browser's native paste) worked. Inside a webview the
+    // keystroke is handled by the browser, exactly as it already is for pasting
+    // images into the composer.
+    this.post(entry, { type: 'loginPrompt', loginId: login.loginId, name, url: login.url });
+  }
+
+  private async addAccountInteractively(entry: PanelEntry, renew?: string): Promise<void> {
     // A pick, not a name prompt. Sign-in could only ever create a *named*
     // account, so on a machine with no Claude Code login the one account the UI
     // lists first — "default" — could never be filled in, and the user had to
     // invent a name for what was really their only login.
+    // Renewing a known account asks nothing: the account is already named, and
+    // signing back into it writes to the same directory it always used.
+    if (renew) {
+      await this.startLoginFor(entry, renew);
+      return;
+    }
     const DEFAULT_CHOICE = 'Default account  (~/.claude)';
     const choice = await vscode.window.showQuickPick(
       [
@@ -632,37 +677,7 @@ export class ChatPanelManager {
       name = typed;
     }
 
-    const client = await this.requireClient();
-    if (!client) {
-      void vscode.window.showWarningMessage('Claude Persist: daemon not reachable — try again in a moment.');
-      return;
-    }
-
-    let login: { loginId: string; url: string };
-    try {
-      login = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: `Preparing sign-in for "${name}"…` },
-        () => client.startLogin(name),
-      );
-    } catch (err) {
-      void vscode.window.showErrorMessage(
-        `Could not start sign-in: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return;
-    }
-
-    // openExternal goes through the remote's port/URI forwarding, so it opens on
-    // the machine the user is actually sitting at.
-    await vscode.env.openExternal(vscode.Uri.parse(login.url));
-
-    // The code box lives in the panel rather than a QuickInput. VS Code binds
-    // Ctrl+V in its own inputs to a command that reads the clipboard through
-    // navigator.clipboard.readText(), which Firefox does not grant to web pages
-    // — so under code-server the paste silently did nothing and only
-    // Ctrl+Shift+V (the browser's native paste) worked. Inside a webview the
-    // keystroke is handled by the browser, exactly as it already is for pasting
-    // images into the composer.
-    this.post(entry, { type: 'loginPrompt', loginId: login.loginId, name, url: login.url });
+    await this.startLoginFor(entry, name);
   }
 
   private postChips(entry: PanelEntry): void {

@@ -156,6 +156,7 @@ Rename Session, Delete Session, Refresh Sessions.
 | The extension does not appear at all | The folder is untrusted. Trust it, or open a different folder. |
 | "Claude Code was not found on this machine" | Install it (see Requirements) and reload the window. |
 | Messages fail and the account menu says "not signed in" | Run **Claude Persist: Add Account (Sign In)**. |
+| "OAuth session expired" | The notice carries a **Sign in to "<account>"** button — one click, no name to invent. |
 | "Could not start claude-persist daemon" | Look at `~/.claude-persist/daemon.log`, and open an issue with what it says. |
 | "An outdated daemon is running" | The message names the process id. Stop it and reload the window. |
 

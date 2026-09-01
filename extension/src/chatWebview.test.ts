@@ -1574,3 +1574,47 @@ test('branch chip: tapping again closes the list', () => {
   openChip(h);
   assert.equal(h.document.querySelector('.branch-menu').hidden, true);
 });
+
+// ---------------------------------------------------------------------------
+// An expired login is one click from fixed
+//
+// Rotation moved to an account whose OAuth had lapsed. The turn died and the
+// notice said to run a command from the Command Palette -- homework, for a
+// problem the panel already knew the answer to: it knows which account stopped
+// working.
+// ---------------------------------------------------------------------------
+
+test('an auth error offers to sign in to the account that failed', () => {
+  const h = createHarness('signin-button');
+  h.send(liveEvent({
+    type: 'status',
+    status: 'error',
+    detail: 'Not signed in to Claude.',
+    action: 'signin',
+    account: 'serokell',
+  }));
+  const button = h.document.querySelector('.notice-action');
+  assert.notEqual(button, null, 'the notice is advice with no way to act on it');
+  assert.match(button.textContent, /serokell/, 'name the account, since there are several');
+
+  button.dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  const sent = h.posted.find((m) => m.type === 'addAccount');
+  assert.ok(sent, 'the button did nothing');
+  assert.equal(sent.account, 'serokell', 'renewing the wrong account fixes nothing');
+});
+
+test('an auth error with no account still offers to sign in', () => {
+  const h = createHarness('signin-button-noaccount');
+  h.send(liveEvent({ type: 'status', status: 'error', detail: 'Not signed in.', action: 'signin' }));
+  const button = h.document.querySelector('.notice-action');
+  assert.match(button.textContent, /Sign in to Claude/);
+  button.dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  assert.equal(h.posted.find((m) => m.type === 'addAccount')?.account, null);
+});
+
+/** Every other error is still just a message; a button would be noise. */
+test('an ordinary error gets no button', () => {
+  const h = createHarness('signin-none');
+  h.send(liveEvent({ type: 'status', status: 'error', detail: 'Context low' }));
+  assert.equal(h.document.querySelector('.notice-action'), null);
+});

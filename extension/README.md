@@ -80,7 +80,10 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
 - **Automatic rotation.** Hit a limit and your message is held, the next
   account with room is activated, and the conversation resumes on its own. If every
   account is spent it waits for the soonest reset and resumes then. Accounts
-  sharing one login count as one, since they share the quota.
+  sharing one login count as one, since they share the quota. An account whose
+  login has expired is treated the same way -- skipped, and the conversation
+  carries on elsewhere -- since unlike a limit a dead token never comes back on
+  its own.
 - **Transcripts follow you** between accounts, so switching mid-conversation
   continues rather than starting over.
 - **One set of rules.** Your `CLAUDE.md` and skills apply to every account.

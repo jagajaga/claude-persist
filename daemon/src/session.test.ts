@@ -29,6 +29,7 @@ const noopCallbacks = {
   rateLimitWindows: () => ({}),
   log(): void {},
   onLimited: (at: number) => ({ retryAt: at, switchedTo: null, why: 'all-limited' }),
+  onAuthFailure: () => ({ retryAt: 0, switchedTo: null }),
   beforeRetry: () => null,
   onAgents(): void {},
 };
@@ -576,4 +577,62 @@ test('a restart still leaves a genuinely idle session alone', () => {
   const session = makeSession(`busy-restart-idle-${Date.now()}`);
   session.status = 'idle';
   assert.equal(session.parkForRestart(), false);
+});
+
+// ---------------------------------------------------------------------------
+// A login that has expired mid-conversation
+// ---------------------------------------------------------------------------
+
+function authFailure(
+  session: InstanceType<typeof DaemonSession>,
+  text = 'Failed to authenticate: OAuth session expired and could not be refreshed',
+): void {
+  (session as unknown as { handleSdkMessage(m: Record<string, unknown>): void }).handleSdkMessage({
+    type: 'result',
+    subtype: 'error',
+    is_error: true,
+    result: text,
+  });
+}
+
+test('an expired login moves to another account and carries on', () => {
+  const meta = { id: `auth-move-${Date.now()}`, title: 't', cwd: '/tmp', createdAt: 0, lastActivityAt: 0 };
+  const session = new DaemonSession(meta, {
+    ...noopCallbacks,
+    onAuthFailure: () => ({ retryAt: Date.now() + 5_000, switchedTo: 'serokell' }),
+  });
+  session.status = 'running';
+  authFailure(session);
+
+  const notice = session.eventsSince(0, 20).events.map((e) => e.event as { detail?: string; action?: string });
+  const moved = notice.find((n) => /Switched to "serokell"/.test(n.detail ?? ''));
+  assert.ok(moved, 'the turn stopped instead of moving on');
+  assert.equal(moved.action, undefined, 'nothing to sign in to: it already moved');
+  assert.ok(session.retryAt !== null, 'and it must actually be scheduled to continue');
+});
+
+/** Only when nowhere is left does it become the user's problem. */
+test('with nowhere left to go it asks for a sign-in', () => {
+  const session = makeSession(`auth-stuck-${Date.now()}`);
+  session.status = 'running';
+  authFailure(session);
+
+  const notice = session.eventsSince(0, 20).events.map((e) => e.event as { action?: string });
+  assert.ok(notice.some((n) => n.action === 'signin'), 'no way offered to fix it');
+});
+
+/** A missing install is not fixed by rotating: no account has it either. */
+test('a missing Claude Code does not rotate accounts', () => {
+  let asked = false;
+  const meta = { id: `auth-nobin-${Date.now()}`, title: 't', cwd: '/tmp', createdAt: 0, lastActivityAt: 0 };
+  const session = new DaemonSession(meta, {
+    ...noopCallbacks,
+    onAuthFailure: () => {
+      asked = true;
+      return { retryAt: 0, switchedTo: null };
+    },
+  });
+  session.status = 'running';
+  authFailure(session, 'Native CLI binary for linux-x64 not found');
+  assert.equal(asked, false);
 });

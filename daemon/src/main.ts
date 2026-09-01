@@ -32,6 +32,7 @@ import {
   SWITCH_SETTLE_MS,
   accountForRetry,
   accountKey,
+  nextUsableAccount,
   planAfterLimit,
 } from './rotation.js';
 
@@ -233,7 +234,7 @@ const logins = new LoginManager(
 const accountUsage = new AccountUsageStore();
 
 /** Which accounts are known spent, and when we last rotated. */
-const rotation: RotationState = { limited: new Map(), lastSwitchAt: 0 };
+const rotation: RotationState = { limited: new Map(), unusable: new Set(), lastSwitchAt: 0 };
 
 /** Activate an account and tear down live queries, as a user switch would. */
 function activateAccount(configDir: string | null, reason: string): void {
@@ -317,6 +318,33 @@ const callbacks = {
    * The active account was refused. Record it, move to one with room if that is
    * enabled and one exists, and say when the session should try again.
    */
+  /**
+   * A login that has stopped working, rather than a quota that has run out.
+   *
+   * Rotation had no way to know a token was dead until a turn failed on it, so
+   * an expired account cost a turn and left the user to notice. Marking it
+   * unusable and moving on costs nothing: there is nothing to wait for, since
+   * unlike a limit a dead token does not come back on its own.
+   *
+   * @returns the account moved to, or null when there is nowhere left to go.
+   */
+  onAuthFailure(): { retryAt: number; switchedTo: string | null } {
+    const now = Date.now();
+    const current = accountsStore.active;
+    const currentAccount = accountsStore.list().find((a) => a.active);
+    const key = currentAccount ? identityOf(currentAccount) : accountKey(current);
+    rotation.unusable.add(key);
+    logLine(`account ${currentAccount?.name ?? key} cannot authenticate; marking it unusable`);
+    if (!options.switchAccountOnLimit) return { retryAt: 0, switchedTo: null };
+    const next = nextUsableAccount(accountsStore.list(), current, rotation, now, identityOf);
+    if (!next) {
+      logLine('no account left with a working login');
+      return { retryAt: 0, switchedTo: null };
+    }
+    activateAccount(next.configDir, 'login expired on the previous account');
+    return { retryAt: now + SWITCH_SETTLE_MS, switchedTo: next.name };
+  },
+
   onLimited(ownResetAt: number): { retryAt: number; switchedTo: string | null; why: string } {
     const now = Date.now();
     const current = accountsStore.active;
@@ -519,6 +547,9 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
         // an "account" nothing in the list matches.
         const signedIn =
           result.configDir === accountsStore.dirs.claudeDir ? null : result.configDir;
+        // A fresh token is exactly what "unusable" was waiting for.
+        const repaired = accountsStore.list().find((a) => accountKey(a.configDir) === accountKey(signedIn));
+        rotation.unusable.delete(repaired ? identityOf(repaired) : accountKey(signedIn));
         activateAccount(signedIn, 'signed in');
         return result;
       });

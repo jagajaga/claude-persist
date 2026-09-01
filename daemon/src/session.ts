@@ -105,6 +105,8 @@ export interface SessionCallbacks {
    * account we ended up on.
    */
   onLimited(ownResetAt: number): { retryAt: number; switchedTo: string | null; why: string };
+  /** A login that has stopped working: mark it and move on if there is anywhere to go. */
+  onAuthFailure(): { retryAt: number; switchedTo: string | null };
   /** About to fire a queued retry; may switch to an account whose limit ended. */
   beforeRetry(): string | null;
   /** The set of subagents working for this session changed. */
@@ -1218,16 +1220,39 @@ export class DaemonSession {
         // summary reading "Invalid API key · Please run /login": no error
         // styling, and advice for a terminal this extension exists to avoid.
         // It is the first thing a new user sees, so it says what to do instead.
+        let rotatedForAuth = false;
         if (msg.is_error === true && isSetupFailure(summaryText)) {
-          this.appendEvent({
-            type: 'status',
-            status: 'error',
-            detail: friendlyError(summaryText),
-            // The account that just refused is the one to sign in to again, and
-            // the panel knows enough to offer that as a button rather than as
-            // an instruction about the Command Palette.
-            ...(needsSignIn(summaryText) ? { action: 'signin' as const, account: accountsStore.activeName } : {}),
-          });
+          const failing = accountsStore.activeName;
+          // A dead login is not a quota: there is nothing to wait for, and
+          // another account may work right now. Move on rather than making the
+          // user notice, and only ask for a sign-in when nowhere is left.
+          const moved = needsSignIn(summaryText) ? this.callbacks.onAuthFailure() : null;
+          if (moved?.switchedTo) {
+            rotatedForAuth = true;
+            this.appendEvent({
+              type: 'status',
+              status: 'error',
+              detail:
+                `The login for "${failing ?? 'that account'}" has expired. Switched to ` +
+                `"${moved.switchedTo}" and continuing — you don't need to come back.`,
+            });
+            this.consecutiveRetries += 1;
+            this.pending = { text: '', retryAt: moved.retryAt, attempts: this.consecutiveRetries };
+            this.persistPending();
+            this.scheduleRetry();
+          } else {
+            this.appendEvent({
+              type: 'status',
+              status: 'error',
+              detail: friendlyError(summaryText),
+              // The account that just refused is the one to sign in to again,
+              // and the panel knows enough to offer that as a button rather
+              // than as an instruction about the Command Palette.
+              ...(needsSignIn(summaryText)
+                ? { action: 'signin' as const, account: failing }
+                : {}),
+            });
+          }
         }
         const textLooksLimited = isLimitNotice(summaryText);
         // Corroborate against measured usage before parking. Prose and the
@@ -1247,9 +1272,13 @@ export class DaemonSession {
           this.parkForLimit(summaryText);
         } else {
           // A real answer: the retry budget starts over.
-          this.consecutiveRetries = 0;
+          //
+          // Except when this result *is* the failure that just parked a retry:
+          // an expired login comes back as an errored result, and clearing the
+          // retry it queued would strand the turn on the account it moved to.
+          if (!rotatedForAuth) this.consecutiveRetries = 0;
           // Whatever was parked has now been superseded.
-          if (this.pending) {
+          if (this.pending && !rotatedForAuth) {
             this.pending = null;
             this.clearPersistedPending();
             if (this.retryTimer) {

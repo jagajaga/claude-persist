@@ -32,6 +32,14 @@ export const SWITCH_SETTLE_MS = 5_000;
 export interface RotationState {
   /** accountKey -> epoch ms its limit ends. Entries in the past are ignored. */
   limited: Map<string, number>;
+  /**
+   * Accounts whose login has stopped working, by identity.
+   *
+   * Not the same as spent: a rate limit ends by itself and a dead token does
+   * not, so there is no time to wait for. Cleared when that account signs in
+   * again, which is the only thing that fixes it.
+   */
+  unusable: Set<string>;
   /** When the daemon last changed account, for the cooldown. */
   lastSwitchAt: number;
 }
@@ -67,6 +75,7 @@ function usable(
   now: number,
   identityOf: IdentityOf,
 ): boolean {
+  if (state.unusable.has(identityOf(account))) return false;
   const until = state.limited.get(identityOf(account));
   return until === undefined || until <= now;
 }

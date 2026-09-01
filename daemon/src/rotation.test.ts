@@ -27,6 +27,7 @@ function accounts(active: string | null = null): AccountInfo[] {
 function state(limited: Array<[string | null, number]> = [], lastSwitchAt = 0): RotationState {
   return {
     limited: new Map(limited.map(([dir, at]) => [accountKey(dir), at])),
+    unusable: new Set<string>(),
     lastSwitchAt,
   };
 }
@@ -323,6 +324,45 @@ test('planAfterLimit: after the cooldown, a spent account moves on', () => {
     current: '/acc/senia00',
     accounts: accounts('/acc/senia00'),
     state: state([['/acc/senia00', NOW + 3 * HOUR]], NOW - SWITCH_COOLDOWN_MS - 1),
+    enabled: true,
+  });
+  assert.equal(plan.why, 'switched');
+  assert.equal(plan.switchTo?.name, 'serokell');
+});
+
+// ---------------------------------------------------------------------------
+// An account whose login has stopped working
+//
+// Rotation moved to an account whose OAuth had expired, which cost a turn and
+// left the user to notice. A dead token is not a spent quota: there is no time
+// to wait for, because it does not come back on its own.
+// ---------------------------------------------------------------------------
+
+function withUnusable(names: string[], lastSwitchAt = 0): RotationState {
+  return { limited: new Map(), unusable: new Set(names), lastSwitchAt };
+}
+
+test('an account with a broken login is skipped like a spent one', () => {
+  const next = nextUsableAccount(accounts(null), null, withUnusable(['/acc/senia00']), NOW);
+  assert.equal(next?.name, 'serokell');
+});
+
+test('a broken login has no reset to wait for, so every account is out', () => {
+  const state = withUnusable(['', '/acc/senia00', '/acc/serokell']);
+  assert.equal(nextUsableAccount(accounts(null), null, state, NOW), null);
+});
+
+/** Two directories sharing one login break together, as they are one account. */
+test('a broken login takes its duplicates with it', () => {
+  const state: RotationState = { limited: new Map(), unusable: new Set(['shared-account']), lastSwitchAt: 0 };
+  const next = nextUsableAccount(accounts(null), null, state, NOW, sameLogin);
+  assert.equal(next?.name, 'serokell', 'default and senia00 are the same login');
+});
+
+test('planAfterLimit routes around a broken login too', () => {
+  const plan = planAfterLimit({
+    ...base,
+    state: withUnusable(['/acc/senia00']),
     enabled: true,
   });
   assert.equal(plan.why, 'switched');

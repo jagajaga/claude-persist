@@ -32,6 +32,8 @@ interface JsdomWindow {
     };
   };
   MessageEvent: new (type: string, init: { data: unknown }) => DomNode;
+  /** Touch events are hand-built: jsdom ships no TouchEvent. */
+  Event: new (type: string, init?: Record<string, unknown>) => DomNode;
   MouseEvent: new (type: string, init?: Record<string, unknown>) => DomNode;
   KeyboardEvent: new (type: string, init?: Record<string, unknown>) => DomNode;
   setTimeout: (cb: () => void, ms: number) => unknown;
@@ -189,7 +191,11 @@ function createHarness(
   window.Element.prototype.getBoundingClientRect = function (this: DomNode) {
     const top = Number(this.dataset?.top ?? 0);
     const height = Number(this.dataset?.height ?? 0);
-    return { top, bottom: top + height, left: 0, right: 0, width: 0, height, x: 0, y: top };
+    // The horizontal pair matters only to pinch-zoom, which zooms about the
+    // box's own centre and so has to know where the box actually is.
+    const left = Number(this.dataset?.left ?? 0);
+    const width = Number(this.dataset?.width ?? 0);
+    return { top, bottom: top + height, left, right: left + width, width, height, x: left, y: top };
   };
   const scrollIntoViewCalls: DomNode[] = [];
   window.Element.prototype.scrollIntoView = function (this: DomNode): void {
@@ -1620,6 +1626,117 @@ test('an ordinary error gets no button', () => {
   const h = createHarness('signin-none');
   h.send(liveEvent({ type: 'status', status: 'error', detail: 'Context low' }));
   assert.equal(h.document.querySelector('.notice-action'), null);
+});
+
+// ---------- pinch zoom, and where a preview goes ----------------------------
+
+/** A touch event jsdom will not build: only `touches` is ever read. */
+function touch(h: Harness, target: DomNode, type: string, points: [number, number][]): void {
+  const ev = new h.window.Event(type, { bubbles: true, cancelable: true });
+  ev.touches = points.map(([clientX, clientY]) => ({ clientX, clientY }));
+  target.dispatchEvent(ev);
+}
+
+function transformOf(node: DomNode): { x: number; y: number; scale: number } {
+  const m = /translate\(([-\d.]+)px, ([-\d.]+)px\) scale\(([-\d.]+)\)/.exec(node.style.transform);
+  assert.ok(m, `unreadable transform: ${node.style.transform}`);
+  return { x: Number(m[1]), y: Number(m[2]), scale: Number(m[3]) };
+}
+
+/**
+ * A pinch has to hold the picture still under the fingers. The box is scaled
+ * about its own centre (no transform-origin is set), and the maths ignored
+ * that centre -- so it zoomed about a point half a picture away and whatever
+ * you aimed at slid out from under you.
+ */
+test('pinch: the point between the fingers stays between the fingers', () => {
+  const h = createHarness('pinch-centre');
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    imageUris: { [SHOT]: SHOT_URI },
+    events: [
+      persisted({
+        type: 'user_message',
+        text: 'x',
+        attachments: [{ kind: 'image', label: 'shot.png', path: SHOT, mediaType: 'image/png' }],
+      }),
+    ],
+  });
+  h.document.querySelector('#thread .img-thumb').dispatchEvent(
+    new h.window.MouseEvent('click', { bubbles: true }),
+  );
+  const img = h.document.querySelector('.lightbox img') as DomNode;
+  // A 400x400 box at the origin: its centre, which it scales about, is (200,200).
+  Object.assign(img.dataset, { left: '0', width: '400', top: '0', height: '400' });
+
+  // Pinch open to 2x around a midpoint up and to the left of that centre.
+  const mid: [number, number] = [100, 100];
+  touch(h, img, 'touchstart', [[50, 100], [150, 100]]);
+  touch(h, img, 'touchmove', [[0, 100], [200, 100]]);
+
+  const t = transformOf(img);
+  assert.equal(t.scale, 2);
+  // Where the box point that started under the fingers has ended up:
+  // screen = centre + translate + scale * ((finger - centre - translate0) / 1).
+  const CENTRE = 200;
+  const held = CENTRE + t.x + t.scale * (mid[0] - CENTRE);
+  assert.ok(
+    Math.abs(held - mid[0]) < 0.5,
+    `the point aimed at moved from ${mid[0]} to ${held}`,
+  );
+});
+
+/**
+ * An inline frame is up to 320x220. Dropped into a sentence it drags the line
+ * box down to its own height and strands the words beside it, halfway down a
+ * paragraph. It belongs under the block instead.
+ */
+test('preview: a path inside a sentence is lifted out of the prose', () => {
+  const h = createHarness('preview-in-prose');
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    imageUris: { [SHOT]: SHOT_URI },
+    events: [persisted({ type: 'user_message', text: `once you reload ${SHOT} shows a badge` })],
+  });
+  const img = h.document.querySelector('#thread .img-thumb img') as DomNode;
+  assert.ok(img, 'the picture should still be shown');
+  assert.equal(
+    img.parentNode.parentNode.className,
+    'preview-row',
+    'a preview wedged into the sentence leaves the words stranded beside it',
+  );
+  const text = h.document.querySelector('#thread .user-msg').textContent;
+  assert.match(text, /once you reload/);
+  assert.match(text, /shows a badge/);
+  assert.ok(
+    h.document.querySelector('#thread a.file-link'),
+    'the sentence should keep something in place of the path',
+  );
+});
+
+test('preview: a path on a line of its own still becomes the picture', () => {
+  const h = createHarness('preview-alone');
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    imageUris: { [SHOT]: SHOT_URI },
+    events: [persisted({ type: 'user_message', text: SHOT })],
+  });
+  const img = h.document.querySelector('#thread .img-thumb img') as DomNode;
+  assert.ok(img, 'showing the picture is the whole message');
+  assert.notEqual(
+    img.parentNode.parentNode.className,
+    'preview-row',
+    'nothing to lift it out of: it should stand where the path stood',
+  );
 });
 
 // ---------- video previews ---------------------------------------------------

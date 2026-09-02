@@ -1051,3 +1051,10 @@ button.secondary {
   max-height: 82vh;
   outline: none;
 }
+
+/* A preview lifted out of a sentence: its own line, under the block it
+   illustrates, rather than wedged into the middle of the prose. */
+.preview-row {
+  line-height: 0;
+  margin: 6px 0;
+}

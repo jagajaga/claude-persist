@@ -374,7 +374,12 @@
     media.addEventListener('touchstart', (e) => {
       if (e.touches.length === 2) {
         const t = [e.touches[0], e.touches[1]];
-        start = { d: distance(t), m: midpoint(t), scale, x, y };
+        // Where the box sits with no transform on it. It is scaled about its
+        // own centre, so that centre only ever moves by the translation, and
+        // subtracting the translation back off recovers it.
+        const r = media.getBoundingClientRect();
+        const c = { x: r.left + r.width / 2 - x, y: r.top + r.height / 2 - y };
+        start = { d: distance(t), m: midpoint(t), scale, x, y, c };
         e.preventDefault();
         return;
       }
@@ -397,15 +402,18 @@
       if (e.touches.length !== 2) return;
       const t = [e.touches[0], e.touches[1]];
       const next = Math.min(MAX_SCALE, Math.max(1, start.scale * (distance(t) / start.d)));
-      // Keep whatever was between the fingers between the fingers. The point
-      // under a screen position p is (p - translate) / scale, so holding it
-      // fixed while the scale changes by k gives translate = p1 - (p0 - t0) * k.
-      // Zooming about the centre of the overlay instead makes the thing you
-      // aimed at slide out from under you.
+      // Keep whatever was between the fingers between the fingers. With no
+      // transform-origin set the box scales about its own centre c, so a screen
+      // position p sits over the box point (p - c - translate) / scale; holding
+      // that point still while the scale changes by k gives
+      // translate = p1 - c - (p0 - c - t0) * k. Dropping c -- treating the
+      // origin as the top-left, which is what this did -- zooms about a point
+      // half a picture away, and whatever you aimed at slides out from under
+      // your fingers.
       const m = midpoint(t);
       const k = next / start.scale;
-      x = m.x - (start.m.x - start.x) * k;
-      y = m.y - (start.m.y - start.y) * k;
+      x = m.x - start.c.x - (start.m.x - start.c.x - start.x) * k;
+      y = m.y - start.c.y - (start.m.y - start.c.y - start.y) * k;
       scale = next;
       apply(false);
       e.preventDefault();
@@ -573,11 +581,43 @@
    * Runs after markdown/DOMPurify so it only ever touches anchors the renderer
    * already produced, and only paths the host vouched for via imageUris.
    */
+  /**
+   * The block this node sits in, as a direct child of the rendered root, or
+   * null when it is loose text with no block of its own.
+   */
+  function blockAncestor(node, root) {
+    let el = node.parentNode;
+    while (el && el !== root && el.parentNode && el.parentNode !== root) el = el.parentNode;
+    return !el || el === root ? null : el;
+  }
+
+  /**
+   * Put a preview where it reads, and answer whether it went inline.
+   *
+   * A path on a line of its own becomes the picture: showing it is the whole
+   * point of the message. A path inside a sentence must not, though. An inline
+   * frame is up to 320x220, which drags the line box down to its own height and
+   * strands the words beside it halfway down a paragraph -- "and once you
+   * reload, [FRAME] should show a badge" reads as neither a sentence nor a
+   * picture. There the prose keeps a filename link and the preview follows the
+   * block it belongs to, where it reads as an illustration of it.
+   */
+  function placePreview(node, root, hit, thumb) {
+    const block = blockAncestor(node, root);
+    if ((block || root).textContent.trim() === hit) return true;
+    const row = el('div', 'preview-row');
+    row.appendChild(thumb);
+    if (block && block.parentNode) block.parentNode.insertBefore(row, block.nextSibling);
+    else root.appendChild(row);
+    return false;
+  }
+
   function upgradeImageLinks(root) {
     for (const link of Array.from(root.querySelectorAll('a.file-link'))) {
       const p = link.getAttribute('title') || link.textContent || '';
       const thumb = imageThumb(p, p.split('/').pop());
-      if (thumb) link.replaceWith(thumb);
+      if (!thumb) continue;
+      if (placePreview(link, root, link.textContent.trim(), thumb)) link.replaceWith(thumb);
     }
     if (imageUris.size) upgradeImagePathsInText(root);
   }
@@ -607,9 +647,10 @@
         const thumb = imageThumb(hit, hit.split('/').pop());
         if (!thumb) continue;
         const at = text.indexOf(hit);
+        const inline = placePreview(child, root, hit, thumb);
         const frag = document.createDocumentFragment();
         if (at > 0) frag.appendChild(document.createTextNode(text.slice(0, at)));
-        frag.appendChild(thumb);
+        frag.appendChild(inline ? thumb : rawFileLink(hit, hit.split('/').pop()));
         const rest = text.slice(at + hit.length);
         if (rest) frag.appendChild(document.createTextNode(rest));
         child.replaceWith(frag);

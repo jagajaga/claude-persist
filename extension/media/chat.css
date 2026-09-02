@@ -637,10 +637,17 @@ button.secondary {
   line-height: 0;
   vertical-align: middle;
   margin: 2px 4px 2px 0;
+  max-width: 100%;
+}
+
+/* The frame is drawn on the picture itself, not on the box around it: a
+   wrapper shrink-wraps to what its content asked for, which for a video is a
+   size invented before the clip loaded, and the leftover was showing as a
+   strip of empty bordered box beside the frame. */
+.img-thumb img,
+.img-thumb video {
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
   border-radius: 4px;
-  overflow: hidden;
-  max-width: 100%;
 }
 
 .img-thumb img {
@@ -653,7 +660,8 @@ button.secondary {
   background: var(--vscode-editor-background);
 }
 
-.img-thumb:hover {
+.img-thumb:hover img,
+.img-thumb:hover video {
   border-color: var(--vscode-focusBorder, #007fd4);
 }
 

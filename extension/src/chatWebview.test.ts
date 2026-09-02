@@ -1855,6 +1855,33 @@ test('video: the blob is what the lightbox opens', async () => {
  * memory to play it would be worse. The host passes an https URL through as its
  * own URI, which is what tells it apart from a mapped local path.
  */
+/**
+ * A <video> is 300x150 until its metadata arrives -- a size invented from
+ * nothing, since it predates knowing the clip. The box measured from it does
+ * not shrink back once the real shape is known, so the frame sat flush left in
+ * a bordered box half again its width.
+ */
+test('video: the box takes the shape of the clip once that is known', async () => {
+  const h = createHarness('video-ratio');
+  stubClipFetch(h);
+  withClip(h);
+  await h.flush();
+  const video = h.document.querySelector('#thread .img-thumb video') as DomNode;
+  assert.equal(video.style.aspectRatio, '', 'nothing is known about the clip yet');
+  // jsdom's videoWidth/videoHeight are getters pinned at 0; a clip that has
+  // loaded reports its own.
+  Object.defineProperties(video, {
+    videoWidth: { value: 832 },
+    videoHeight: { value: 480 },
+  });
+  video.dispatchEvent(new h.window.Event('loadedmetadata', { bubbles: false }));
+  assert.equal(
+    video.style.aspectRatio,
+    '832 / 480',
+    'without the real ratio the box keeps the 300x150 one it was born with',
+  );
+});
+
 test('video: a hosted clip is played directly, not copied', async () => {
   const h = createHarness('video-hosted');
   const fetched = stubClipFetch(h);

@@ -524,6 +524,16 @@
       media.preload = 'metadata';
       media.muted = true;
       media.playsInline = true;
+      // Until metadata lands a <video> is 300x150 -- a size that has nothing to
+      // do with the clip -- and the box measured from it does not shrink back
+      // to the frame once the real one is known, leaving a strip of empty
+      // border beside the picture. Stating the ratio the moment it is knowable
+      // makes the box the frame's own shape.
+      media.addEventListener('loadedmetadata', () => {
+        if (media.videoWidth && media.videoHeight) {
+          media.style.aspectRatio = `${media.videoWidth} / ${media.videoHeight}`;
+        }
+      });
       const src = playableSrc(pathText, uri);
       if (typeof src === 'string') {
         media.src = src;

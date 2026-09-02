@@ -30,7 +30,9 @@ const IMAGE_MIMES = new Set(Object.values(IMAGE_TYPES));
 const uploadsDir = path.join(os.homedir(), '.claude-persist', 'uploads');
 
 /** Extensions we will render a preview for. */
-const PREVIEWABLE = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
+const PREVIEWABLE = /\.(png|jpe?g|gif|webp|bmp|svg|avif|mp4|webm|mov|m4v)$/i;
+/** Of those, the ones that need a player rather than an <img>. */
+export const PLAYABLE = /\.(mp4|webm|mov|m4v)$/i;
 /** Absolute POSIX-ish paths inside chat text, e.g. /home/me/shot.png */
 const PATH_IN_TEXT = /(?:^|[\s"'`(\[<])(\/[^\s"'`)\]>:]+\.[A-Za-z0-9]+)/g;
 /** Don't inline a huge file as a preview. */
@@ -876,8 +878,12 @@ export class ChatPanelManager {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <!-- img-src and media-src were missing, so every preview was blocked and fell
+       back to a plain link through the img error handler: the feature looked
+       implemented and had never once drawn a picture. blob: covers uploads
+       rendered before they reach disk. -->
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+        content="default-src 'none'; img-src ${webview.cspSource} blob: data:; media-src ${webview.cspSource} blob:; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style nonce="${nonce}">${inlineCss}</style>
   <title>Claude</title>

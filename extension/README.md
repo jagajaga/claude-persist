@@ -66,6 +66,9 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
   are chunked, show progress, and are capped at 10 MB.
 - **Inline previews** with a full-size lightbox, including for image paths you
   type or that a tool returns.
+- **Video previews.** An `.mp4`, `.webm` or `.mov` shows its first frame with a
+  play badge; pressing it opens the clip full-size and starts it. Nothing plays
+  on its own, so a transcript full of clips stays quiet.
 
 ### Accounts and rate limits
 

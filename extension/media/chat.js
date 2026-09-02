@@ -309,12 +309,22 @@
   }
 
   /** Full-size overlay. Click anywhere (or Escape) to dismiss. */
-  function openLightbox(uri, caption) {
+  function openLightbox(uri, caption, video = false) {
     const overlay = el('div', 'lightbox');
-    const img = el('img');
-    img.src = uri;
-    img.alt = caption || '';
-    overlay.appendChild(img);
+    // A video opens playing with its controls: getting here was the click that
+    // asked for it, so making you press play twice would be silly.
+    const media = el(video ? 'video' : 'img');
+    media.src = uri;
+    if (video) {
+      media.controls = true;
+      media.autoplay = true;
+      media.playsInline = true;
+      // Clicking the player must not close the overlay behind it.
+      media.addEventListener('click', (e) => e.stopPropagation());
+    } else {
+      media.alt = caption || '';
+    }
+    overlay.appendChild(media);
     if (caption) overlay.appendChild(el('div', 'lightbox-caption', caption));
     const close = () => {
       overlay.remove();
@@ -332,24 +342,41 @@
    * A clickable thumbnail, or null when this path has no preview available
    * (not an image, missing, too large, or outside a permitted root).
    */
+  /** Files that need a player rather than an <img>. */
+  const PLAYABLE = /\.(mp4|webm|mov|m4v)$/i;
+
   function imageThumb(pathText, label) {
     const uri = imageUris.get(pathText);
     if (!uri) return null;
-    const wrap = el('span', 'img-thumb');
-    const img = el('img');
-    img.src = uri;
-    img.alt = label || pathText;
-    img.title = `${pathText} — click to view`;
+    const video = PLAYABLE.test(pathText);
+    const wrap = el('span', video ? 'img-thumb video-thumb' : 'img-thumb');
+    // A video gets a real player rather than a still: it is the whole point of
+    // producing one, and a poster frame you cannot press is just a picture.
+    const media = el(video ? 'video' : 'img');
+    media.src = uri;
+    if (video) {
+      // A still frame, not a player: metadata is enough to draw frame one, and
+      // nothing autoplays. Pressing it opens the player.
+      media.preload = 'metadata';
+      media.muted = true;
+      media.playsInline = true;
+    } else {
+      media.alt = label || pathText;
+    }
+    media.title = `${pathText} — click to ${video ? 'play' : 'view'}`;
     // A file that disappears between send and render shouldn't leave a broken
     // icon; fall back to the plain link.
-    img.addEventListener('error', () => {
+    media.addEventListener('error', () => {
       wrap.replaceWith(rawFileLink(pathText, label));
     });
-    wrap.appendChild(img);
+    wrap.appendChild(media);
+    // The play badge is drawn over the frame so it reads as a video at a glance
+    // rather than as a picture that happens to be of a video.
+    if (video) wrap.appendChild(el('span', 'play-badge', '▶'));
     wrap.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      openLightbox(uri, label || pathText);
+      openLightbox(uri, label || pathText, video);
     });
     return wrap;
   }

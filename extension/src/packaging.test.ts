@@ -231,3 +231,20 @@ test('README badges point at this extension', () => {
     assert.ok(!url.includes('visual-studio-marketplace/'), `${url} uses the retired shields badge`);
   }
 });
+
+/**
+ * The CSP had `default-src 'none'` and named neither img-src nor media-src, so
+ * every preview was blocked. It never looked broken: the img error handler
+ * quietly swapped in a plain link, so the feature appeared to work and had
+ * never once drawn a picture.
+ */
+test('the webview may load the media it renders', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'chatPanel.ts'), 'utf8');
+  const csp = /Content-Security-Policy[\s\S]*?content="([^"]+)"/.exec(source)?.[1] ?? '';
+  assert.ok(csp.length > 0, 'no CSP found; this test is looking in the wrong place');
+  for (const directive of ['img-src', 'media-src']) {
+    assert.ok(csp.includes(directive), `CSP has no ${directive}: previews are blocked`);
+  }
+  assert.match(csp, /img-src[^;]*cspSource/, 'img-src must admit the webview resource origin');
+  assert.match(csp, /media-src[^;]*cspSource/, 'media-src must admit the webview resource origin');
+});

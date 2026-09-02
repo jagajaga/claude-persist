@@ -1618,3 +1618,89 @@ test('an ordinary error gets no button', () => {
   h.send(liveEvent({ type: 'status', status: 'error', detail: 'Context low' }));
   assert.equal(h.document.querySelector('.notice-action'), null);
 });
+
+// ---------- video previews ---------------------------------------------------
+
+/**
+ * A generated video is the output of the work, and it was reaching the chat as
+ * a file path to open in an editor. It previews like an image now: a still
+ * frame that plays when pressed, rather than a player that starts on its own.
+ */
+const CLIP = '/tmp/clip.mp4';
+const CLIP_URI = 'https://file%2B.vscode-resource/tmp/clip.mp4';
+
+function withClip(h: Harness, text = 'here it is'): void {
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    imageUris: { [CLIP]: CLIP_URI },
+    events: [
+      persisted({
+        type: 'user_message',
+        text,
+        attachments: [{ kind: 'file', label: 'clip.mp4', path: CLIP }],
+      }),
+    ],
+  });
+}
+
+test('video: a clip renders a player element, not a text link', () => {
+  const h = createHarness('video-thumb');
+  withClip(h);
+  const video = h.document.querySelector('#thread .img-thumb video');
+  assert.ok(video, 'a generated clip should be watchable where it was produced');
+  assert.equal(video.getAttribute('src'), CLIP_URI);
+});
+
+test('video: the preview does not play by itself', () => {
+  const h = createHarness('video-no-autoplay');
+  withClip(h);
+  const video = h.document.querySelector('#thread .img-thumb video') as DomNode;
+  assert.ok(!video.hasAttribute('autoplay'), 'a wall of clips must not all start at once');
+  assert.ok(!video.hasAttribute('controls'), 'the preview is a frame, not a player');
+  assert.equal(video.preload, 'metadata', 'one frame, not the whole file');
+});
+
+test('video: it is marked as playable at a glance', () => {
+  const h = createHarness('video-badge');
+  withClip(h);
+  assert.ok(h.document.querySelector('.video-thumb .play-badge'), 'nothing says it will move');
+});
+
+test('video: clicking opens a player that starts', () => {
+  const h = createHarness('video-click');
+  withClip(h);
+  h.document.querySelector('#thread .img-thumb').dispatchEvent(
+    new h.window.MouseEvent('click', { bubbles: true }),
+  );
+  const player = h.document.querySelector('.lightbox video') as DomNode;
+  assert.ok(player, 'the click produced no player');
+  assert.equal(player.getAttribute('src'), CLIP_URI);
+  assert.ok(player.autoplay, 'the click was the request to play; asking twice is silly');
+  assert.ok(player.controls);
+});
+
+test('video: an image still opens as an image, not a player', () => {
+  const h = createHarness('video-not-image');
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    imageUris: { [SHOT]: SHOT_URI },
+    events: [
+      persisted({
+        type: 'user_message',
+        text: 'x',
+        attachments: [{ kind: 'image', label: 'shot.png', path: SHOT, mediaType: 'image/png' }],
+      }),
+    ],
+  });
+  h.document.querySelector('#thread .img-thumb').dispatchEvent(
+    new h.window.MouseEvent('click', { bubbles: true }),
+  );
+  assert.ok(h.document.querySelector('.lightbox img'));
+  assert.equal(h.document.querySelector('.lightbox video'), null);
+});

@@ -13,6 +13,11 @@ export interface SessionMeta {
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   createdAt: number;
   lastActivityAt: number;
+  /**
+   * Images this conversation has sent, counted rather than derived: the event
+   * log is rotated and the tail is capped, so it cannot be recounted later.
+   */
+  imageCount?: number;
 }
 
 export class Registry {

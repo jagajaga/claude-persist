@@ -72,9 +72,11 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
   `https://` clip as well as a file on disk.
 - **Pinch to zoom** an opened picture on a phone, drag to pan, double-tap to
   toggle.
-- **Screenshots are scaled before sending.** A phone screenshot is larger than
-  the API accepts once a conversation is carrying a few of them, and the reply
-  comes back saying an image was dropped. They are resized on the way in.
+- **Screenshots are scaled only when they must be.** Past twenty images, the API
+  applies a stricter per-image limit to every image in the request -- including
+  ones resent from earlier turns -- and rejects what exceeds it. Uploads keep
+  their full resolution until that threshold is in reach, then are resized to
+  fit it.
 
 ### Accounts and rate limits
 

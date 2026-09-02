@@ -1096,6 +1096,9 @@
     switch (event.type) {
       case 'user_message': {
         endStreaming();
+        for (const a of event.attachments || []) {
+          if (a.kind === 'image') conversationImages += 1;
+        }
         const box = el('div', 'user-msg');
         const textEl = el('div', null, displayUserText(event.text));
         // User text is plain, not markdown, so it never passes through
@@ -1750,6 +1753,7 @@
           applyPermissionMode(msg.info.permissionMode);
           currentModel = msg.info.model || '';
           currentEffort = msg.info.effort || '';
+          if (typeof msg.info.imageCount === 'number') conversationImages = msg.info.imageCount;
           renderPill();
         }
         // Nothing at all in this session: say something rather than showing a
@@ -1968,20 +1972,41 @@
   /**
    * Longest edge an image may have when it is sent to Claude.
    *
-   * A phone screenshot is around 1440x2980, and the API rejects an image that
-   * large: the conversation comes back with "an image could not be processed
-   * and was removed", after the upload has already been paid for. Shrinking
-   * here rather than in the extension host is what makes it possible at all --
-   * the browser has a canvas, the host has no image library.
+   * A single image may be up to 8000x8000, and anything oversized is quietly
+   * downscaled -- so one phone screenshot at 1440x2980 is fine. But once a
+   * request carries more than twenty images, a stricter per-image limit applies
+   * to *every* image in it, including ones resent from earlier turns, and those
+   * are rejected rather than downscaled: "an image could not be processed and
+   * was removed". A conversation that has been fine for weeks starts failing on
+   * the twenty-first screenshot, and takes the previous twenty down with it.
+   *
+   * 2000px is the documented bound for that case ("resize each image so that
+   * neither dimension exceeds 2000 px"). It is also below this model tier's
+   * 2576px native limit, so nothing is downscaled twice.
+   *
+   * Done in the webview because that is the only place it can be: the browser
+   * has a canvas, the extension host has no image library.
    */
-  const MAX_IMAGE_EDGE = 1568;
+  const MAX_IMAGE_EDGE = 2000;
+
+  /**
+   * Past this many images in one request, the stricter limit applies. Counted
+   * across the whole conversation, since every earlier image is resent.
+   */
+  const MANY_IMAGES = 20;
+
+  /** Images this conversation already holds, as the host last reported it. */
+  let conversationImages = 0;
 
   /**
    * A file ready to send: the original, unless it is an oversized image, in
    * which case a scaled copy of it.
    */
-  function prepareFile(file) {
+  function prepareFile(file, pendingImages) {
     if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) return Promise.resolve(file);
+    // Below the threshold the API downscales oversized images by itself and
+    // keeps the detail it can, so shrinking here would only throw pixels away.
+    if (conversationImages + pendingImages <= MANY_IMAGES) return Promise.resolve(file);
     return new Promise((resolve) => {
       const url = URL.createObjectURL(file);
       const img = new Image();
@@ -2015,8 +2040,12 @@
   }
 
   function sendFiles(files) {
-    for (const original of files) {
-      void prepareFile(original).then((file) => sendOneFile(file));
+    const list = [...files];
+    // Every image in this batch lands in the same request, so they all count
+    // towards the threshold -- including the ones queued after this one.
+    const images = list.filter((f) => /^image\//i.test(f.type)).length;
+    for (const original of list) {
+      void prepareFile(original, images).then((file) => sendOneFile(file));
     }
   }
 

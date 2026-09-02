@@ -636,3 +636,48 @@ test('a missing Claude Code does not rotate accounts', () => {
   authFailure(session, 'Native CLI binary for linux-x64 not found');
   assert.equal(asked, false);
 });
+
+// ---------------------------------------------------------------------------
+// Counting the images a conversation carries
+//
+// Past twenty images in one request the API applies a stricter per-image limit
+// to all of them -- including ones resent from earlier turns -- and rejects
+// what exceeds it. The panel shrinks uploads only once that is in reach, so it
+// needs the count, and the count cannot be recovered from the event log: that
+// log rotates and its tail is capped.
+// ---------------------------------------------------------------------------
+
+test('images are counted as they are appended', () => {
+  const session = makeSession(`imgcount-${Date.now()}`);
+  const meta = (session as unknown as { meta: { imageCount?: number } }).meta;
+  assert.equal(meta.imageCount ?? 0, 0);
+
+  append(session, {
+    type: 'user_message',
+    text: 'one',
+    attachments: [{ kind: 'image', label: 'a.png', path: '/tmp/a.png', mediaType: 'image/png' }],
+  });
+  assert.equal(meta.imageCount, 1);
+
+  append(session, {
+    type: 'user_message',
+    text: 'two at once',
+    attachments: [
+      { kind: 'image', label: 'b.png', path: '/tmp/b.png', mediaType: 'image/png' },
+      { kind: 'image', label: 'c.png', path: '/tmp/c.png', mediaType: 'image/png' },
+    ],
+  });
+  assert.equal(meta.imageCount, 3, 'every image in one message counts: they share a request');
+});
+
+test('messages without images leave the count alone', () => {
+  const session = makeSession(`imgcount-text-${Date.now()}`);
+  const meta = (session as unknown as { meta: { imageCount?: number } }).meta;
+  append(session, { type: 'user_message', text: 'just words' });
+  append(session, {
+    type: 'user_message',
+    text: 'a file, not a picture',
+    attachments: [{ kind: 'file', label: 'notes.txt', path: '/tmp/notes.txt' }],
+  });
+  assert.equal(meta.imageCount ?? 0, 0);
+});

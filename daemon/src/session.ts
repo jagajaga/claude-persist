@@ -275,6 +275,19 @@ export class DaemonSession {
   }
 
   private appendEvent(event: ChatEvent): void {
+    // Counted here rather than where the message is sent, because this is the
+    // one place every appended event passes through. Past twenty images the API
+    // tightens the per-image limit for the whole request, so the panel needs to
+    // know how close this conversation is before it shrinks the next upload --
+    // and the number cannot be recovered later: the log rotates and the tail is
+    // capped.
+    if (event.type === 'user_message') {
+      const images = (event.attachments ?? []).filter((a) => a.kind === 'image').length;
+      if (images > 0) {
+        this.meta.imageCount = (this.meta.imageCount ?? 0) + images;
+        this.callbacks.onMetaChanged();
+      }
+    }
     const persisted: PersistedEvent = { seq: this.totalCount, ts: Date.now(), event };
     this.totalCount++;
     this.tail.push(persisted);

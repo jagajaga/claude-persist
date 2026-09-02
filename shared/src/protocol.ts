@@ -6,7 +6,7 @@
 // reconnects sends `attach` with the last seq it has seen and receives a
 // replay of everything it missed, then live pushes.
 
-export const PROTOCOL_VERSION = 31;
+export const PROTOCOL_VERSION = 32;
 
 /**
  * Reply to `hello`. `entry` is the module path the daemon was launched from;
@@ -45,6 +45,16 @@ export interface SessionInfo {
    * restart the daemon".
    */
   busy?: boolean;
+  /**
+   * Images this conversation has accumulated.
+   *
+   * Past twenty, the API applies a stricter per-image dimension limit to every
+   * image in the request -- including ones resent from earlier turns -- and
+   * rejects the ones that exceed it. The panel shrinks new uploads only once
+   * that threshold is in reach, so a conversation with a handful of screenshots
+   * keeps them at full resolution.
+   */
+  imageCount?: number;
   id: string;
   title: string;
   cwd: string;

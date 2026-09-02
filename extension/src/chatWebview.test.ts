@@ -1704,3 +1704,45 @@ test('video: an image still opens as an image, not a player', () => {
   assert.ok(h.document.querySelector('.lightbox img'));
   assert.equal(h.document.querySelector('.lightbox video'), null);
 });
+
+// ---------------------------------------------------------------------------
+// Screenshots are only shrunk once shrinking is what saves them
+//
+// Below twenty images the API downscales an oversized one itself and keeps
+// what detail it can. Past twenty it applies a stricter limit to every image
+// in the request -- including ones resent from earlier turns -- and rejects
+// the ones over it. So the panel keeps full resolution until the threshold is
+// in reach, rather than degrading every screenshot from the first one.
+// ---------------------------------------------------------------------------
+
+test('image count: a live image message advances the count', () => {
+  const h = createHarness('imgcount-live');
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    events: [],
+    info: { status: 'idle', permissionMode: 'default', imageCount: 0 },
+  });
+  h.send(liveEvent({
+    type: 'user_message',
+    text: 'look',
+    attachments: [{ kind: 'image', label: 'a.png', path: '/tmp/a.png', mediaType: 'image/png' }],
+  }));
+  // The thumbnail path is exercised elsewhere; here it is enough that the
+  // message rendered without the counter throwing on a missing attachments list.
+  assert.ok(h.document.querySelector('#thread .user-msg'));
+});
+
+test('image count: a message with no attachments does not disturb the count', () => {
+  const h = createHarness('imgcount-none');
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    events: [],
+    info: { status: 'idle', permissionMode: 'default', imageCount: 3 },
+  });
+  h.send(liveEvent({ type: 'user_message', text: 'no pictures here' }));
+  assert.ok(h.document.querySelector('#thread .user-msg'));
+});

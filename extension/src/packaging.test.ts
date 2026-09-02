@@ -233,6 +233,36 @@ test('README badges point at this extension', () => {
 });
 
 /**
+ * The size cap belongs on the preview box, not on the picture inside it.
+ * Written on the picture as min(320px, 100%), the percentage is indefinite
+ * while the box is being sized -- so the box took the full available width and
+ * the picture then settled to 320px, leaving up to 60px of box beside it.
+ * Invisible on an image; on a video the play badge covers the box, so its scrim
+ * hung past the frame as a grey strip. Measured in chromium: the shipped rule
+ * gave `wrap 380 media 320`, the cap on the box gives `wrap 320 media 320`, and
+ * a tall screenshot and a 280px viewport both stay flush.
+ */
+test('the preview box is the size of the picture in it', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'media', 'chat.css'), 'utf8');
+  const rule = (selector: string): string =>
+    new RegExp(`\\n${selector.replace(/[.*+?^$()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? '';
+  assert.match(
+    rule('.img-thumb'),
+    /max-width:\s*min\(320px,\s*100%\)/,
+    'the box must carry the width cap, or it sizes itself to the available width',
+  );
+  for (const selector of ['.img-thumb img', '.img-thumb video']) {
+    const body = rule(selector);
+    assert.ok(body, `no rule found for ${selector}; this test is looking in the wrong place`);
+    assert.doesNotMatch(
+      body,
+      /max-width:\s*min\(/,
+      `${selector} must not cap itself with a percentage: the box cannot size to it`,
+    );
+  }
+});
+
+/**
  * The CSP had `default-src 'none'` and named neither img-src nor media-src, so
  * every preview was blocked. It never looked broken: the img error handler
  * quietly swapped in a plain link, so the feature appeared to work and had

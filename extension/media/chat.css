@@ -637,7 +637,15 @@ button.secondary {
   line-height: 0;
   vertical-align: middle;
   margin: 2px 4px 2px 0;
-  max-width: 100%;
+  /* The size cap lives here, on the box, not on the picture inside it. A cap
+     written on the picture as min(320px, 100%) is indefinite while the box is
+     being sized -- a percentage cannot be resolved against a width that is
+     still being computed -- so the box took the whole available width and the
+     picture then settled to 320, leaving up to 60px of box beside it. Nothing
+     drew that on an image, but a video's play badge covers the box, so its
+     scrim hung past the frame as a grey strip. Capping the box makes the
+     percentage resolve against the paragraph, which is known. */
+  max-width: min(320px, 100%);
 }
 
 /* The frame is drawn on the picture itself, not on the box around it: a
@@ -653,7 +661,7 @@ button.secondary {
 .img-thumb img {
   display: block;
   /* Bounded so a tall screenshot can't push the whole transcript around. */
-  max-width: min(320px, 100%);
+  max-width: 100%;
   max-height: 220px;
   width: auto;
   height: auto;
@@ -1030,7 +1038,7 @@ button.secondary {
 
 .img-thumb video {
   display: block;
-  max-width: min(320px, 100%);
+  max-width: 100%;
   max-height: 220px;
   width: auto;
   height: auto;

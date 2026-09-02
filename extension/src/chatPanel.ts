@@ -38,17 +38,27 @@ const PATH_IN_TEXT = /(?:^|[\s"'`(\[<])(\/[^\s"'`)\]>:]+\.[A-Za-z0-9]+)/g;
 /** Don't inline a huge file as a preview. */
 const MAX_PREVIEW_BYTES = 12 * 1024 * 1024;
 
+/** An https URL to something previewable, as it appears in prose. */
+const URL_IN_TEXT = /https:\/\/[^\s<>"')\]]+/g;
+
 /**
- * Absolute image paths mentioned anywhere in a payload.
+ * Everything previewable mentioned anywhere in a payload: absolute paths, and
+ * https URLs.
  *
- * Covers both attachment refs and paths that merely appear in message text or a
- * tool result, because "here's the screenshot at /tmp/x.png" should preview too.
+ * Covers attachment refs and things that merely appear in message text or a
+ * tool result, because "here's the screenshot at /tmp/x.png" should preview --
+ * and so should the rendered clip an agent just uploaded, which is where the
+ * output of this kind of work actually lives. Local temp files are usually
+ * deleted by the time anyone looks; the URL is the copy that survives.
  */
 function collectImagePaths(value: unknown, into = new Set<string>()): Set<string> {
   if (typeof value === 'string') {
     if (path.isAbsolute(value) && PREVIEWABLE.test(value)) into.add(value);
     for (const m of value.matchAll(PATH_IN_TEXT)) {
       if (PREVIEWABLE.test(m[1])) into.add(m[1]);
+    }
+    for (const m of value.matchAll(URL_IN_TEXT)) {
+      if (PREVIEWABLE.test(m[0])) into.add(m[0]);
     }
     return into;
   }
@@ -847,6 +857,12 @@ export class ChatPanelManager {
     if (paths.size === 0) return message;
     const imageUris: Record<string, string> = {};
     for (const p of paths) {
+      // A URL needs no translation: it is already something the webview can
+      // fetch, and there is no local file to size-check or find missing.
+      if (p.startsWith('https://')) {
+        imageUris[p] = p;
+        continue;
+      }
       try {
         const stat = fs.statSync(p);
         if (!stat.isFile() || stat.size > MAX_PREVIEW_BYTES) continue;
@@ -883,7 +899,7 @@ export class ChatPanelManager {
        implemented and had never once drawn a picture. blob: covers uploads
        rendered before they reach disk. -->
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; img-src ${webview.cspSource} blob: data:; media-src ${webview.cspSource} blob:; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+        content="default-src 'none'; img-src ${webview.cspSource} https: blob: data:; media-src ${webview.cspSource} https: blob:; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style nonce="${nonce}">${inlineCss}</style>
   <title>Claude</title>

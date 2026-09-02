@@ -68,7 +68,13 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
   type or that a tool returns.
 - **Video previews.** An `.mp4`, `.webm` or `.mov` shows its first frame with a
   play badge; pressing it opens the clip full-size and starts it. Nothing plays
-  on its own, so a transcript full of clips stays quiet.
+  on its own, so a transcript full of clips stays quiet. Works for a hosted
+  `https://` clip as well as a file on disk.
+- **Pinch to zoom** an opened picture on a phone, drag to pan, double-tap to
+  toggle.
+- **Screenshots are scaled before sending.** A phone screenshot is larger than
+  the API accepts once a conversation is carrying a few of them, and the reply
+  comes back saying an image was dropped. They are resized on the way in.
 
 ### Accounts and rate limits
 

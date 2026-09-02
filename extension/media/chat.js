@@ -335,7 +335,116 @@
     };
     overlay.addEventListener('click', close);
     document.addEventListener('keydown', onKey);
+    if (!video) enablePinchZoom(overlay, media, close);
     document.body.appendChild(overlay);
+  }
+
+  /**
+   * Pinch to zoom, drag to pan, double-tap to toggle.
+   *
+   * The page cannot do this itself: the webview's viewport disables user
+   * scaling, and a picture opened full-screen on a phone is the one place you
+   * actually want to get closer to it.
+   *
+   * Everything is a transform, so it stays on the compositor and does not
+   * re-layout the overlay while a finger is moving.
+   */
+  function enablePinchZoom(overlay, media, close) {
+    const MAX_SCALE = 6;
+    let scale = 1;
+    let x = 0;
+    let y = 0;
+    /** Gesture state: finger distance and midpoint when the pinch began. */
+    let start = null;
+    let lastTap = 0;
+
+    const apply = (animate) => {
+      media.style.transition = animate ? 'transform 180ms ease-out' : 'none';
+      media.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+      // Zoomed in, the picture owns the gesture; at rest, a tap still closes.
+      overlay.classList.toggle('zoomed', scale > 1.01);
+    };
+
+    const distance = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const midpoint = (t) => ({
+      x: (t[0].clientX + t[1].clientX) / 2,
+      y: (t[0].clientY + t[1].clientY) / 2,
+    });
+
+    media.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 2) {
+        const t = [e.touches[0], e.touches[1]];
+        start = { d: distance(t), m: midpoint(t), scale, x, y };
+        e.preventDefault();
+        return;
+      }
+      if (e.touches.length === 1 && scale > 1.01) {
+        // Panning a zoomed picture, rather than closing it.
+        start = { pan: true, x0: e.touches[0].clientX - x, y0: e.touches[0].clientY - y };
+        e.preventDefault();
+      }
+    }, { passive: false });
+
+    media.addEventListener('touchmove', (e) => {
+      if (!start) return;
+      if (start.pan && e.touches.length === 1) {
+        x = e.touches[0].clientX - start.x0;
+        y = e.touches[0].clientY - start.y0;
+        apply(false);
+        e.preventDefault();
+        return;
+      }
+      if (e.touches.length !== 2) return;
+      const t = [e.touches[0], e.touches[1]];
+      const next = Math.min(MAX_SCALE, Math.max(1, start.scale * (distance(t) / start.d)));
+      // Keep whatever was between the fingers between the fingers. The point
+      // under a screen position p is (p - translate) / scale, so holding it
+      // fixed while the scale changes by k gives translate = p1 - (p0 - t0) * k.
+      // Zooming about the centre of the overlay instead makes the thing you
+      // aimed at slide out from under you.
+      const m = midpoint(t);
+      const k = next / start.scale;
+      x = m.x - (start.m.x - start.x) * k;
+      y = m.y - (start.m.y - start.y) * k;
+      scale = next;
+      apply(false);
+      e.preventDefault();
+    }, { passive: false });
+
+    const settle = () => {
+      start = null;
+      if (scale <= 1.01) {
+        // Snap back rather than leaving a picture nudged slightly off centre.
+        scale = 1;
+        x = 0;
+        y = 0;
+        apply(true);
+      }
+    };
+    media.addEventListener('touchend', (e) => {
+      if (e.touches.length === 0) {
+        const now = Date.now();
+        if (now - lastTap < 300) {
+          // Double-tap: in if it is at rest, all the way back out if it is not.
+          scale = scale > 1.01 ? 1 : 2.5;
+          x = 0;
+          y = 0;
+          apply(true);
+          lastTap = 0;
+          e.preventDefault();
+        } else {
+          lastTap = now;
+        }
+      }
+      settle();
+    }, { passive: false });
+    media.addEventListener('touchcancel', settle);
+
+    // A zoomed picture must not close when you let go mid-pan.
+    media.addEventListener('click', (e) => {
+      if (scale > 1.01) e.stopPropagation();
+      else if (e.detail === 0) close();
+    });
   }
 
   /**
@@ -1856,38 +1965,91 @@
     return { chip, pctEl };
   }
 
-  function sendFiles(files) {
-    for (const file of files) {
-      if (file.size > MAX_UPLOAD) {
-        vscode.postMessage({
-          type: 'notify',
-          message: `${file.name} is over 10 MB — too large to upload from the browser`,
-        });
-        continue;
-      }
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = String(reader.result).split(',')[1] || '';
-        const chunks = [];
-        for (let i = 0; i < base64.length; i += UPLOAD_CHUNK) {
-          chunks.push(base64.slice(i, i + UPLOAD_CHUNK));
+  /**
+   * Longest edge an image may have when it is sent to Claude.
+   *
+   * A phone screenshot is around 1440x2980, and the API rejects an image that
+   * large: the conversation comes back with "an image could not be processed
+   * and was removed", after the upload has already been paid for. Shrinking
+   * here rather than in the extension host is what makes it possible at all --
+   * the browser has a canvas, the host has no image library.
+   */
+  const MAX_IMAGE_EDGE = 1568;
+
+  /**
+   * A file ready to send: the original, unless it is an oversized image, in
+   * which case a scaled copy of it.
+   */
+  function prepareFile(file) {
+    if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) return Promise.resolve(file);
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const longest = Math.max(img.naturalWidth, img.naturalHeight);
+        if (longest <= MAX_IMAGE_EDGE) {
+          URL.revokeObjectURL(url);
+          resolve(file);
+          return;
         }
-        if (chunks.length === 0) chunks.push('');
-        const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        const ui = makeUploadChip(uploadId, file.name);
-        pendingUploads.set(uploadId, { name: file.name, chunks, next: 1, ...ui });
-        vscode.postMessage({
-          type: 'uploadBegin',
-          uploadId,
-          name: file.name,
-          mediaType: file.type || 'application/octet-stream',
-          chunks: chunks.length,
-        });
-        // First chunk goes immediately; the rest flow on acks.
-        vscode.postMessage({ type: 'uploadChunk', uploadId, index: 0, data: chunks[0] });
+        const ratio = MAX_IMAGE_EDGE / longest;
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.naturalWidth * ratio);
+        canvas.height = Math.round(img.naturalHeight * ratio);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        // JPEG regardless of what came in: a screenshot re-encoded as PNG is
+        // often larger than the original, which defeats the point.
+        canvas.toBlob(
+          (blob) => resolve(blob ? new File([blob], file.name, { type: 'image/jpeg' }) : file),
+          'image/jpeg',
+          0.9,
+        );
       };
-      reader.readAsDataURL(file);
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(file); // not decodable here; let the host deal with it
+      };
+      img.src = url;
+    });
+  }
+
+  function sendFiles(files) {
+    for (const original of files) {
+      void prepareFile(original).then((file) => sendOneFile(file));
     }
+  }
+
+  function sendOneFile(file) {
+    if (file.size > MAX_UPLOAD) {
+      vscode.postMessage({
+        type: 'notify',
+        message: `${file.name} is over 10 MB — too large to upload from the browser`,
+      });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = String(reader.result).split(',')[1] || '';
+      const chunks = [];
+      for (let i = 0; i < base64.length; i += UPLOAD_CHUNK) {
+        chunks.push(base64.slice(i, i + UPLOAD_CHUNK));
+      }
+      if (chunks.length === 0) chunks.push('');
+      const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const ui = makeUploadChip(uploadId, file.name);
+      pendingUploads.set(uploadId, { name: file.name, chunks, next: 1, ...ui });
+      vscode.postMessage({
+        type: 'uploadBegin',
+        uploadId,
+        name: file.name,
+        mediaType: file.type || 'application/octet-stream',
+        chunks: chunks.length,
+      });
+      // First chunk goes immediately; the rest flow on acks.
+      vscode.postMessage({ type: 'uploadChunk', uploadId, index: 0, data: chunks[0] });
+    };
+    reader.readAsDataURL(file);
   }
 
   fileInput.addEventListener('change', () => {

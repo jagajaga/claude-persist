@@ -454,6 +454,47 @@
   /** Files that need a player rather than an <img>. */
   const PLAYABLE = /\.(mp4|webm|mov|m4v)$/i;
 
+  /** Clips already fetched into a blob: URL, keyed by their resource URL. */
+  const clipBlobs = new Map();
+
+  /**
+   * A source a <video> can actually play.
+   *
+   * A local file reaches the webview as a vscode-resource URL served by
+   * code-server's service worker. It answers a plain fetch with the whole file
+   * -- which is why every image preview works -- but it does not serve the
+   * ranged, seekable reads a media element opens with, so the element gives up
+   * before it has a frame. VS Code's own video editor fails on the same file
+   * for the same reason, which is what made it clear the fault sits under us
+   * rather than in this code. Fetching the bytes ourselves and playing a blob:
+   * sidesteps the transport; the CSP already admits blob: for media.
+   *
+   * A hosted clip is left alone: it is fetchable by the browser as-is, and
+   * buffering it into memory to play it would be worse. What tells the two
+   * apart is the key, not the URL -- the host maps a local path to a
+   * vscode-resource URL that is itself https, and passes an https clip through
+   * unchanged, so a hosted one is exactly the entry whose path IS its URL.
+   */
+  function playableSrc(pathText, uri) {
+    // Returned as a plain string when no copy is needed, so a hosted clip is
+    // still sourced in the same tick it is built: a promise here would mean a
+    // frame with no src for every preview, to serve only the local ones.
+    if (pathText === uri || typeof fetch !== 'function' || !URL.createObjectURL) {
+      return uri;
+    }
+    let pending = clipBlobs.get(uri);
+    if (!pending) {
+      pending = fetch(uri)
+        .then((res) => {
+          if (!res.ok) throw new Error(`preview fetch failed: ${res.status}`);
+          return res.blob();
+        })
+        .then((blob) => URL.createObjectURL(blob));
+      clipBlobs.set(uri, pending);
+    }
+    return pending;
+  }
+
   function imageThumb(pathText, label) {
     const uri = imageUris.get(pathText);
     if (!uri) return null;
@@ -462,22 +503,34 @@
     // A video gets a real player rather than a still: it is the whole point of
     // producing one, and a poster frame you cannot press is just a picture.
     const media = el(video ? 'video' : 'img');
-    media.src = uri;
+    // A file that disappears between send and render shouldn't leave a broken
+    // icon; fall back to the plain link. replaceWith on an unparented node is a
+    // no-op, so an early failure cannot strand a half-built preview either.
+    const fallBackToLink = () => wrap.replaceWith(rawFileLink(pathText, label));
+    // What the lightbox should open: the blob once there is one, since the
+    // resource URL is exactly what a media element cannot play.
+    let openable = uri;
     if (video) {
       // A still frame, not a player: metadata is enough to draw frame one, and
       // nothing autoplays. Pressing it opens the player.
       media.preload = 'metadata';
       media.muted = true;
       media.playsInline = true;
+      const src = playableSrc(pathText, uri);
+      if (typeof src === 'string') {
+        media.src = src;
+      } else {
+        src.then((blobUrl) => {
+          openable = blobUrl;
+          media.src = blobUrl;
+        }, fallBackToLink);
+      }
     } else {
+      media.src = uri;
       media.alt = label || pathText;
     }
     media.title = `${pathText} — click to ${video ? 'play' : 'view'}`;
-    // A file that disappears between send and render shouldn't leave a broken
-    // icon; fall back to the plain link.
-    media.addEventListener('error', () => {
-      wrap.replaceWith(rawFileLink(pathText, label));
-    });
+    media.addEventListener('error', fallBackToLink);
     wrap.appendChild(media);
     // The play badge is drawn over the frame so it reads as a video at a glance
     // rather than as a picture that happens to be of a video.
@@ -485,7 +538,7 @@
     wrap.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      openLightbox(uri, label || pathText, video);
+      openLightbox(openable, label || pathText, video);
     });
     return wrap;
   }

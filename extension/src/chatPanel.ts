@@ -899,7 +899,7 @@ export class ChatPanelManager {
        implemented and had never once drawn a picture. blob: covers uploads
        rendered before they reach disk. -->
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; img-src ${webview.cspSource} https: blob: data:; media-src ${webview.cspSource} https: blob:; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+        content="default-src 'none'; img-src ${webview.cspSource} https: blob: data:; media-src ${webview.cspSource} https: blob:; connect-src ${webview.cspSource}; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style nonce="${nonce}">${inlineCss}</style>
   <title>Claude</title>

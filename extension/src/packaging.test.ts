@@ -247,4 +247,8 @@ test('the webview may load the media it renders', () => {
   }
   assert.match(csp, /img-src[^;]*cspSource/, 'img-src must admit the webview resource origin');
   assert.match(csp, /media-src[^;]*cspSource/, 'media-src must admit the webview resource origin');
+  // A clip is fetched into a blob before it can play (see playableSrc), and a
+  // fetch is governed by connect-src -- which, unnamed, falls back to
+  // `default-src 'none'` and blocks every video preview.
+  assert.match(csp, /connect-src[^;]*cspSource/, 'connect-src must admit the webview resource origin');
 });

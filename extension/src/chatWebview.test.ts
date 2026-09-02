@@ -43,6 +43,9 @@ interface JsdomWindow {
   matchMedia: (query: string) => DomNode;
   /** jsdom has no visual viewport; the soft-keyboard fit needs one. */
   visualViewport?: DomNode;
+  /** jsdom implements neither; a clip preview fetches its bytes and plays a blob. */
+  fetch?: DomNode;
+  URL: { createObjectURL?: (blob: unknown) => string };
   innerHeight: number;
   EventTarget: new () => DomNode;
   Date: { now: () => number };
@@ -1680,6 +1683,95 @@ test('video: clicking opens a player that starts', () => {
   assert.equal(player.getAttribute('src'), CLIP_URI);
   assert.ok(player.autoplay, 'the click was the request to play; asking twice is silly');
   assert.ok(player.controls);
+});
+
+/**
+ * A local clip is served by code-server's service worker, which answers a plain
+ * fetch with the whole file -- every image preview proves that much -- but not
+ * the ranged, seekable reads a media element opens with, so the element errored
+ * and the preview fell back to the plain link it was meant to replace. (VS
+ * Code's own video editor fails on the same file for the same reason.) The
+ * bytes are fetched here and played as a blob, which needs none of that.
+ */
+function stubClipFetch(
+  h: Harness,
+  opts: { ok?: boolean } = {},
+): { urls: string[] } {
+  const urls: string[] = [];
+  h.window.fetch = (url: string) => {
+    urls.push(url);
+    return Promise.resolve({ ok: opts.ok !== false, status: opts.ok === false ? 404 : 200, blob: () => Promise.resolve({ size: 4 }) });
+  };
+  h.window.URL.createObjectURL = (blob: unknown) => `blob:clip-${(blob as { size: number }).size}`;
+  return { urls };
+}
+
+test('video: a local clip plays from a blob, not from the resource URL', async () => {
+  const h = createHarness('video-blob');
+  const fetched = stubClipFetch(h);
+  withClip(h);
+  await h.flush();
+  const video = h.document.querySelector('#thread .img-thumb video') as DomNode;
+  assert.ok(video, 'the clip fell back to a link instead of previewing');
+  assert.deepEqual(fetched.urls, [CLIP_URI], 'the clip should be fetched once, from its resource URL');
+  assert.equal(video.getAttribute('src'), 'blob:clip-4');
+});
+
+test('video: the blob is what the lightbox opens', async () => {
+  const h = createHarness('video-blob-lightbox');
+  stubClipFetch(h);
+  withClip(h);
+  await h.flush();
+  h.document.querySelector('#thread .img-thumb').dispatchEvent(
+    new h.window.MouseEvent('click', { bubbles: true }),
+  );
+  const player = h.document.querySelector('.lightbox video') as DomNode;
+  assert.equal(
+    player.getAttribute('src'),
+    'blob:clip-4',
+    'opening the resource URL would hand the player the one source it cannot play',
+  );
+});
+
+/**
+ * A hosted clip is already fetchable by the browser, and buffering it into
+ * memory to play it would be worse. The host passes an https URL through as its
+ * own URI, which is what tells it apart from a mapped local path.
+ */
+test('video: a hosted clip is played directly, not copied', async () => {
+  const h = createHarness('video-hosted');
+  const fetched = stubClipFetch(h);
+  const hosted = 'https://cdn.example.com/generated.mp4';
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    imageUris: { [hosted]: hosted },
+    events: [
+      persisted({
+        type: 'user_message',
+        text: 'it is up',
+        attachments: [{ kind: 'file', label: 'generated.mp4', path: hosted }],
+      }),
+    ],
+  });
+  await h.flush();
+  const video = h.document.querySelector('#thread .img-thumb video') as DomNode;
+  assert.ok(video, 'a hosted clip should preview too');
+  assert.equal(video.getAttribute('src'), hosted);
+  assert.deepEqual(fetched.urls, [], 'a hosted clip needs no local copy');
+});
+
+test('video: a clip that cannot be fetched falls back to the plain link', async () => {
+  const h = createHarness('video-blob-fails');
+  stubClipFetch(h, { ok: false });
+  withClip(h);
+  await h.flush();
+  assert.equal(h.document.querySelector('#thread .img-thumb video'), null);
+  const link = h.document.querySelector('#thread a.file-link') as DomNode;
+  assert.ok(link, 'a clip that will not load must still be openable');
+  assert.equal(link.getAttribute('title'), CLIP);
 });
 
 test('video: an image still opens as an image, not a player', () => {

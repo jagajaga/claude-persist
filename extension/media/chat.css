@@ -603,7 +603,25 @@ button.secondary {
 
 /* The elapsed/start-time readout inside the working row keeps .meta typography
    so it matches the duration/token line it will be replaced by. */
-.working-row .working-since { margin-left: 2px; }
+/* The clock rides at the right edge, away from the label that changes with
+   every tool call: a turn in flight is read by glancing at one fixed spot to
+   see the seconds move. Tabular figures so ticking cannot jiggle the row. */
+.working-row .working-since {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex: none;
+}
+
+/* The label is the part that gives: a long tool description would otherwise
+   wrap the row to three lines and break the clock across two, which defeats
+   having a fixed spot to glance at. */
+.working-row .working-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ---------- disconnected perimeter ---------------------------------------- */
 

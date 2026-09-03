@@ -55,6 +55,46 @@ export const STALL_RETRY_MS = 2 * 60 * 1000;
  */
 export const RESTART_RESUME_MS = 5_000;
 
+/**
+ * How soon to retry a turn the servers refused as overloaded.
+ *
+ * Same two minutes as a stall, and for the same reason: an overload is
+ * transient and nothing about it says when it lifts, so the only way to find
+ * out is to ask again. A 529 arrives in seconds, so this is a wait rather than
+ * a cost.
+ */
+export const OVERLOAD_RETRY_MS = 2 * 60 * 1000;
+
+/**
+ * A longer leash than MAX_ATTEMPTS for an overload: twelve hours of asking.
+ *
+ * A rate limit has a known reset and a stall means something is broken, so five
+ * tries is the right budget for both. An overload is neither -- it is somebody
+ * else's traffic and it clears on its own schedule, which can be hours. Giving
+ * up early abandons the work this exists to protect, and the cost of waiting is
+ * a message every two minutes into a session nobody is watching.
+ *
+ * Twelve hours covers an overnight run, which is when nobody is there to type
+ * "continue" and the whole thing matters most. It is still bounded: something
+ * that has failed for half a day is not clearing on its own.
+ */
+export const MAX_OVERLOAD_ATTEMPTS = 360;
+
+/**
+ * How often to ask the status page about an outage we are already waiting out.
+ *
+ * Faster than the retry itself, or resuming "the moment it clears" would mean
+ * the same two minutes we would have waited anyway. Still cheap: 157 bytes an
+ * ask, and only while a turn is actually parked on an overload.
+ */
+export const STATUS_POLL_MS = 60_000;
+
+const OVERLOAD_PATTERNS = [
+  /\b529\b/,
+  /\boverloaded\b/i,
+  /\boverloaded_error\b/i,
+];
+
 const LIMIT_PATTERNS = [
   /\brate[- ]limited\b/i,
   /\b(usage|session|weekly|spend)[- ]limits?\b/i,
@@ -90,6 +130,22 @@ export function isLimitNotice(text: unknown): boolean {
   const trimmed = text.trim();
   if (trimmed.length === 0 || trimmed.length > MAX_NOTICE_LENGTH) return false;
   return LIMIT_PATTERNS.some((re) => re.test(trimmed));
+}
+
+/**
+ * Is this result nothing but a server-overload notice?
+ *
+ * The same length rule as isLimitNotice, and it matters here for a sharper
+ * reason: a turn spent discussing a 529 -- reading this file, quoting the
+ * error, writing this comment -- ends in a reply that is full of the word.
+ * Parking that would restart work that had just succeeded. A refusal replaces
+ * the answer rather than appearing inside one.
+ */
+export function isOverloadNotice(text: unknown): boolean {
+  if (typeof text !== 'string') return false;
+  const trimmed = text.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_NOTICE_LENGTH) return false;
+  return OVERLOAD_PATTERNS.some((re) => re.test(trimmed));
 }
 
 /**

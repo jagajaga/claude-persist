@@ -8,6 +8,9 @@ import {
   STALL_RETRY_MS,
   RESUME_MESSAGE,
   isLimitNotice,
+  isOverloadNotice,
+  MAX_OVERLOAD_ATTEMPTS,
+  OVERLOAD_RETRY_MS,
   parseResetTime,
   planRetry,
   spreadMs,
@@ -17,6 +20,53 @@ import {
 /** The message the user actually reports seeing. */
 const REAL = "You've hit your session limit · resets 8:20pm (UTC)";
 const NOW = Date.parse('2026-08-04T10:00:00.000Z');
+
+// ------------------------------------------------------------ isOverloadNotice
+
+/** What a 529 actually reads as, verbatim from a session it ended. */
+const OVERLOAD =
+  'API Error: 529 Overloaded. This is a server-side issue, usually temporary — ' +
+  'try again in a moment. If it persists, check https://status.claude.com.';
+
+test('isOverloadNotice: recognises the real notice', () => {
+  assert.equal(isOverloadNotice(OVERLOAD), true);
+  assert.equal(isOverloadNotice(`  ${OVERLOAD}  `), true, 'surrounding whitespace is not meaningful');
+  assert.equal(isOverloadNotice('API Error: 529 Overloaded'), true, 'the bare form too');
+});
+
+/**
+ * The failure mode this has to survive, and it is not hypothetical: the turn
+ * that built this feature spent its whole length quoting 529s, and the session
+ * that reported the bug pasted the notice into the chat. Parking on either would
+ * resend work that had just succeeded -- the same trap isLimitNotice fell into
+ * for a day, so the same length rule answers it.
+ */
+test('isOverloadNotice: a reply that merely discusses a 529 is not a notice', () => {
+  const reply =
+    'Yes -- when a turn dies with "API Error: 529 Overloaded" the work stopped where it ' +
+    'was and waited for someone to type continue. It parks a retry now, two minutes out, ' +
+    'and sends "restart and continue" when it fires. An overload is server-wide, so it ' +
+    'must not rotate accounts: that would spend a switch that cannot help and start a ' +
+    'cooldown other sessions need. The give-up notice says it is not your quota.';
+  assert.ok(reply.length > 300, 'this fixture only means anything while it is long');
+  assert.equal(isOverloadNotice(reply), false);
+});
+
+test('isOverloadNotice: a rate limit is not an overload', () => {
+  assert.equal(isOverloadNotice(REAL), false);
+});
+
+test('isOverloadNotice: nothing to read is not a notice', () => {
+  for (const value of ['', '   ', null, undefined, 42, {}]) {
+    assert.equal(isOverloadNotice(value), false, String(value));
+  }
+});
+
+/** Two minutes apart, and long enough in total to sit through an overnight run. */
+test('overload retries are paced at two minutes and last twelve hours', () => {
+  assert.equal(OVERLOAD_RETRY_MS, 2 * 60 * 1000);
+  assert.equal((MAX_OVERLOAD_ATTEMPTS * OVERLOAD_RETRY_MS) / 3_600_000, 12);
+});
 
 // --------------------------------------------------------------- isLimitNotice
 

@@ -23,9 +23,15 @@ import {
   tasksFromLevelSignal,
 } from './agents.js';
 import { NO_CLAUDE_MESSAGE, claudeExecutable } from './claudeExecutable.js';
+import { incidentNotice } from './statusPage.js';
+import type { StatusIncident } from './statusPage.js';
 import { friendlyError, isSetupFailure, needsSignIn } from './errorHints.js';
 import {
   MAX_ATTEMPTS,
+  MAX_OVERLOAD_ATTEMPTS,
+  OVERLOAD_RETRY_MS,
+  STATUS_POLL_MS,
+  isOverloadNotice,
   RESTART_RESUME_MS,
   STALL_MS,
   STALL_RETRY_MS,
@@ -107,6 +113,12 @@ export interface SessionCallbacks {
   onLimited(ownResetAt: number): { retryAt: number; switchedTo: string | null; why: string };
   /** A login that has stopped working: mark it and move on if there is anywhere to go. */
   onAuthFailure(): { retryAt: number; switchedTo: string | null };
+  /**
+   * Open incidents on the status page, or null when that could not be found out.
+   * A callback rather than a direct import so a test can answer for the page,
+   * and so nothing in a test run ever reaches the network.
+   */
+  fetchOpenIncidents(): Promise<StatusIncident[] | null>;
   /** About to fire a queued retry; may switch to an account whose limit ended. */
   beforeRetry(): string | null;
   /** The set of subagents working for this session changed. */
@@ -119,6 +131,14 @@ interface PendingTurn {
   attempts: number;
   /** The limit notice itself, for the panel message and for parsing the reset. */
   text: string;
+}
+
+/** "30 minutes", "12 hours" — a span in the unit that reads as a decision. */
+function humanSpan(ms: number): string {
+  const mins = Math.round(ms / 60_000);
+  if (mins < 60 || mins % 60 !== 0) return `${mins} minutes`;
+  const hours = mins / 60;
+  return `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
 }
 
 /**
@@ -137,6 +157,21 @@ function limitNotice(
   switch (decision.why) {
     case 'stalled':
       return `This turn stopped responding. ${sent}`;
+    case 'overloaded': {
+      // Named as somebody else's problem on purpose: the first instinct on
+      // seeing a turn fail and requeue is to go and look at your own quota.
+      //
+      // An interval, not an instant. A limit resets at a time worth knowing and
+      // planning around; an overload just needs asking again, and an absolute
+      // ISO timestamp -- which is what `when` is -- reads as precision about
+      // something nobody can predict.
+      const mins = Math.round(OVERLOAD_RETRY_MS / 60_000);
+      return (
+        `Claude's servers are overloaded. Nothing is wrong with this session or your quota. ` +
+        `"${RESUME_MESSAGE}" will be sent again in ${mins} minutes, and every ${mins} ` +
+        `minutes after that until it goes through — you don't need to come back.`
+      );
+    }
     case 'switched':
       return `Rate limit reached. Switched to account "${decision.switchedTo}" and continuing — you don't need to come back.`;
     case 'cooldown':
@@ -168,6 +203,10 @@ function summarize(value: unknown, max = 2000): string {
 export class DaemonSession {
   readonly meta: SessionMeta;
   status: SessionStatus = 'idle';
+  /** Polls the status page while a turn is parked on an overload. */
+  private statusTimer: NodeJS.Timeout | null = null;
+  /** The incident already named in the panel, so it is said once, not every minute. */
+  private namedIncident: string | null = null;
   /** Set while a turn is parked waiting for a rate limit to reset. */
   private pending: PendingTurn | null = null;
   private retryTimer: NodeJS.Timeout | null = null;
@@ -390,26 +429,38 @@ export class DaemonSession {
    * The limit arrives as a normal `result` message, not an exception, so the
    * turn just ends with no answer — which is exactly why nothing used to retry.
    */
-  private parkForLimit(text: string, opts: { stalled?: boolean } = {}): void {
+  private parkForLimit(
+    text: string,
+    opts: { stalled?: boolean; overloaded?: boolean } = {},
+  ): void {
     const attempts = this.consecutiveRetries + 1;
-    if (attempts > MAX_ATTEMPTS) {
+    const maxAttempts = opts.overloaded ? MAX_OVERLOAD_ATTEMPTS : MAX_ATTEMPTS;
+    if (attempts > maxAttempts) {
       this.consecutiveRetries = 0;
       // Stop rather than loop: whatever keeps failing is not clearing on its own.
       // Name the actual cause. Reporting a stall as a rate limit sent someone
       // looking at their quota for two hours while the real problem was a query
       // that had stopped answering.
-      const cause = opts.stalled ? 'stopped responding' : 'rate limited';
+      const cause = opts.stalled
+        ? 'stopped responding'
+        : opts.overloaded
+          ? 'overloaded'
+          : 'rate limited';
       this.callbacks.log(
-        `session ${this.meta.id} giving up after ${MAX_ATTEMPTS} retries (${cause})`,
+        `session ${this.meta.id} giving up after ${maxAttempts} retries (${cause})`,
       );
       this.pending = null;
       this.clearPersistedPending();
+      this.stopStatusWatch();
+      this.namedIncident = null;
       this.appendEvent({
         type: 'status',
         status: 'error',
         detail: opts.stalled
-          ? `This turn stopped responding and did not recover after ${MAX_ATTEMPTS} automatic restarts — giving up. This is not a rate limit. Send the message again when you're ready.`
-          : `Still rate limited after ${MAX_ATTEMPTS} automatic retries — giving up. Send the message again when you're ready.`,
+          ? `This turn stopped responding and did not recover after ${maxAttempts} automatic restarts — giving up. This is not a rate limit. Send the message again when you're ready.`
+          : opts.overloaded
+            ? `Claude's servers were still overloaded after ${maxAttempts} automatic retries over ${humanSpan(maxAttempts * OVERLOAD_RETRY_MS)} — giving up. This is not a rate limit and not your quota. Send the message again when you're ready.`
+            : `Still rate limited after ${maxAttempts} automatic retries — giving up. Send the message again when you're ready.`,
       });
       return;
     }
@@ -417,6 +468,8 @@ export class DaemonSession {
     // may not be the cause; retry soon and let the outcome tell us.
     const plan = opts.stalled
       ? { at: Date.now() + STALL_RETRY_MS, source: 'stall' as const }
+      : opts.overloaded
+      ? { at: Date.now() + OVERLOAD_RETRY_MS, source: 'overload' as const }
       : planRetry({
           windows: this.callbacks.rateLimitWindows(),
           text,
@@ -424,10 +477,15 @@ export class DaemonSession {
           attempts,
           sessionId: this.meta.id,
         });
-    // A stall is not a limit, so it must not mark the account spent or rotate.
+    // Neither a stall nor an overload is a limit, so neither may mark the
+    // account spent or rotate off it. An overload especially: it is server-wide,
+    // so moving accounts cannot help and would spend a switch that a genuinely
+    // rate-limited session elsewhere needs.
     const decision = opts.stalled
       ? { retryAt: plan.at, switchedTo: null as string | null, why: 'stalled' }
-      : this.callbacks.onLimited(plan.at);
+      : opts.overloaded
+        ? { retryAt: plan.at, switchedTo: null as string | null, why: 'overloaded' }
+        : this.callbacks.onLimited(plan.at);
     if (opts.stalled) {
       // Tear the query down before retrying into it.
       //
@@ -443,7 +501,7 @@ export class DaemonSession {
     this.pending = { text, retryAt: decision.retryAt, attempts };
     this.persistPending();
     this.callbacks.log(
-      `session ${this.meta.id} ${opts.stalled ? 'stopped responding' : 'rate limited'}; ` +
+      `session ${this.meta.id} ${opts.stalled ? 'stopped responding' : opts.overloaded ? 'overloaded' : 'rate limited'}; ` +
         `retry #${attempts} at ${new Date(decision.retryAt).toISOString()} ` +
         `(${plan.source}${decision.switchedTo ? `, switched to ${decision.switchedTo}` : ''})`,
     );
@@ -453,6 +511,72 @@ export class DaemonSession {
       detail: limitNotice(decision, new Date(decision.retryAt).toISOString()),
     });
     this.scheduleRetry();
+    if (opts.overloaded) this.watchStatusPage();
+  }
+
+  /**
+   * Ask the status page what is wrong, and stop waiting when it says it is over.
+   *
+   * Two jobs, one request. It names the incident in the panel so the failure
+   * reads as an outage with a scope rather than something this session did; and
+   * when the incident closes it resumes immediately instead of sitting out the
+   * rest of the interval -- which for a three-hour outage is the difference
+   * between coming back to finished work and to a turn that waited two more
+   * minutes for no reason.
+   *
+   * Everything here is best-effort. A page that will not answer must leave the
+   * retry exactly as it was, because the retry is what actually recovers the
+   * work.
+   */
+  private watchStatusPage(): void {
+    this.stopStatusWatch();
+    const poll = async (): Promise<void> => {
+      if (!this.pending) {
+        this.stopStatusWatch();
+        return;
+      }
+      const incidents = await this.callbacks.fetchOpenIncidents();
+      // null is "we could not find out", which must not read as "all clear".
+      if (incidents === null) return;
+      if (incidents.length > 0) {
+        const notice = incidentNotice(incidents);
+        const worstId = incidents.length === 1 ? incidents[0].id : (notice ?? '');
+        if (notice && this.namedIncident !== worstId) {
+          this.namedIncident = worstId;
+          this.appendEvent({ type: 'status', status: 'error', detail: notice });
+        }
+        return;
+      }
+      // Nothing open. Only meaningful if there was something open before: with
+      // no incident ever posted -- which is the common case for a short
+      // overload -- this says nothing and the ordinary retry stands.
+      if (!this.namedIncident) return;
+      this.callbacks.log(
+        `session ${this.meta.id} status page reports the incident resolved; retrying now`,
+      );
+      this.namedIncident = null;
+      this.stopStatusWatch();
+      if (this.retryTimer) {
+        clearTimeout(this.retryTimer);
+        this.retryTimer = null;
+      }
+      this.appendEvent({
+        type: 'status',
+        status: 'error',
+        detail: `Anthropic reports the incident resolved. Sending "${RESUME_MESSAGE}" now.`,
+      });
+      this.runPendingRetry();
+    };
+    void poll();
+    this.statusTimer = setInterval(() => void poll(), STATUS_POLL_MS);
+    this.statusTimer.unref();
+  }
+
+  private stopStatusWatch(): void {
+    if (this.statusTimer) {
+      clearInterval(this.statusTimer);
+      this.statusTimer = null;
+    }
   }
 
   /**
@@ -518,6 +642,9 @@ export class DaemonSession {
   private runPendingRetry(): void {
     const pending = this.pending;
     if (!pending) return;
+    // Whatever the outcome, nothing is parked after this: stop asking.
+    this.stopStatusWatch();
+    this.namedIncident = null;
     const switched = this.callbacks.beforeRetry();
     this.callbacks.log(
       `session ${this.meta.id} sending "${RESUME_MESSAGE}" (attempt ${pending.attempts}` +
@@ -531,6 +658,8 @@ export class DaemonSession {
   }
 
   private cancelPendingRetry(reason: string): void {
+    this.stopStatusWatch();
+    this.namedIncident = null;
     if (this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
@@ -986,10 +1115,16 @@ export class DaemonSession {
       if (this.activeQuery === q) this.setStatus('idle');
     } catch (err) {
       if (this.activeQuery === q) {
-        this.setStatus(
-          'error',
-          friendlyError(err instanceof Error ? err.message : String(err)),
-        );
+        const message = err instanceof Error ? err.message : String(err);
+        // An overload can arrive either way -- as a result the turn ends on, or
+        // thrown out of the iteration. Both leave the work unfinished, so both
+        // park it; catching only the first would leave half the cases dead.
+        if (isOverloadNotice(message)) {
+          this.status = 'error';
+          this.parkForLimit(message, { overloaded: true });
+        } else {
+          this.setStatus('error', friendlyError(message));
+        }
       }
     } finally {
       // Same reasoning as above, and this one is worse: clearing
@@ -1283,6 +1418,14 @@ export class DaemonSession {
         if (corroborated) {
           this.status = 'error';
           this.parkForLimit(summaryText);
+        } else if (isOverloadNotice(summaryText)) {
+          // Same shape as a limit -- the turn ends with a refusal instead of an
+          // answer, no exception thrown -- so it parks the same way. It needs no
+          // corroboration from the usage windows: unlike a limit, an overload
+          // makes no claim about this account that could be checked, and the
+          // length rule is what keeps a reply about a 529 from landing here.
+          this.status = 'error';
+          this.parkForLimit(summaryText, { overloaded: true });
         } else {
           // A real answer: the retry budget starts over.
           //

@@ -30,6 +30,9 @@ const noopCallbacks = {
   log(): void {},
   onLimited: (at: number) => ({ retryAt: at, switchedTo: null, why: 'all-limited' }),
   onAuthFailure: () => ({ retryAt: 0, switchedTo: null }),
+  // Answers for the status page so no test ever reaches the network. null is
+  // "could not find out", which is what a session with no opinion should see.
+  fetchOpenIncidents: async () => null,
   beforeRetry: () => null,
   onAgents(): void {},
 };
@@ -423,6 +426,241 @@ test('a stalled turn drops its query, so the retry starts a fresh one', () => {
     null,
     'sendMessage would reuse it and the retry would go nowhere',
   );
+});
+
+// ---------- server overload (529) -------------------------------------------
+
+type Parkable = {
+  parkForLimit(text: string, opts: Record<string, unknown>): void;
+  consecutiveRetries: number;
+  pending: { text: string; retryAt: number; attempts: number } | null;
+};
+
+const OVERLOAD_TEXT =
+  'API Error: 529 Overloaded. This is a server-side issue, usually temporary — ' +
+  'try again in a moment. If it persists, check https://status.claude.com.';
+
+function lastStatus(session: InstanceType<typeof DaemonSession>): string {
+  const events = session.eventsSince(0, 400).events;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i].event as { type: string; detail?: string };
+    if (e.type === 'status') return e.detail ?? '';
+  }
+  return '';
+}
+
+/**
+ * An overload used to end the turn: the work stopped where it was and waited for
+ * someone to notice and type "continue". It is transient and server-side, so it
+ * queues a retry instead.
+ */
+test('overload: parks a retry two minutes out rather than ending the turn', () => {
+  const session = makeSession(`overload-${Date.now()}`);
+  const before = Date.now();
+  (session as unknown as Parkable).parkForLimit(OVERLOAD_TEXT, { overloaded: true });
+  const pending = (session as unknown as Parkable).pending;
+  assert.ok(pending, 'the turn should be queued, not abandoned');
+  const wait = pending.retryAt - before;
+  assert.ok(wait > 100_000 && wait < 140_000, `expected ~2 minutes, got ${wait}ms`);
+});
+
+/** What the queued retry actually says when it fires. */
+test('overload: the retry sends "restart and continue"', () => {
+  const session = makeSession(`overload-msg-${Date.now()}`);
+  const sent: string[] = [];
+  (session as unknown as { sendMessage(t: string): void }).sendMessage = (t: string) => {
+    sent.push(t);
+  };
+  (session as unknown as Parkable).parkForLimit(OVERLOAD_TEXT, { overloaded: true });
+  (session as unknown as { runPendingRetry(): void }).runPendingRetry();
+  assert.deepEqual(sent, ['restart and continue']);
+});
+
+/**
+ * An overload is server-wide. Rotating would spend a switch that cannot help,
+ * and the cooldown it starts is shared with sessions that are genuinely limited.
+ */
+test('overload: does not rotate accounts or mark the account spent', () => {
+  let limitedCalls = 0;
+  const meta = { id: `overload-rot-${Date.now()}`, title: 't', cwd: '/tmp', createdAt: 0, lastActivityAt: 0 };
+  const session = new DaemonSession(meta, {
+    ...noopCallbacks,
+    onLimited: (at: number) => {
+      limitedCalls += 1;
+      return { retryAt: at, switchedTo: 'other', why: 'switched' };
+    },
+  });
+  (session as unknown as Parkable).parkForLimit(OVERLOAD_TEXT, { overloaded: true });
+  assert.equal(limitedCalls, 0, 'an overload says nothing about this account');
+});
+
+test('overload: says whose problem it is, not the quota', () => {
+  const session = makeSession(`overload-notice-${Date.now()}`);
+  (session as unknown as Parkable).parkForLimit(OVERLOAD_TEXT, { overloaded: true });
+  const detail = lastStatus(session);
+  assert.match(detail, /overloaded/i);
+  assert.doesNotMatch(detail, /rate limit reached/i, 'an overload is not a rate limit');
+  assert.match(detail, /restart and continue/, 'it should say the retry is automatic');
+  assert.match(detail, /2 minutes/, 'and how long the wait is');
+  // A limit resets at an instant worth planning around; an overload does not,
+  // and a raw ISO timestamp claims precision about something unpredictable.
+  assert.doesNotMatch(detail, /\d{4}-\d{2}-\d{2}T/, 'no machine timestamps in a sentence');
+});
+
+/**
+ * An overload clears on somebody else's schedule, which can be hours. Twelve of
+ * them covers an overnight run -- when nobody is there to type "continue" and
+ * this matters most -- and five tries would give up inside the first ten
+ * minutes, abandoning the work it exists to protect.
+ */
+test('overload: keeps trying for twelve hours before giving up', () => {
+  const session = makeSession(`overload-budget-${Date.now()}`);
+  const park = (session as unknown as Parkable);
+  for (let i = 0; i < 360; i++) {
+    park.parkForLimit(OVERLOAD_TEXT, { overloaded: true });
+    assert.ok(park.pending, `attempt ${i + 1} should still be queued`);
+  }
+  // One past the leash: it reports rather than re-parking.
+  park.parkForLimit(OVERLOAD_TEXT, { overloaded: true });
+  assert.equal(park.pending, null, 'it should stop rather than loop for ever');
+  const detail = lastStatus(session);
+  assert.match(detail, /giving up/i);
+  assert.match(detail, /12 hours/, 'say the span in hours, not 720 minutes');
+  assert.match(detail, /not a rate limit/i, 'the give-up must not send them to their quota');
+});
+
+test('overload: a rate limit still gives up after five, not fifteen', () => {
+  const session = makeSession(`limit-budget-${Date.now()}`);
+  const park = (session as unknown as Parkable);
+  for (let i = 0; i < 5; i++) park.parkForLimit('You have hit your session limit', {});
+  park.parkForLimit('You have hit your session limit', {});
+  assert.equal(park.pending, null, 'the overload leash must not lengthen a limit');
+});
+
+// ---------- what the status page changes about a parked overload -----------
+
+const INCIDENT = {
+  id: 'inc1',
+  name: 'Elevated errors for multiple models',
+  impact: 'major',
+  startedAt: '2026-09-03T13:26:04.201Z',
+};
+
+type Watchable = Parkable & { watchStatusPage(): void; stopStatusWatch(): void };
+
+/** A session whose status page answers whatever the test says, in order. */
+function sessionWithStatus(id: string, answers: (typeof INCIDENT[] | null)[]) {
+  const meta = { id, title: id, cwd: '/tmp', createdAt: 0, lastActivityAt: 0 };
+  const sent: string[] = [];
+  const session = new DaemonSession(meta, {
+    ...noopCallbacks,
+    fetchOpenIncidents: async () => answers.shift() ?? null,
+  });
+  (session as unknown as { sendMessage(t: string): void }).sendMessage = (t: string) => {
+    sent.push(t);
+  };
+  return { session, sent };
+}
+
+const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 5));
+
+function details(session: InstanceType<typeof DaemonSession>): string[] {
+  return session
+    .eventsSince(0, 400)
+    .events.map((e) => e.event as { type: string; detail?: string })
+    .filter((e) => e.type === 'status')
+    .map((e) => e.detail ?? '');
+}
+
+/**
+ * "Overloaded" leaves you guessing whether it is a blip or an outage, and the
+ * first instinct is to go and check your own quota. The page knows.
+ */
+test('status: names the open incident in the panel', async () => {
+  const { session } = sessionWithStatus(`status-name-${Date.now()}`, [[INCIDENT]]);
+  (session as unknown as Parkable).parkForLimit(OVERLOAD_TEXT, { overloaded: true });
+  await settle();
+  const said = details(session).join('\n');
+  assert.match(said, /Elevated errors for multiple models/);
+  assert.match(said, /major/);
+  assert.match(said, /13:26 UTC/);
+});
+
+test('status: says it once, not every time it asks', async () => {
+  const { session } = sessionWithStatus(`status-once-${Date.now()}`, [[INCIDENT], [INCIDENT], [INCIDENT]]);
+  const w = session as unknown as Watchable;
+  w.parkForLimit(OVERLOAD_TEXT, { overloaded: true });
+  await settle();
+  w.watchStatusPage();
+  await settle();
+  w.watchStatusPage();
+  await settle();
+  const named = details(session).filter((d) => /Elevated errors/.test(d));
+  assert.equal(named.length, 1, 'the same incident should not be re-announced every minute');
+  w.stopStatusWatch();
+});
+
+/**
+ * The point of asking at all: a three-hour outage ends, and the turn resumes
+ * then rather than sitting out the rest of its two minutes.
+ */
+test('status: resumes the moment the incident is resolved', async () => {
+  const { session, sent } = sessionWithStatus(`status-resolve-${Date.now()}`, [[INCIDENT], []]);
+  const w = session as unknown as Watchable;
+  w.parkForLimit(OVERLOAD_TEXT, { overloaded: true });
+  await settle();
+  assert.deepEqual(sent, [], 'still parked while the incident is open');
+  w.watchStatusPage(); // the next minute's ask: nothing open any more
+  await settle();
+  assert.deepEqual(sent, ['restart and continue'], 'it should not have waited out the interval');
+  assert.match(details(session).join('\n'), /resolved/i);
+});
+
+/**
+ * The distinction the design rests on: an unreachable page is not recovery. A
+ * session that resumed on it would restart into an outage still running.
+ */
+test('status: a page that will not answer changes nothing', async () => {
+  const { session, sent } = sessionWithStatus(`status-unknown-${Date.now()}`, [[INCIDENT], null, null]);
+  const w = session as unknown as Watchable;
+  w.parkForLimit(OVERLOAD_TEXT, { overloaded: true });
+  await settle();
+  w.watchStatusPage();
+  await settle();
+  assert.deepEqual(sent, [], 'null is "could not find out", not "all clear"');
+  assert.ok(w.pending, 'the turn stays parked on its own clock');
+  w.stopStatusWatch();
+});
+
+/**
+ * The common case: a short overload nobody posts. With no incident ever named,
+ * an empty page says nothing and must not be read as a recovery to resume on.
+ */
+test('status: an outage that was never posted just waits its two minutes', async () => {
+  const { session, sent } = sessionWithStatus(`status-quiet-${Date.now()}`, [[], []]);
+  const w = session as unknown as Watchable;
+  w.parkForLimit(OVERLOAD_TEXT, { overloaded: true });
+  await settle();
+  w.watchStatusPage();
+  await settle();
+  assert.deepEqual(sent, [], 'nothing was ever open, so nothing resolved');
+  assert.ok(w.pending, 'the ordinary retry still stands');
+  w.stopStatusWatch();
+});
+
+test('status: a rate limit is not an outage and asks nobody', async () => {
+  let asked = 0;
+  const meta = { id: `status-limit-${Date.now()}`, title: 't', cwd: '/tmp', createdAt: 0, lastActivityAt: 0 };
+  const session = new DaemonSession(meta, {
+    ...noopCallbacks,
+    fetchOpenIncidents: async () => {
+      asked += 1;
+      return null;
+    },
+  });
+  (session as unknown as Parkable).parkForLimit('You have hit your session limit', {});
+  await settle();
+  assert.equal(asked, 0, 'the status page has nothing to say about your quota');
 });
 
 /** A rate limit is different: that query is fine and the account is the problem. */

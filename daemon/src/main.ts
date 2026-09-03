@@ -22,6 +22,8 @@ import { releaseLock } from './lock.js';
 import { claimOwnership } from './ownership.js';
 import { Registry } from './registry.js';
 import { DaemonSession } from './session.js';
+import { fetchOpenIncidents } from './statusPage.js';
+import type { StatusIncident } from './statusPage.js';
 import { importClaudeSession, listClaudeSessions } from './importer.js';
 import { accountIdentity, accountsStore, shareUserConfig } from './accounts.js';
 import { LoginManager } from './login.js';
@@ -328,6 +330,17 @@ const callbacks = {
    *
    * @returns the account moved to, or null when there is nowhere left to go.
    */
+  /**
+   * What the status page says is wrong, for a turn parked on an overload.
+   *
+   * The only outbound request this daemon makes that is not to Claude itself,
+   * and it is made solely while a turn is already waiting: never on a healthy
+   * session, never on a schedule of its own.
+   */
+  fetchOpenIncidents(): Promise<StatusIncident[] | null> {
+    return fetchOpenIncidents();
+  },
+
   onAuthFailure(): { retryAt: number; switchedTo: string | null } {
     const now = Date.now();
     const current = accountsStore.active;

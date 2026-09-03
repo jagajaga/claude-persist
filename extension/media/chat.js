@@ -308,8 +308,16 @@
     for (const [p, uri] of Object.entries(msg.imageUris)) imageUris.set(p, uri);
   }
 
-  /** Full-size overlay. Click anywhere (or Escape) to dismiss. */
-  function openLightbox(uri, caption, video = false) {
+  /**
+   * Full-size overlay. Click anywhere (or Escape) to dismiss; swipe or arrow
+   * between the pictures in the transcript.
+   *
+   * The pictures are read out of the thread at opening time rather than kept in
+   * a list, because the thread is the list -- replay rebuilds it, a preview can
+   * fall back to a link, and any register kept alongside would drift out of
+   * step with what is actually on screen.
+   */
+  function openLightbox(uri, caption, video = false, origin = null) {
     const overlay = el('div', 'lightbox');
     // A video opens playing with its controls: getting here was the click that
     // asked for it, so making you press play twice would be silly.
@@ -325,17 +333,44 @@
       media.alt = caption || '';
     }
     overlay.appendChild(media);
-    if (caption) overlay.appendChild(el('div', 'lightbox-caption', caption));
+    const captionEl = el('div', 'lightbox-caption', caption || '');
+    if (caption) overlay.appendChild(captionEl);
+    // A clip is not part of the run: it has its own controls to swipe over, and
+    // stepping off a playing video onto a screenshot is nobody's intent.
+    const gallery = video || !origin
+      ? []
+      : Array.from(document.querySelectorAll('#thread .img-thumb img'));
+    let at = gallery.indexOf(origin);
+    /** dir is +1 for the next picture down the transcript, -1 for the one above. */
+    const step = (dir) => {
+      const next = at + dir;
+      // Stopping at the ends rather than wrapping: the transcript has an order,
+      // and looping it would lose you your place in it.
+      if (at < 0 || next < 0 || next >= gallery.length) return;
+      at = next;
+      const picture = gallery[at];
+      // The attribute, not the property: the property comes back resolved
+      // against the document, and a blob: or vscode-resource: URL is worth
+      // carrying across exactly as the thumbnail had it.
+      media.src = picture.getAttribute('src') || picture.src;
+      media.alt = picture.alt || '';
+      captionEl.textContent = picture.alt || '';
+      zoom.reset();
+    };
     const close = () => {
       overlay.remove();
       document.removeEventListener('keydown', onKey);
     };
     const onKey = (e) => {
       if (e.key === 'Escape') close();
+      else if (e.key === 'ArrowLeft') step(-1);
+      else if (e.key === 'ArrowRight') step(1);
     };
     overlay.addEventListener('click', close);
     document.addEventListener('keydown', onKey);
-    if (!video) enablePinchZoom(overlay, media, close);
+    // Swiping left pulls the next picture in from the right, the direction the
+    // transcript runs.
+    const zoom = video ? null : enablePinchZoom(overlay, media, close, (dir) => step(dir));
     document.body.appendChild(overlay);
   }
 
@@ -349,13 +384,19 @@
    * Everything is a transform, so it stays on the compositor and does not
    * re-layout the overlay while a finger is moving.
    */
-  function enablePinchZoom(overlay, media, close) {
+  function enablePinchZoom(overlay, media, close, onSwipe) {
     const MAX_SCALE = 6;
+    /** How far a finger must travel across before it counts as a swipe. */
+    const SWIPE_PX = 50;
     let scale = 1;
     let x = 0;
     let y = 0;
     /** Gesture state: finger distance and midpoint when the pinch began. */
     let start = null;
+    /** One finger travelling while the picture sits at rest: a page turn. */
+    let swipe = null;
+    /** A swipe ends in a click the overlay would read as "close". */
+    let swallowClick = false;
     let lastTap = 0;
 
     const apply = (animate) => {
@@ -383,14 +424,25 @@
         e.preventDefault();
         return;
       }
-      if (e.touches.length === 1 && scale > 1.01) {
+      if (e.touches.length !== 1) return;
+      if (scale > 1.01) {
         // Panning a zoomed picture, rather than closing it.
         start = { pan: true, x0: e.touches[0].clientX - x, y0: e.touches[0].clientY - y };
         e.preventDefault();
+        return;
       }
+      // At rest the same drag means the next picture. Left alone otherwise:
+      // this must still be able to end as a tap, which closes.
+      if (onSwipe) swipe = { x: e.touches[0].clientX, y: e.touches[0].clientY, dx: 0, dy: 0 };
     }, { passive: false });
 
     media.addEventListener('touchmove', (e) => {
+      if (swipe && e.touches.length === 1) {
+        // Tracked here rather than read off changedTouches at the end, so the
+        // gesture is known from movement alone.
+        swipe.dx = e.touches[0].clientX - swipe.x;
+        swipe.dy = e.touches[0].clientY - swipe.y;
+      }
       if (!start) return;
       if (start.pan && e.touches.length === 1) {
         x = e.touches[0].clientX - start.x0;
@@ -431,6 +483,20 @@
     };
     media.addEventListener('touchend', (e) => {
       if (e.touches.length === 0) {
+        // A crossways drag turns the page; a mostly-vertical one is a scroll
+        // that happened to land here, and a short one is a tap.
+        if (swipe && Math.abs(swipe.dx) > SWIPE_PX && Math.abs(swipe.dx) > Math.abs(swipe.dy)) {
+          const dir = swipe.dx < 0 ? 1 : -1;
+          swipe = null;
+          swallowClick = true;
+          // Not a tap, so it must not arm the double-tap either.
+          lastTap = 0;
+          settle();
+          onSwipe(dir);
+          e.preventDefault();
+          return;
+        }
+        swipe = null;
         const now = Date.now();
         if (now - lastTap < 300) {
           // Double-tap: in if it is at rest, all the way back out if it is not.
@@ -448,11 +514,29 @@
     }, { passive: false });
     media.addEventListener('touchcancel', settle);
 
+    overlay.addEventListener('click', (e) => {
+      if (!swallowClick) return;
+      swallowClick = false;
+      e.stopPropagation();
+      e.preventDefault();
+    }, true);
+
     // A zoomed picture must not close when you let go mid-pan.
     media.addEventListener('click', (e) => {
       if (scale > 1.01) e.stopPropagation();
       else if (e.detail === 0) close();
     });
+
+    // The next picture arrives at rest: carrying a zoom across would drop you
+    // into the middle of something you have not seen whole yet.
+    return {
+      reset() {
+        scale = 1;
+        x = 0;
+        y = 0;
+        apply(false);
+      },
+    };
   }
 
   /**
@@ -546,7 +630,7 @@
     wrap.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      openLightbox(openable, label || pathText, video);
+      openLightbox(openable, label || pathText, video, video ? null : media);
     });
     return wrap;
   }

@@ -1739,6 +1739,118 @@ test('preview: a path on a line of its own still becomes the picture', () => {
   );
 });
 
+// ---------- stepping between pictures ---------------------------------------
+
+const SHOT2 = '/tmp/second.png';
+const SHOT2_URI = 'https://file%2B.vscode-resource/tmp/second.png';
+
+/** Two pictures in one message, so the lightbox has somewhere to go. */
+function withTwoPictures(h: Harness): void {
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    imageUris: { [SHOT]: SHOT_URI, [SHOT2]: SHOT2_URI },
+    events: [
+      persisted({
+        type: 'user_message',
+        text: 'x',
+        attachments: [
+          { kind: 'image', label: 'shot.png', path: SHOT, mediaType: 'image/png' },
+          { kind: 'image', label: 'second.png', path: SHOT2, mediaType: 'image/png' },
+        ],
+      }),
+    ],
+  });
+}
+
+function openPicture(h: Harness, index: number): DomNode {
+  const thumbs = h.document.querySelectorAll('#thread .img-thumb');
+  thumbs[index].dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  return h.document.querySelector('.lightbox img');
+}
+
+/** A drag across the picture, in whole: down, move, up. */
+function swipe(h: Harness, node: DomNode, dx: number, dy = 0): void {
+  touch(h, node, 'touchstart', [[200, 200]]);
+  touch(h, node, 'touchmove', [[200 + dx, 200 + dy]]);
+  touch(h, node, 'touchend', []);
+}
+
+test('lightbox: swiping left brings the next picture in the transcript', () => {
+  const h = createHarness('swipe-next');
+  withTwoPictures(h);
+  const shown = openPicture(h, 0);
+  assert.equal(shown.getAttribute('src'), SHOT_URI);
+  swipe(h, shown, -120);
+  assert.equal(shown.getAttribute('src'), SHOT2_URI, 'the next picture should have come in');
+});
+
+test('lightbox: swiping right goes back up the transcript', () => {
+  const h = createHarness('swipe-prev');
+  withTwoPictures(h);
+  const shown = openPicture(h, 1);
+  swipe(h, shown, 120);
+  assert.equal(shown.getAttribute('src'), SHOT_URI);
+});
+
+test('lightbox: the ends hold rather than wrapping round', () => {
+  const h = createHarness('swipe-ends');
+  withTwoPictures(h);
+  const shown = openPicture(h, 0);
+  swipe(h, shown, 120); // already the first: nowhere above it
+  assert.equal(shown.getAttribute('src'), SHOT_URI, 'the first picture should have held');
+  // Holding still is also what a thrown error looks like, so prove the place
+  // survived it: the next swipe must go where it would have gone anyway.
+  swipe(h, shown, -120);
+  assert.equal(shown.getAttribute('src'), SHOT2_URI, 'the swipe off the end lost our place');
+});
+
+test('lightbox: a swipe does not also close the overlay', () => {
+  const h = createHarness('swipe-not-close');
+  withTwoPictures(h);
+  const shown = openPicture(h, 0);
+  swipe(h, shown, -120);
+  // The click a drag ends in would otherwise reach the overlay, which closes.
+  shown.dispatchEvent(new h.window.MouseEvent('click', { bubbles: true, detail: 1 }));
+  assert.ok(h.document.querySelector('.lightbox'), 'the swipe closed the picture it turned to');
+});
+
+test('lightbox: a short drag is still a tap, not a page turn', () => {
+  const h = createHarness('swipe-short');
+  withTwoPictures(h);
+  const shown = openPicture(h, 0);
+  swipe(h, shown, -20);
+  assert.equal(shown.getAttribute('src'), SHOT_URI, 'a nudge should not turn the page');
+});
+
+test('lightbox: a mostly-vertical drag is not a page turn', () => {
+  const h = createHarness('swipe-vertical');
+  withTwoPictures(h);
+  const shown = openPicture(h, 0);
+  swipe(h, shown, -60, 200);
+  assert.equal(shown.getAttribute('src'), SHOT_URI, 'a scroll that landed here is not a swipe');
+});
+
+test('lightbox: the arrow keys step too', () => {
+  const h = createHarness('arrow-keys');
+  withTwoPictures(h);
+  const shown = openPicture(h, 0);
+  h.document.dispatchEvent(new h.window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+  assert.equal(shown.getAttribute('src'), SHOT2_URI);
+  h.document.dispatchEvent(new h.window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+  assert.equal(shown.getAttribute('src'), SHOT_URI);
+});
+
+test('lightbox: the caption follows the picture', () => {
+  const h = createHarness('swipe-caption');
+  withTwoPictures(h);
+  const shown = openPicture(h, 0);
+  swipe(h, shown, -120);
+  assert.equal(h.document.querySelector('.lightbox-caption').textContent, 'second.png');
+});
+
 // ---------- video previews ---------------------------------------------------
 
 /**

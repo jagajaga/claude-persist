@@ -65,7 +65,9 @@ test('AccountsStore: a fresh store defaults to the default account and lists it 
   });
   assert.equal(store.active, null);
   assert.deepEqual(store.list(), [
-    { name: 'default', configDir: null, active: true, signedIn: false },
+    // The store reports no expiry: whether a login still works is learned from
+    // a request failing, which is rotation's business, not the store's.
+    { name: 'default', configDir: null, active: true, signedIn: false, loginExpired: false },
   ]);
 });
 

@@ -1611,12 +1611,26 @@
       // normal already-logged-in case. On a machine that has never run Claude
       // Code it was therefore shown ticked and active while every message
       // failed, with nothing anywhere saying why. Say it here.
-      const label = account.signedIn === false ? `${account.name} — not signed in` : account.name;
+      // An expired login is a third state, and the one that used to be
+      // invisible: the credentials are still on disk, so the row looked
+      // healthy, and picking it switched in silence. You found out from the
+      // next turn failing.
+      const label = account.signedIn === false
+        ? `${account.name} — not signed in`
+        : account.loginExpired
+          ? `${account.name} — login expired`
+          : account.name;
       const item = menuChoice(label, account.active, () => {
         vscode.postMessage({ type: 'setAccount', configDir: account.configDir });
         modelMenu.hidden = true;
+        // Switch, because it is what was asked for -- but say so now and offer
+        // the one thing that fixes it, rather than letting the next message
+        // discover it.
+        if (account.loginExpired) offerRelogin(account);
       });
-      if (account.signedIn === false) item.classList.add('account-unauthed');
+      if (account.signedIn === false || account.loginExpired) {
+        item.classList.add('account-unauthed');
+      }
       // Which window bites first and how full it is, so "which of these has
       // room" is answerable without switching to find out. Only the active
       // account's reading is current; the rest carry their age.
@@ -1635,6 +1649,29 @@
         modelMenu.hidden = true;
       }),
     );
+  }
+
+  /**
+   * Say that the account just chosen cannot sign in, and offer to fix it.
+   *
+   * The same notice an auth failure raises, only without spending a turn to
+   * find out: rotation already knew this login was dead, so making you send a
+   * message to be told is a fact withheld rather than a fact discovered.
+   */
+  function offerRelogin(account) {
+    const notice = el(
+      'div',
+      'meta error relogin',
+      `⚠︎ The login for "${account.name}" has expired. It is the active account now, but a message will fail until you sign in again.`,
+    );
+    const button = el('button', 'notice-action', `Sign in to "${account.name}"`);
+    button.addEventListener('click', () => {
+      button.disabled = true;
+      vscode.postMessage({ type: 'addAccount', account: account.name });
+    });
+    notice.appendChild(button);
+    threadEl.appendChild(notice);
+    scrollToBottom();
   }
 
   // Where this conversation is working — not the window's repo, and not

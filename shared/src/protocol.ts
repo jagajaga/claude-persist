@@ -254,6 +254,17 @@ export interface AccountInfo {
    * they hold credentials, so this is false only for the default.
    */
   signedIn: boolean;
+  /**
+   * Whether this account's login has stopped working.
+   *
+   * Distinct from `signedIn`, which asks whether credentials exist at all: a
+   * token that has expired is still on disk, so the account looks fine right
+   * up until a message fails on it. Rotation already knows -- it marks such an
+   * account unusable and routes around it -- and that knowledge stayed inside
+   * the daemon, so anyone picking the account by hand got a silent switch and
+   * found out from the next failed turn.
+   */
+  loginExpired: boolean;
 }
 
 export type Request =

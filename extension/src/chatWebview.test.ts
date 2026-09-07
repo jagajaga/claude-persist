@@ -1374,6 +1374,75 @@ test('empty state: a window with earlier history never shows it', () => {
   assert.equal(h.document.querySelector('.empty-state'), null);
 });
 
+// ---------- an account whose login has died ---------------------------------
+
+/** Rotation knows this account is dead; the menu is where you find out. */
+function withExpiredAccount(h: Harness): void {
+  h.send({
+    type: 'accounts',
+    accounts: [
+      { name: 'default', configDir: null, active: true, signedIn: true, loginExpired: false },
+      { name: 'work', configDir: '/acc/work', active: false, signedIn: true, loginExpired: true },
+    ],
+  });
+  h.document.getElementById('model-pill').dispatchEvent(
+    new h.window.MouseEvent('click', { bubbles: true }),
+  );
+}
+
+function menuItemFor(h: Harness, name: string): DomNode {
+  const items = [...h.document.querySelectorAll('.menu-item')] as DomNode[];
+  const found = items.find((i) => i.textContent.includes(name));
+  assert.ok(found, `no menu row for ${name}`);
+  return found;
+}
+
+/**
+ * An expired token is still on disk, so the row looked as healthy as any other
+ * and switching to it was silent. The first sign was the next turn failing.
+ */
+test('account menu: an account whose login has expired says so', () => {
+  const h = createHarness('account-expired');
+  withExpiredAccount(h);
+  assert.match(menuItemFor(h, 'work').textContent, /work — login expired/);
+  assert.ok(
+    menuItemFor(h, 'work').classList.contains('account-unauthed'),
+    'it should read as unusable, like one with no credentials at all',
+  );
+  assert.doesNotMatch(menuItemFor(h, 'default').textContent, /expired/, 'and the live one must not');
+});
+
+test('account menu: choosing it still switches, because that is what was asked', () => {
+  const h = createHarness('account-expired-switch');
+  withExpiredAccount(h);
+  menuItemFor(h, 'work').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  const asked = h.posted.filter((m) => m.type === 'setAccount');
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].configDir, '/acc/work', 'refusing the choice would be worse than warning');
+});
+
+test('account menu: choosing it offers the sign-in that fixes it', () => {
+  const h = createHarness('account-expired-offer');
+  withExpiredAccount(h);
+  menuItemFor(h, 'work').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  const notice = h.document.querySelector('#thread .relogin') as DomNode;
+  assert.ok(notice, 'the switch went through in silence');
+  assert.match(notice.textContent, /login for "work" has expired/);
+  const button = notice.querySelector('.notice-action') as DomNode;
+  assert.match(button.textContent, /Sign in to "work"/);
+  button.dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  const login = h.posted.filter((m) => m.type === 'addAccount');
+  assert.equal(login.length, 1, 'the button must start the login, not just look like it would');
+  assert.equal(login[0].account, 'work', 'and for the account that failed, not a fresh one');
+});
+
+test('account menu: a healthy account is switched to without a word', () => {
+  const h = createHarness('account-healthy');
+  withExpiredAccount(h);
+  menuItemFor(h, 'default').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  assert.equal(h.document.querySelector('#thread .relogin'), null, 'nothing to warn about');
+});
+
 /**
  * The default account is listed whether or not it has credentials. On a machine
  * that has never run Claude Code it was therefore shown ticked and active while

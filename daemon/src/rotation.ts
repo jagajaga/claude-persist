@@ -178,3 +178,26 @@ export function accountForRetry(
   if (currentAccount && usable(currentAccount, state, now, identityOf)) return null;
   return nextUsableAccount(accounts, current, state, now, identityOf);
 }
+
+/**
+ * Say, on each account, whether its login is one rotation has given up on.
+ *
+ * The knowledge lives here because it is learned here: nothing on disk marks a
+ * token as expired, only a request failing on it does. It sat here alone for a
+ * while, which meant rotation quietly routed around a dead account while the
+ * menu still offered it as though it were fine -- and choosing it by hand got
+ * you a silent switch and a failure one message later.
+ *
+ * Accounts sharing a login share the verdict, since they share the credentials:
+ * that is what identityOf groups.
+ */
+export function withLoginExpiry(
+  accounts: AccountInfo[],
+  state: RotationState,
+  identityOf: IdentityOf = byConfigDir,
+): AccountInfo[] {
+  return accounts.map((account) => ({
+    ...account,
+    loginExpired: state.unusable.has(identityOf(account)),
+  }));
+}

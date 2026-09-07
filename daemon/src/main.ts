@@ -36,6 +36,7 @@ import {
   accountKey,
   nextUsableAccount,
   planAfterLimit,
+  withLoginExpiry,
 } from './rotation.js';
 
 /**
@@ -188,7 +189,9 @@ let lastAccountsJson = '';
 /** Broadcast the account list, remembering it so the poller only fires on change. */
 /** The account list, each entry carrying the last limits we saw for it. */
 function accountsWithUsage(accounts: AccountInfo[] = accountsStore.list()): AccountInfo[] {
-  return accounts.map((account) => ({
+  // The one place every list the client sees passes through, so the expiry
+  // rotation knows about is attached here rather than at each call site.
+  return withLoginExpiry(accounts, rotation, identityOf).map((account) => ({
     ...account,
     lastUsage: accountUsage.get(accountKey(account.configDir)) ?? null,
   }));
@@ -575,7 +578,7 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
     case 'listAccounts':
       return accountsWithUsage();
     case 'setAccount': {
-      const accounts = accountsStore.setActive(req.configDir);
+      const accounts = accountsWithUsage(accountsStore.setActive(req.configDir));
       // Live queries were launched with the previous account's env (or none);
       // tear them down so the next message spawns fresh under the new one.
       // Sessions and transcripts are untouched — only the in-flight SDK query.

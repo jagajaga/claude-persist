@@ -10,6 +10,7 @@ import {
   byConfigDir,
   nextUsableAccount,
   planAfterLimit,
+  withLoginExpiry,
 } from './rotation.js';
 
 const NOW = Date.parse('2026-08-05T12:00:00.000Z');
@@ -18,9 +19,9 @@ const HOUR = 3600_000;
 /** default first, then named dirs — the order the model menu shows. */
 function accounts(active: string | null = null): AccountInfo[] {
   return [
-    { name: 'default', configDir: null, active: active === null, signedIn: true },
-    { name: 'senia00', configDir: '/acc/senia00', active: active === '/acc/senia00', signedIn: true },
-    { name: 'serokell', configDir: '/acc/serokell', active: active === '/acc/serokell', signedIn: true },
+    { name: 'default', configDir: null, active: active === null, signedIn: true, loginExpired: false },
+    { name: 'senia00', configDir: '/acc/senia00', active: active === '/acc/senia00', signedIn: true, loginExpired: false },
+    { name: 'serokell', configDir: '/acc/serokell', active: active === '/acc/serokell', signedIn: true, loginExpired: false },
   ];
 }
 
@@ -367,4 +368,55 @@ test('planAfterLimit routes around a broken login too', () => {
   });
   assert.equal(plan.why, 'switched');
   assert.equal(plan.switchTo?.name, 'serokell');
+});
+
+// ---------- telling the client which logins are dead ------------------------
+
+/**
+ * Rotation knew an account's login had expired and kept it to itself, so the
+ * menu went on offering it as though it were healthy: picking it switched in
+ * silence and failed one message later. The flag is what carries that outward.
+ */
+test('withLoginExpiry: marks the accounts rotation has given up on', () => {
+  const st = state();
+  st.unusable.add('/acc/senia00');
+  const marked = withLoginExpiry(accounts(), st);
+  assert.deepEqual(
+    marked.map((a) => [a.name, a.loginExpired]),
+    [
+      ['default', false],
+      ['senia00', true],
+      ['serokell', false],
+    ],
+  );
+});
+
+test('withLoginExpiry: says nothing when every login works', () => {
+  assert.ok(withLoginExpiry(accounts(), state()).every((a) => a.loginExpired === false));
+});
+
+/** Accounts sharing one login share its credentials, so they share the verdict. */
+test('withLoginExpiry: a shared login is expired for every account on it', () => {
+  const st = state();
+  st.unusable.add('shared-identity');
+  const marked = withLoginExpiry(accounts(), st, (a) =>
+    a.configDir === null ? 'default-identity' : 'shared-identity',
+  );
+  assert.deepEqual(
+    marked.map((a) => [a.name, a.loginExpired]),
+    [
+      ['default', false],
+      ['senia00', true],
+      ['serokell', true],
+    ],
+  );
+});
+
+test('withLoginExpiry: leaves everything else about an account alone', () => {
+  const st = state();
+  st.unusable.add('/acc/senia00');
+  const before = accounts('/acc/senia00');
+  const after = withLoginExpiry(before, st);
+  assert.equal(after[1].active, true, 'the dead account is still the active one');
+  assert.equal(after[1].signedIn, true, 'the credentials are on disk; they just do not work');
 });

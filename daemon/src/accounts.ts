@@ -477,6 +477,9 @@ export class AccountsStore {
       ...a,
       active: a.configDir === this.activeConfigDir,
       signedIn: accountSignedIn(a.configDir, this.claudeDir),
+      // Whether a login still works is rotation's business, not the store's:
+      // it is learned from a request failing, not from anything on disk.
+      loginExpired: false,
     }));
   }
 

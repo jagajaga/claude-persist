@@ -97,6 +97,12 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
 - **Sign in inside the editor** — a link to open and a box for the code. No
   terminal, and it works over code-server, where a callback to `localhost`
   cannot.
+- **A dead login is visible before you pick it.** An expired token is still on
+  disk, so an account with one looked as healthy as any other: rotation knew and
+  routed around it, but choosing it by hand switched in silence and the next
+  message failed. Such an account now reads `serokell — login expired` in the
+  menu, and choosing it still switches -- that is what you asked for -- while
+  saying so and offering the sign-in that fixes it.
 - **Rate limits in the status bar**, with the reset time in the tooltip.
 - **Automatic rotation.** Hit a limit and your message is held, the next
   account with room is activated, and the conversation resumes on its own. If every

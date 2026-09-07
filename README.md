@@ -120,7 +120,7 @@ with `pkill -f 'claude-persist.*daemon/dist/main.js'`, and delete
 ```bash
 npm install
 npm run build          # tsc for shared, daemon and extension
-npm test               # 263 daemon + 268 extension tests
+npm test               # 267 daemon + 272 extension tests
 ./scripts/package.sh   # -> claude-persist-<version>.vsix, no bundled runtime
 ```
 

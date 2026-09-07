@@ -233,6 +233,25 @@ test('README badges point at this extension', () => {
 });
 
 /**
+ * An open picture owns every touch inside it. Without this the browser treats a
+ * swipe between pictures as a scroll as well, and the transcript slides about
+ * behind the overlay while you turn pages. The JS preventDefault is the other
+ * half and cannot do it alone: by the time a swipe is certain, the browser has
+ * usually committed to scrolling.
+ */
+test('the lightbox keeps touches to itself', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'media', 'chat.css'), 'utf8');
+  const rule = /\n\.lightbox\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+  assert.ok(rule, 'no .lightbox rule found; this test is looking in the wrong place');
+  assert.match(rule, /touch-action:\s*none/, 'the page scrolls behind the picture without it');
+  assert.match(
+    rule,
+    /overscroll-behavior:\s*contain/,
+    'without it the drag reaches the browser: address bar, pull-to-refresh',
+  );
+});
+
+/**
  * The size cap belongs on the preview box, not on the picture inside it.
  * Written on the picture as min(320px, 100%), the percentage is indefinite
  * while the box is being sized -- so the box took the full available width and

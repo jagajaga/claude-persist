@@ -703,6 +703,18 @@ button.secondary {
   padding: 24px;
   background: rgba(0, 0, 0, 0.82);
   cursor: zoom-out;
+  /* Every touch in here is ours -- swiping between pictures, pinching, panning
+     a zoomed one. Without this the browser also treats the drag as a scroll of
+     whatever is behind the overlay, so turning a page dragged the transcript
+     along with it. preventDefault alone is not enough: by the time a swipe is
+     certain the browser has usually committed to scrolling already. */
+  touch-action: none;
+  /* And nothing chains out of it. A drag on a fixed overlay cannot scroll the
+     transcript -- that is not an ancestor of this -- but it does reach the
+     browser itself, which on a phone means the address bar sliding and
+     pull-to-refresh arming. Neither of those exists in a desktop browser, so
+     this one is reasoned rather than measured. */
+  overscroll-behavior: contain;
 }
 
 .lightbox img {

@@ -458,6 +458,15 @@
     const MAX_SCALE = 6;
     /** How far a finger must travel across before it counts as a swipe. */
     const SWIPE_PX = 50;
+    /**
+     * How far before the gesture is claimed from the browser.
+     *
+     * Lower than SWIPE_PX, and for a different job: the swipe is decided when
+     * the finger lifts, but the browser decides whether it is scrolling long
+     * before that. Wait until 50px to say "mine" and the transcript has already
+     * begun moving behind the picture.
+     */
+    const CLAIM_PX = 10;
     let scale = 1;
     let x = 0;
     let y = 0;
@@ -512,6 +521,12 @@
         // gesture is known from movement alone.
         swipe.dx = e.touches[0].clientX - swipe.x;
         swipe.dy = e.touches[0].clientY - swipe.y;
+        // Once it is recognisably sideways it belongs to the picture. Left
+        // unclaimed, the browser reads the same drag as a scroll and the
+        // transcript slides about behind the overlay while you turn pages.
+        if (Math.abs(swipe.dx) > CLAIM_PX && Math.abs(swipe.dx) > Math.abs(swipe.dy)) {
+          e.preventDefault();
+        }
       }
       if (!start) return;
       if (start.pan && e.touches.length === 1) {

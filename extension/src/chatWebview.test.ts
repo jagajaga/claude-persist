@@ -1935,6 +1935,49 @@ function swipe(h: Harness, node: DomNode, dx: number, dy = 0): void {
   touch(h, node, 'touchend', []);
 }
 
+/** The touchmove of a drag, kept so a test can ask whether it was claimed. */
+function dragMove(h: Harness, node: DomNode, dx: number, dy = 0): DomNode {
+  touch(h, node, 'touchstart', [[200, 200]]);
+  const move = new h.window.Event('touchmove', { bubbles: true, cancelable: true });
+  move.touches = [{ clientX: 200 + dx, clientY: 200 + dy }];
+  node.dispatchEvent(move);
+  return move;
+}
+
+/**
+ * The drag was tracked but never claimed, so the browser read it as a scroll
+ * too: turning a page dragged the transcript along behind the overlay.
+ */
+test('lightbox: a sideways drag is taken from the browser, not shared with it', () => {
+  const h = createHarness('swipe-claims');
+  withTwoPictures(h);
+  const shown = openPicture(h, 0);
+  const move = dragMove(h, shown, -40);
+  assert.equal(move.defaultPrevented, true, 'unclaimed, this same drag scrolls the page');
+});
+
+/** Claimed early: by 50px the browser has long since decided it is scrolling. */
+test('lightbox: it is claimed well before the swipe itself is certain', () => {
+  const h = createHarness('swipe-claims-early');
+  withTwoPictures(h);
+  const shown = openPicture(h, 0);
+  const move = dragMove(h, shown, -15);
+  assert.equal(move.defaultPrevented, true, 'waiting for the full swipe distance is too late');
+  assert.equal(
+    h.document.querySelector('.lightbox img').getAttribute('src'),
+    SHOT_URI,
+    'and claiming it must not itself turn the page',
+  );
+});
+
+test('lightbox: a barely-moved finger is still a tap', () => {
+  const h = createHarness('swipe-claims-tap');
+  withTwoPictures(h);
+  const shown = openPicture(h, 0);
+  const move = dragMove(h, shown, -3);
+  assert.equal(move.defaultPrevented, false, 'a tap must stay a tap, which closes the picture');
+});
+
 test('lightbox: swiping left brings the next picture in the transcript', () => {
   const h = createHarness('swipe-next');
   withTwoPictures(h);

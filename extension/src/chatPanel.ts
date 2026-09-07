@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { formatAccountUsage } from './rateLimits';
 import { resourceRootPaths } from './resourceRoots';
+import { DownloadServer } from './downloadServer';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -31,6 +32,17 @@ const uploadsDir = path.join(os.homedir(), '.claude-persist', 'uploads');
 
 /** Extensions we will render a preview for. */
 const PREVIEWABLE = /\.(png|jpe?g|gif|webp|bmp|svg|avif|mp4|webm|mov|m4v)$/i;
+/**
+ * Files worth handing to the browser rather than opening in an editor.
+ *
+ * An allowlist rather than "any path": filenames appear in prose constantly,
+ * and turning every one into a download control would be noise. These are the
+ * things a turn *produces* for you to take away -- archives, documents, dumps
+ * -- none of which an editor can show you anyway.
+ */
+const DOWNLOADABLE =
+  /\.(zip|tar|tgz|gz|bz2|xz|7z|rar|pdf|csv|tsv|xlsx|docx|pptx|odt|ods|log|patch|diff|sqlite|db)$/i;
+
 /** Of those, the ones that need a player rather than an <img>. */
 export const PLAYABLE = /\.(mp4|webm|mov|m4v)$/i;
 /** Absolute POSIX-ish paths inside chat text, e.g. /home/me/shot.png */
@@ -51,6 +63,31 @@ const URL_IN_TEXT = /https:\/\/[^\s<>"')\]]+/g;
  * output of this kind of work actually lives. Local temp files are usually
  * deleted by the time anyone looks; the URL is the copy that survives.
  */
+/**
+ * Absolute paths to downloadable files mentioned anywhere in a payload.
+ *
+ * Separate from collectImagePaths because the two answer different questions: a
+ * preview needs a URL the webview can render, a download needs only the fact
+ * that the file is there, since the URL is minted per tap and expires.
+ */
+function collectDownloadPaths(value: unknown, into = new Set<string>()): Set<string> {
+  if (typeof value === 'string') {
+    if (path.isAbsolute(value) && DOWNLOADABLE.test(value)) into.add(value);
+    for (const m of value.matchAll(PATH_IN_TEXT)) {
+      if (DOWNLOADABLE.test(m[1])) into.add(m[1]);
+    }
+    return into;
+  }
+  if (Array.isArray(value)) {
+    for (const v of value) collectDownloadPaths(v, into);
+    return into;
+  }
+  if (value && typeof value === 'object') {
+    for (const v of Object.values(value)) collectDownloadPaths(v, into);
+  }
+  return into;
+}
+
 function collectImagePaths(value: unknown, into = new Set<string>()): Set<string> {
   if (typeof value === 'string') {
     if (path.isAbsolute(value) && PREVIEWABLE.test(value)) into.add(value);
@@ -203,6 +240,8 @@ export class ChatPanelManager {
 
   /** Last SDK-probed model list, before extraModels merging. */
   private lastModels: ModelDescriptor[] = [];
+  /** Serves a granted file to the browser; binds a port only once one is asked for. */
+  private readonly downloads = new DownloadServer(() => resourceRootPaths(uploadsDir, (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath)));
 
   /** Broadcast from the daemon whenever the active/known accounts change. */
   handleAccounts(accounts: AccountInfo[]): void {
@@ -529,6 +568,36 @@ export class ChatPanelManager {
               } catch {
                 void vscode.window.showWarningMessage(`Claude Persist: cannot open ${abs}`);
               }
+            }
+            break;
+          }
+          case 'download': {
+            const file = String(msg.path ?? '');
+            const fail = (detail: string): void => {
+              this.post(entry, { type: 'downloadResult', path: file, ok: false, detail });
+            };
+            if (!file) break;
+            const local = await this.downloads.grant(file);
+            if (!local) {
+              fail('That file is gone, or sits outside the folders this panel may read.');
+              break;
+            }
+            try {
+              // The panel cannot do this itself: its iframe is sandboxed without
+              // allow-downloads, so an <a download> there is silently ignored.
+              // The workbench is not, and code-server proxies loopback ports
+              // with Content-Disposition intact.
+              const external = await vscode.env.asExternalUri(vscode.Uri.parse(local));
+              if (/^(127\.0\.0\.1|localhost|\[::1\])(:|$)/.test(external.authority)) {
+                // No proxy in front of us, so this address means nothing to the
+                // browser. Say so rather than opening a link that cannot work.
+                fail('This editor cannot forward a local port, so the file cannot be sent to your browser. Use the Explorer\u2019s Download instead.');
+                break;
+              }
+              await vscode.env.openExternal(external);
+              this.post(entry, { type: 'downloadResult', path: file, ok: true });
+            } catch (err) {
+              fail(err instanceof Error ? err.message : String(err));
             }
             break;
           }
@@ -871,8 +940,34 @@ export class ChatPanelManager {
         // not readable from here (or gone) — simply no preview
       }
     }
-    if (Object.keys(imageUris).length === 0) return message;
-    return { ...(message as Record<string, unknown>), imageUris };
+    const downloads = this.downloadsIn(message);
+    if (Object.keys(imageUris).length === 0 && Object.keys(downloads).length === 0) return message;
+    const enriched = { ...(message as Record<string, unknown>) };
+    if (Object.keys(imageUris).length > 0) enriched.imageUris = imageUris;
+    if (Object.keys(downloads).length > 0) enriched.downloads = downloads;
+    return enriched;
+  }
+
+  /**
+   * Downloadable files this message mentions: name and size, no URL.
+   *
+   * The URL is minted when the button is pressed and dies on use, so putting
+   * one here would mean a fresh token in every replayed message and a pile of
+   * live grants for files nobody asked for.
+   */
+  private downloadsIn(message: unknown): Record<string, { name: string; size: number }> {
+    const out: Record<string, { name: string; size: number }> = {};
+    for (const p of collectDownloadPaths(message)) {
+      try {
+        const stat = fs.statSync(p);
+        if (!stat.isFile()) continue;
+        out[p] = { name: path.basename(p), size: stat.size };
+      } catch {
+        // Not there, or not readable from here: no button, and the path stays
+        // the plain text it already was.
+      }
+    }
+    return out;
   }
 
   private html(webview: vscode.Webview, sessionId: string): string {

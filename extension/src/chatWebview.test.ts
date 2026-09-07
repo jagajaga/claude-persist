@@ -1739,6 +1739,94 @@ test('preview: a path on a line of its own still becomes the picture', () => {
   );
 });
 
+// ---------- taking a file away ----------------------------------------------
+
+const ZIP = '/home/coder/code-workspace/blooper-legal-drafts-2026-09-04.zip';
+
+function withZip(h: Harness, text = `Zip is at ${ZIP}`): void {
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    downloads: { [ZIP]: { name: 'blooper-legal-drafts-2026-09-04.zip', size: 2_517_000 } },
+    events: [persisted({ type: 'user_message', text })],
+  });
+}
+
+/**
+ * A path to an archive used to be plain text, and the file links that did exist
+ * opened an editor -- which for a zip is the binary editor, a dead end.
+ */
+test('download: an archive named in a message becomes something you can take', () => {
+  const h = createHarness('dl-chip');
+  withZip(h);
+  const chip = h.document.querySelector('#thread .dl-chip') as DomNode;
+  assert.ok(chip, 'the zip should offer itself');
+  assert.match(chip.textContent, /blooper-legal-drafts-2026-09-04\.zip/);
+  assert.match(chip.textContent, /2\.4 MB/, 'how big it is decides whether you want it now');
+});
+
+test('download: pressing it asks the host, which is the only thing that can', () => {
+  const h = createHarness('dl-ask');
+  withZip(h);
+  h.document.querySelector('.dl-go').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  const asked = h.posted.filter((m) => m.type === 'download');
+  assert.equal(asked.length, 1, 'one tap, one ask');
+  assert.equal(asked[0].path, ZIP);
+});
+
+test('download: it says where the file went, since the panel cannot show it', () => {
+  const h = createHarness('dl-ok');
+  withZip(h);
+  h.document.querySelector('.dl-go').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  h.send({ type: 'downloadResult', path: ZIP, ok: true });
+  assert.match(h.document.querySelector('.dl-note').textContent, /browser/i);
+  assert.equal(h.document.querySelector('.dl-go').disabled, false, 'and lets you ask again');
+});
+
+test('download: a refusal is shown, not swallowed', () => {
+  const h = createHarness('dl-fail');
+  withZip(h);
+  h.document.querySelector('.dl-go').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  h.send({ type: 'downloadResult', path: ZIP, ok: false, detail: 'That file is gone.' });
+  const note = h.document.querySelector('.dl-note') as DomNode;
+  assert.equal(note.textContent, 'That file is gone.');
+  assert.ok(note.classList.contains('failed'));
+});
+
+/** The prose around it has to survive: only the path itself is replaced. */
+test('download: the sentence still reads', () => {
+  const h = createHarness('dl-prose');
+  withZip(h);
+  const said = h.document.querySelector('#thread .user-msg').textContent;
+  assert.match(said, /Zip is at/);
+  assert.ok(!said.includes('/home/coder/code-workspace/blooper'), 'the raw path gives way to the chip');
+});
+
+/**
+ * A picture is 320px and strands the words beside it, so it moves to its own
+ * row. A chip is the size of a word and belongs where the path was.
+ */
+test('download: the chip stays in the sentence rather than being lifted out', () => {
+  const h = createHarness('dl-inline');
+  withZip(h);
+  const chip = h.document.querySelector('.dl-chip') as DomNode;
+  assert.notEqual(chip.parentNode.className, 'preview-row');
+});
+
+test('download: a file the host said nothing about stays plain text', () => {
+  const h = createHarness('dl-unknown');
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    info: {},
+    events: [persisted({ type: 'user_message', text: `Zip is at ${ZIP}` })],
+  });
+  assert.equal(h.document.querySelector('.dl-chip'), null, 'no vouching, no button');
+});
+
 // ---------- stepping between pictures ---------------------------------------
 
 const SHOT2 = '/tmp/second.png';

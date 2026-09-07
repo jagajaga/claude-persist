@@ -1092,3 +1092,45 @@ button.secondary {
   line-height: 0;
   margin: 6px 0;
 }
+
+/* ---------- a file to take away ------------------------------------------- */
+
+/* Reads as one object at a glance -- name, weight, and the control that takes
+   it -- rather than a link with a button loose beside it. */
+.dl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 1px 4px 1px 8px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-radius: 999px;
+  vertical-align: middle;
+  font-size: 0.92em;
+}
+
+.dl-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dl-size,
+.dl-note {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+
+.dl-note.failed { color: var(--vscode-errorForeground, #c4351c); }
+
+.dl-go {
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 1.05em;
+  line-height: 1.5;
+  background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.18));
+  color: inherit;
+}
+
+.dl-go:disabled { opacity: 0.5; cursor: default; }

@@ -303,9 +303,79 @@
    * resource root appear here, so presence in this map means "safe to render".
    */
   const imageUris = new Map();
+  /** path -> { name, size } for files the host will hand to the browser. */
+  const downloadable = new Map();
   function absorbImageUris(msg) {
-    if (!msg || !msg.imageUris) return;
-    for (const [p, uri] of Object.entries(msg.imageUris)) imageUris.set(p, uri);
+    if (!msg) return;
+    if (msg.imageUris) {
+      for (const [p, uri] of Object.entries(msg.imageUris)) imageUris.set(p, uri);
+    }
+    if (msg.downloads) {
+      for (const [p, info] of Object.entries(msg.downloads)) downloadable.set(p, info);
+    }
+  }
+
+  /** "2.4 MB" — one decimal is as much as anyone reads off a file size. */
+  function fileSize(bytes) {
+    if (!Number.isFinite(bytes)) return '';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let n = bytes;
+    let i = 0;
+    while (n >= 1024 && i < units.length - 1) {
+      n /= 1024;
+      i += 1;
+    }
+    return `${i === 0 ? n : n.toFixed(1)} ${units[i]}`;
+  }
+
+  /**
+   * A file to take away, with the button that takes it.
+   *
+   * The panel cannot download anything itself -- its iframe is sandboxed
+   * without allow-downloads, so an <a download> here does nothing whatsoever,
+   * silently. The host serves the bytes and sends the browser to them; all this
+   * does is ask, and say how it went.
+   */
+  function downloadChip(pathText) {
+    const info = downloadable.get(pathText);
+    if (!info) return null;
+    const chip = el('span', 'dl-chip');
+    chip.appendChild(el('span', 'dl-name', info.name));
+    const size = fileSize(info.size);
+    if (size) chip.appendChild(el('span', 'dl-size', size));
+    const button = el('button', 'dl-go', '⤓');
+    button.title = `Download ${info.name}`;
+    const say = (text, failed) => {
+      let note = chip.querySelector('.dl-note');
+      if (!note) {
+        note = el('span', 'dl-note');
+        chip.appendChild(note);
+      }
+      note.textContent = text;
+      note.classList.toggle('failed', Boolean(failed));
+    };
+    button.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      button.disabled = true;
+      say('sending…');
+      pendingDownloads.set(pathText, { button, say });
+      vscode.postMessage({ type: 'download', path: pathText });
+    });
+    chip.appendChild(button);
+    return chip;
+  }
+
+  /** Taps waiting on the host to say whether the browser got it. */
+  const pendingDownloads = new Map();
+  function settleDownload(msg) {
+    const waiting = pendingDownloads.get(msg.path);
+    if (!waiting) return;
+    pendingDownloads.delete(msg.path);
+    waiting.button.disabled = false;
+    // "Check your browser" rather than "done": the file lands in the browser's
+    // downloads, which on a phone is somewhere this panel cannot see or say.
+    waiting.say(msg.ok ? 'sent to your browser' : msg.detail || 'could not send it', !msg.ok);
   }
 
   /**
@@ -653,7 +723,7 @@
    * attachments all behave the same.
    */
   function fileLink(pathText, display) {
-    return imageThumb(pathText, display) ?? rawFileLink(pathText, display);
+    return imageThumb(pathText, display) ?? downloadChip(pathText) ?? rawFileLink(pathText, display);
   }
 
   // ---------- markdown (marked + DOMPurify, vendored) ------------------------
@@ -687,6 +757,9 @@
    * block it belongs to, where it reads as an illustration of it.
    */
   function placePreview(node, root, hit, thumb) {
+    // A download chip is the size of a word, so it reads fine mid-sentence --
+    // it is the 320px picture that strands the words beside it.
+    if (thumb.classList.contains('dl-chip')) return true;
     const block = blockAncestor(node, root);
     if ((block || root).textContent.trim() === hit) return true;
     const row = el('div', 'preview-row');
@@ -703,7 +776,7 @@
       if (!thumb) continue;
       if (placePreview(link, root, link.textContent.trim(), thumb)) link.replaceWith(thumb);
     }
-    if (imageUris.size) upgradeImagePathsInText(root);
+    if (imageUris.size || downloadable.size) upgradeImagePathsInText(root);
   }
 
   /**
@@ -716,11 +789,19 @@
    * alone: a path quoted in a code listing is being shown as text on purpose.
    */
   function upgradeImagePathsInText(root) {
-    const paths = Array.from(imageUris.keys()).sort((a, b) => b.length - a.length);
+    const paths = Array.from(new Set([...imageUris.keys(), ...downloadable.keys()])).sort(
+      (a, b) => b.length - a.length,
+    );
     const walk = (node) => {
       for (const child of Array.from(node.childNodes)) {
         if (child.nodeType === 1) {
-          if (child.tagName === 'PRE' || child.classList.contains('img-thumb')) continue;
+          if (
+            child.tagName === 'PRE' ||
+            child.classList.contains('img-thumb') ||
+            child.classList.contains('dl-chip')
+          ) {
+            continue;
+          }
           walk(child);
           continue;
         }
@@ -728,7 +809,7 @@
         const text = child.nodeValue;
         const hit = paths.find((p) => text.includes(p));
         if (!hit) continue;
-        const thumb = imageThumb(hit, hit.split('/').pop());
+        const thumb = imageThumb(hit, hit.split('/').pop()) ?? downloadChip(hit);
         if (!thumb) continue;
         const at = text.indexOf(hit);
         const inline = placePreview(child, root, hit, thumb);
@@ -1281,7 +1362,7 @@
         const textEl = el('div', null, displayUserText(event.text));
         // User text is plain, not markdown, so it never passes through
         // renderMarkdown — upgrade it here or a path the user typed never previews.
-        if (imageUris.size) upgradeImagePathsInText(textEl);
+        if (imageUris.size || downloadable.size) upgradeImagePathsInText(textEl);
         box.appendChild(textEl);
         if (Array.isArray(event.attachments) && event.attachments.length) {
           const row = el('div', 'user-chips');
@@ -1965,6 +2046,9 @@
         appendPreviewText(streamingEl, msg.text);
         break;
       }
+      case 'downloadResult':
+        settleDownload(msg);
+        break;
       case 'attachments':
         renderChips(msg.items ?? []);
         break;

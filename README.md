@@ -80,8 +80,9 @@ The [marketplace listing](https://marketplace.visualstudio.com/items?itemName=ja
 has the full list. In short: reload-proof sessions as editor tabs, a chat with
 tool cards, diffs, permissions and questions, image and file attachments,
 several Claude accounts with automatic rotation and resume when one hits its
-rate limit, subagent tracking with per-message attribution, and a UI that works
-on a phone.
+rate limit, subagent tracking with per-message attribution, downloads for the
+files a turn produces, automatic recovery from an overloaded server, and a UI
+that works on a phone.
 
 ## Questions people ask
 
@@ -119,7 +120,7 @@ with `pkill -f 'claude-persist.*daemon/dist/main.js'`, and delete
 ```bash
 npm install
 npm run build          # tsc for shared, daemon and extension
-npm test               # 238 daemon + 237 extension tests
+npm test               # 263 daemon + 268 extension tests
 ./scripts/package.sh   # -> claude-persist-<version>.vsix, no bundled runtime
 ```
 
@@ -131,8 +132,8 @@ rather than the bundled daemon, point `claudePersist.daemonEntry` at
 
 | Path | What it is |
 |---|---|
-| `daemon/` | Session daemon: Agent SDK sessions, the newline-delimited JSON socket protocol, event log, permission bridge, accounts and rotation, transcript importer |
-| `extension/` | VS Code extension: daemon client, chat webview (`media/`), sidebar tree, panel serializer |
+| `daemon/` | Session daemon: Agent SDK sessions, the newline-delimited JSON socket protocol, event log, permission bridge, accounts and rotation, overload retries and the status-page watch, transcript importer |
+| `extension/` | VS Code extension: daemon client, chat webview (`media/`), sidebar tree, panel serializer, the loopback server that hands a file to your browser |
 | `shared/` | Wire protocol types and the version constant, shared by both |
 | `scripts/package.sh` | Builds a `.vsix`, optionally with a platform runtime |
 | `scripts/changelog.sh` | Regenerates `extension/CHANGELOG.md` from tags |
@@ -179,6 +180,20 @@ The daemon listens on a socket in your home directory, mode 0600, and one
 process serves every window for your user. Chat transcripts are written to disk
 unencrypted, including anything you paste into a conversation — redaction is on
 the roadmap, not in the product.
+
+Downloading a file binds an HTTP server on `127.0.0.1` on an ephemeral port, and
+only once you press a download button — a session that never downloads never
+opens a socket. It serves nothing but files it has granted: a grant is minted
+only for a file inside the folders the panel may already read, its token is 256
+random bits, it works exactly once, and it expires in five minutes whether used
+or not. The URL reaches your browser through the editor's own port forwarding,
+which is how a file gets to a phone at all.
+
+A turn parked on an overloaded server asks
+[status.claude.com](https://status.claude.com) once a minute, so it can name the
+incident and resume when it closes. That is the only request this project makes
+to anything other than Claude itself, it carries nothing about you, and it stops
+when the turn does.
 
 ### Mobile (Android) keyboard
 

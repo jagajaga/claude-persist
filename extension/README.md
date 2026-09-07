@@ -70,6 +70,16 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
   play badge; pressing it opens the clip full-size and starts it. Nothing plays
   on its own, so a transcript full of clips stays quiet. Works for a hosted
   `https://` clip as well as a file on disk.
+- **Download what a turn produced.** An archive, PDF, spreadsheet, dump or log
+  named in the chat -- `.zip`, `.tar.gz`, `.pdf`, `.csv`, `.xlsx`, `.log`,
+  `.sqlite` and the like -- gets its name, its size and a `⤓`. Pressing it sends
+  the file to your browser's downloads, which is the only place a phone can put
+  it. The panel cannot download anything itself: its iframe is sandboxed without
+  `allow-downloads`, so the extension serves the bytes on a loopback port and
+  the editor opens that. Files stream, so size is not a limit.
+- **Swipe between pictures.** With one open, swipe left or right -- or use the
+  arrow keys -- to move through every picture in the transcript, in the order
+  they appear. The ends hold rather than wrapping.
 - **Pinch to zoom** an opened picture on a phone, drag to pan, double-tap to
   toggle.
 - **Screenshots are scaled only when they must be.** Past twenty images, the API
@@ -95,6 +105,21 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
   login has expired is treated the same way -- skipped, and the conversation
   carries on elsewhere -- since unlike a limit a dead token never comes back on
   its own.
+- **An overloaded server is waited out, not given up on.** A turn killed by a
+  529 used to stop where it stood until somebody came back and typed
+  *continue*. It now resends "restart and continue" every two minutes for up to
+  twelve hours, which covers an overnight run. No account is rotated for it: an
+  overload is server-wide, so a switch cannot help and would spend one a session
+  that really is rate limited needs.
+- **It says whose problem it is.** While a turn is parked, and only then, the
+  panel asks [status.claude.com](https://status.claude.com) once a minute. An
+  open incident is named -- *"Elevated errors for multiple models" (major),
+  since 13:26 UTC* -- so a failed turn reads as an outage with a scope rather
+  than something you did to your quota. When the incident closes the turn
+  resumes immediately instead of waiting out its interval. The page informs and
+  never gates: short overloads are never posted, an incident can narrow to one
+  model while the page stays green, and sending the message again is the only
+  real test of whether it will go through.
 - **Transcripts follow you** between accounts, so switching mid-conversation
   continues rather than starting over.
 - **One set of rules.** Your `CLAUDE.md` and skills apply to every account.

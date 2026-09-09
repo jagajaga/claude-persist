@@ -39,8 +39,11 @@ const noopCallbacks = {
   onAgents(): void {},
 };
 
-function makeSession(id: string): InstanceType<typeof DaemonSession> {
-  const meta = { id, title: id, cwd: '/tmp', createdAt: 0, lastActivityAt: 0 };
+function makeSession(
+  id: string,
+  over: { cwd?: string } = {},
+): InstanceType<typeof DaemonSession> {
+  const meta = { id, title: id, cwd: over.cwd ?? '/tmp', createdAt: 0, lastActivityAt: 0 };
   return new DaemonSession(meta, noopCallbacks);
 }
 
@@ -920,4 +923,53 @@ test('messages without images leave the count alone', () => {
     attachments: [{ kind: 'file', label: 'notes.txt', path: '/tmp/notes.txt' }],
   });
   assert.equal(meta.imageCount ?? 0, 0);
+});
+
+// ---------- a session imported from another machine -------------------------
+
+type Runnable = { workingDirectory(): string };
+
+/**
+ * One real session arrived from a Mac carrying `/Users/jaga/temp/test-website`
+ * and failed every single turn on a Linux container. The SDK blamed the
+ * binary's libc, because it checks whether the *binary* exists and never looks
+ * at the cwd -- so the one session that could not run was explained by a musl
+ * loader the host does not use.
+ */
+test('cwd: a folder that is not on this machine falls back to home', () => {
+  const session = makeSession(`cwd-missing-${Date.now()}`, {
+    cwd: '/Users/someone/temp/test-website',
+  });
+  const where = (session as unknown as Runnable).workingDirectory();
+  assert.equal(where, os.homedir(), 'the conversation is still worth continuing');
+  const said = session
+    .eventsSince(0, 50)
+    .events.map((e) => e.event as { detail?: string })
+    .map((e) => e.detail ?? '')
+    .join('\n');
+  assert.match(said, /not on this machine/, 'and it says so, rather than failing every turn');
+  assert.match(said, /files are not here/);
+});
+
+test('cwd: a folder that is here is left alone, and says nothing', () => {
+  const session = makeSession(`cwd-present-${Date.now()}`, { cwd: os.tmpdir() });
+  assert.equal((session as unknown as Runnable).workingDirectory(), os.tmpdir());
+  const said = session
+    .eventsSince(0, 50)
+    .events.map((e) => (e.event as { detail?: string }).detail ?? '')
+    .join('\n');
+  assert.doesNotMatch(said, /not on this machine/);
+});
+
+test('cwd: checked once, not on every turn', () => {
+  const session = makeSession(`cwd-once-${Date.now()}`, { cwd: '/Users/nobody/x' });
+  const r = session as unknown as Runnable;
+  r.workingDirectory();
+  r.workingDirectory();
+  r.workingDirectory();
+  const notices = session
+    .eventsSince(0, 50)
+    .events.map((e) => (e.event as { detail?: string }).detail ?? '')
+    .filter((d) => /not on this machine/.test(d));
+  assert.equal(notices.length, 1, 'saying it once is telling; saying it every turn is noise');
 });

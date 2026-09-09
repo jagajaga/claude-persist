@@ -242,6 +242,10 @@ function summarize(value: unknown, max = 2000): string {
 export class DaemonSession {
   readonly meta: SessionMeta;
   status: SessionStatus = 'idle';
+  /** Where the binary is actually started; see workingDirectory(). */
+  private effectiveCwd = '';
+  /** Checked once per session, not per turn: a stat on every send is waste. */
+  private cwdChecked = false;
   /** Polls the status page while a turn is parked on an overload. */
   private statusTimer: NodeJS.Timeout | null = null;
   /** The incident already named in the panel, so it is said once, not every minute. */
@@ -1127,7 +1131,7 @@ export class DaemonSession {
       // streaming input; the session stays alive between turns.
       prompt: this.input as AsyncIterable<never>,
       options: {
-        cwd: this.meta.cwd,
+        cwd: this.workingDirectory(),
         ...(this.meta.sdkSessionId ? { resume: this.meta.sdkSessionId } : {}),
         includePartialMessages: true,
         permissionMode: this.meta.permissionMode ?? 'default',
@@ -1259,6 +1263,43 @@ export class DaemonSession {
         this.input = null;
       }
     }
+  }
+
+  /**
+   * A directory the binary can actually be started in.
+   *
+   * A session imported from another machine carries that machine's path -- one
+   * arrived here as `/Users/jaga/temp/test-website` on a Linux container -- and
+   * spawning into a directory that is not there fails every single turn. The
+   * SDK reports that as the binary not matching the host's libc, because it
+   * checks whether the *binary* exists and never looks at the cwd, so the one
+   * session that could not run was explained by a musl loader it does not use.
+   *
+   * Falling back to home rather than refusing: the conversation is still worth
+   * continuing, and it is only the files that are missing.
+   */
+  private workingDirectory(): string {
+    if (this.cwdChecked) return this.effectiveCwd;
+    this.cwdChecked = true;
+    this.effectiveCwd = this.meta.cwd;
+    try {
+      if (fs.statSync(this.meta.cwd).isDirectory()) return this.effectiveCwd;
+    } catch {
+      // Not there, or not a directory.
+    }
+    this.effectiveCwd = os.homedir();
+    this.callbacks.log(
+      `session ${this.meta.id} cwd ${this.meta.cwd} does not exist; running in ${this.effectiveCwd}`,
+    );
+    this.appendEvent({
+      type: 'status',
+      status: this.status,
+      detail:
+        `This session's folder ${this.meta.cwd} is not on this machine — it was imported from ` +
+        `somewhere else. Running in ${this.effectiveCwd} instead, so the conversation continues, ` +
+        `but its files are not here.`,
+    });
+    return this.effectiveCwd;
   }
 
   /** Publish the working set, but only when it actually changed. */

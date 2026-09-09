@@ -141,6 +141,46 @@ export function isLimitNotice(text: unknown): boolean {
  * Parking that would restart work that had just succeeded. A refusal replaces
  * the answer rather than appearing inside one.
  */
+/**
+ * How long to wait before trying to launch the binary again.
+ *
+ * Short, because a launch either works on the next attempt or is never going to:
+ * there is no queue to drain and no window to reset, only whatever momentary
+ * condition stopped a 215 MB executable from being forked.
+ */
+export const LAUNCH_RETRY_MS = 20_000;
+
+/**
+ * How many launches to attempt before reporting it.
+ *
+ * Five, not the overload's three hundred and sixty: an overload is somebody
+ * else's traffic clearing on its own schedule, while a launch that fails five
+ * times in a hundred seconds is a machine that cannot run this binary, and
+ * waiting twelve hours would not change that.
+ */
+export const MAX_LAUNCH_ATTEMPTS = 5;
+
+/**
+ * Did the turn die because the `claude` binary would not start?
+ *
+ * The SDK reports this as a libc mismatch -- a musl binary on a glibc host --
+ * whatever the real cause, because it never looks at the errno: the message is
+ * emitted on any spawn failure where the file exists. It arrived on a Debian
+ * glibc host that bundles only the glibc build, where the same binary ran
+ * three times in a row a minute later, so the diagnosis in the text cannot be
+ * relied on. What is reliable is that the turn was lost before the model ever
+ * saw it, and that a retry costs nothing.
+ */
+export function isLaunchFailure(text: unknown): boolean {
+  if (typeof text !== 'string') return false;
+  const trimmed = text.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_NOTICE_LENGTH) return false;
+  // "not found" is the other half of the SDK's message and is not transient:
+  // there is no binary, and asking again will not conjure one.
+  if (/not found|Reinstall|without --omit=optional/i.test(trimmed)) return false;
+  return /failed to launch|ETXTBSY|ENOEXEC|EAGAIN|ENOMEM|spawn \S+ (?:EACCES|ENOENT)/i.test(trimmed);
+}
+
 export function isOverloadNotice(text: unknown): boolean {
   if (typeof text !== 'string') return false;
   const trimmed = text.trim();

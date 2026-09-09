@@ -42,8 +42,11 @@ import { friendlyError, isSetupFailure, needsSignIn } from './errorHints.js';
 import {
   MAX_ATTEMPTS,
   MAX_OVERLOAD_ATTEMPTS,
+  LAUNCH_RETRY_MS,
+  MAX_LAUNCH_ATTEMPTS,
   OVERLOAD_RETRY_MS,
   STATUS_POLL_MS,
+  isLaunchFailure,
   isOverloadNotice,
   RESTART_RESUME_MS,
   STALL_MS,
@@ -193,6 +196,19 @@ function limitNotice(
         `Claude's servers are overloaded. Nothing is wrong with this session or your quota. ` +
         `"${RESUME_MESSAGE}" will be sent again in ${mins} minutes, and every ${mins} ` +
         `minutes after that until it goes through — you don't need to come back.`
+      );
+    }
+    case 'launch-failed': {
+      // Not the SDK's explanation. It blames a libc mismatch -- a musl binary
+      // on a glibc host -- on any spawn failure where the file exists, without
+      // ever reading the errno. That arrived on a glibc host bundling only the
+      // glibc build, where the same binary ran three times in a row a minute
+      // later, and sent someone hunting a dynamic loader they do not need.
+      const secs = Math.round(LAUNCH_RETRY_MS / 1000);
+      return (
+        `Claude Code could not be started for this turn. Nothing was sent, so nothing is half-done. ` +
+        `This is usually momentary rather than a broken install -- retrying in ${secs} seconds, ` +
+        `up to ${MAX_LAUNCH_ATTEMPTS} times.`
       );
     }
     case 'switched':
@@ -454,10 +470,14 @@ export class DaemonSession {
    */
   private parkForLimit(
     text: string,
-    opts: { stalled?: boolean; overloaded?: boolean } = {},
+    opts: { stalled?: boolean; overloaded?: boolean; launchFailed?: boolean } = {},
   ): void {
     const attempts = this.consecutiveRetries + 1;
-    const maxAttempts = opts.overloaded ? MAX_OVERLOAD_ATTEMPTS : MAX_ATTEMPTS;
+    const maxAttempts = opts.overloaded
+      ? MAX_OVERLOAD_ATTEMPTS
+      : opts.launchFailed
+        ? MAX_LAUNCH_ATTEMPTS
+        : MAX_ATTEMPTS;
     if (attempts > maxAttempts) {
       this.consecutiveRetries = 0;
       // Stop rather than loop: whatever keeps failing is not clearing on its own.
@@ -468,7 +488,9 @@ export class DaemonSession {
         ? 'stopped responding'
         : opts.overloaded
           ? 'overloaded'
-          : 'rate limited';
+          : opts.launchFailed
+            ? 'could not start'
+            : 'rate limited';
       this.callbacks.log(
         `session ${this.meta.id} giving up after ${maxAttempts} retries (${cause})`,
       );
@@ -493,6 +515,8 @@ export class DaemonSession {
       ? { at: Date.now() + STALL_RETRY_MS, source: 'stall' as const }
       : opts.overloaded
       ? { at: Date.now() + OVERLOAD_RETRY_MS, source: 'overload' as const }
+      : opts.launchFailed
+      ? { at: Date.now() + LAUNCH_RETRY_MS, source: 'launch' as const }
       : planRetry({
           windows: this.callbacks.rateLimitWindows(),
           text,
@@ -508,8 +532,10 @@ export class DaemonSession {
       ? { retryAt: plan.at, switchedTo: null as string | null, why: 'stalled' }
       : opts.overloaded
         ? { retryAt: plan.at, switchedTo: null as string | null, why: 'overloaded' }
-        : this.callbacks.onLimited(plan.at);
-    if (opts.stalled) {
+        : opts.launchFailed
+          ? { retryAt: plan.at, switchedTo: null as string | null, why: 'launch-failed' }
+          : this.callbacks.onLimited(plan.at);
+    if (opts.stalled || opts.launchFailed) {
       // Tear the query down before retrying into it.
       //
       // The retry goes through sendMessage, which reuses whatever query is
@@ -1215,6 +1241,11 @@ export class DaemonSession {
         if (isOverloadNotice(message)) {
           this.status = 'error';
           this.parkForLimit(message, { overloaded: true });
+        } else if (isLaunchFailure(message)) {
+          // The binary would not start. The turn was lost before the model saw
+          // it, so nothing has been half-done and asking again costs nothing.
+          this.status = 'error';
+          this.parkForLimit(message, { launchFailed: true });
         } else {
           this.setStatus('error', friendlyError(message));
         }

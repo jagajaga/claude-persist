@@ -135,6 +135,13 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
   login has expired is treated the same way -- skipped, and the conversation
   carries on elsewhere -- since unlike a limit a dead token never comes back on
   its own.
+- **A turn that could not start is retried, not reported.** Occasionally the
+  bundled `claude` binary fails to spawn -- it is 215 MB, and a momentary fork
+  failure is enough. The SDK reports that as a libc mismatch whatever the cause,
+  because it never reads the errno, which sent one glibc host hunting a musl
+  dynamic loader it does not need. The turn is retried every 20 seconds, five
+  times, and the notice says what is actually known: nothing was sent, so
+  nothing is half-done.
 - **An overloaded server is waited out, not given up on.** A turn killed by a
   529 used to stop where it stood until somebody came back and typed
   *continue*. It now resends "restart and continue" every two minutes for up to

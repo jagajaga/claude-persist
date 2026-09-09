@@ -15,7 +15,9 @@ import {
   planRetry,
   spreadMs,
   windowsLookLimited,
-} from './limits.js';
+  isLaunchFailure,
+  LAUNCH_RETRY_MS,
+  MAX_LAUNCH_ATTEMPTS,} from './limits.js';
 
 /** The message the user actually reports seeing. */
 const REAL = "You've hit your session limit · resets 8:20pm (UTC)";
@@ -312,4 +314,60 @@ test('windowsLookLimited: true when a window is effectively exhausted', () => {
 test('windowsLookLimited: true when nothing has been measured', () => {
   assert.equal(windowsLookLimited({}), true);
   assert.equal(windowsLookLimited({ five_hour: undefined }), true);
+});
+
+// ---------- a binary that would not start -----------------------------------
+
+/**
+ * The SDK reports any spawn failure as a libc mismatch -- a musl binary on a
+ * glibc host -- without ever reading the errno. It arrived on a Debian glibc
+ * host that bundles only the glibc build, where the same binary ran three times
+ * in a row a minute later. The turn was lost before the model saw it, which is
+ * the part worth acting on.
+ */
+test('a launch failure is transient and gets retried', () => {
+  assert.equal(
+    isLaunchFailure(
+      "Claude Code native binary at /x/claude exists but failed to launch. This usually means " +
+        "the binary does not match this system's libc — e.g. spawning a musl-linked binary on a " +
+        'glibc Linux host fails because the musl dynamic loader (/lib/ld-musl-*) is missing.',
+    ),
+    true,
+  );
+  assert.equal(isLaunchFailure('spawn /x/claude EACCES'), true);
+  assert.equal(isLaunchFailure('Error: ETXTBSY'), true, 'the file was still being written');
+});
+
+/**
+ * There being no binary is not momentary, and asking again will not conjure
+ * one. The two shapes do overlap: node's raw `spawn ... ENOENT` rides along
+ * with the SDK's "not found", and without the exclusion the ENOENT half would
+ * win and buy five pointless retries.
+ */
+test('a missing binary is not retried, even when it arrives as a spawn error', () => {
+  assert.equal(
+    isLaunchFailure(
+      'Native CLI binary for linux-x64 not found. Reinstall @anthropic-ai/claude-agent-sdk ' +
+        'without --omit=optional, or set options.pathToClaudeCodeExecutable.',
+    ),
+    false,
+  );
+  assert.equal(
+    isLaunchFailure('spawn /x/claude ENOENT: Claude Code executable not found'),
+    false,
+    'the exclusion has to beat the spawn-error pattern, not sit behind it',
+  );
+});
+
+test('an ordinary reply mentioning a launch is not a launch failure', () => {
+  assert.equal(isLaunchFailure('I fixed the launch script'), false);
+  assert.equal(isLaunchFailure(''), false);
+  assert.equal(isLaunchFailure(undefined), false);
+});
+
+/** Five tries in a hundred seconds, not the overload's twelve hours. */
+test('the launch budget is short, because it either works or never will', () => {
+  assert.equal(LAUNCH_RETRY_MS, 20_000);
+  assert.equal(MAX_LAUNCH_ATTEMPTS, 5);
+  assert.ok(MAX_LAUNCH_ATTEMPTS * LAUNCH_RETRY_MS < 2 * 60_000);
 });

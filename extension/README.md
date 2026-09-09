@@ -27,6 +27,30 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
   attempts, instead of leaving you staring at a spinner.
 - **Import your existing Claude Code conversations** and carry on with their
   full context.
+- **Sessions name themselves.** A tab is named at the one moment nobody knows
+  what the work is -- when you create it. After the first turn the session works
+  out what it turned out to be about, and looks again every twenty turns as the
+  work drifts: `blooper2.0-preview` becomes `blp|#1360+ Video model receipt`.
+  Three letters for the project, the issue in hand, then the work in at most
+  twenty characters.
+  - The **project tag** is the consonants of the directory rather than its first
+    three letters, since `cld` is only ever claude-persist while `cla` is also
+    `claude-code`, `clang` and `classifier`.
+  - The **issue number** is what finds a tab when you already know which PR you
+    want. A `+` means several are in play -- usually a run of bug fixes, and the
+    namer is told so without being made to assume it.
+  - The **name** comes from the branch first, because a person wrote that branch
+    to describe the change and it is the best evidence there is; then from what
+    the session keeps returning to, counted across its whole log; and last from
+    what you typed, which in a long session is mostly steering. Naming from
+    messages alone produced tabs called `Main merge` and `Backend mypy gate` --
+    real things, and an hour of a week's work.
+  - It runs on the session's own account through the same login your turns use --
+    no API key, no separate billing -- with tools switched off, which is what
+    makes it cost about a fortieth of an ordinary turn. Nothing is named while a
+    turn is parked on a rate limit, a name you set yourself is never replaced,
+    and a rename that only rephrases is declined so the strip does not shuffle
+    under you.
 - **Rename and delete** sessions. Long histories load a window at a time.
 
 ### The chat

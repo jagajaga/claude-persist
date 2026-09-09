@@ -18,6 +18,20 @@ export interface SessionMeta {
    * log is rotated and the tail is capped, so it cannot be recounted later.
    */
   imageCount?: number;
+  /**
+   * Completed turns, so the namer knows how far the work has moved since it
+   * last looked. Counted rather than derived from the event log because the
+   * log holds tool calls and deltas too, and "twenty turns" is the unit a
+   * person would use.
+   */
+  turns?: number;
+  /** The turn count when the title was last generated. */
+  titledAtTurn?: number;
+  /**
+   * You named this one. Nothing generated ever replaces it -- a tab you
+   * deliberately called something is a decision, not a placeholder.
+   */
+  titleSetByUser?: boolean;
 }
 
 export class Registry {
@@ -110,10 +124,11 @@ export class Registry {
     return meta;
   }
 
-  rename(id: string, title: string): void {
+  rename(id: string, title: string, opts: { byUser?: boolean } = {}): void {
     const meta = this.sessions.get(id);
     if (meta) {
       meta.title = title;
+      if (opts.byUser) meta.titleSetByUser = true;
       this.save();
     }
   }

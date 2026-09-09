@@ -316,6 +316,24 @@ const callbacks = {
   onMetaChanged(): void {
     registry.save();
   },
+  /**
+   * A session named itself. Unlike onMetaChanged this has to reach the windows:
+   * the name is on a tab and in a tree, and nothing else will tell them.
+   */
+  /** The other tabs on this project, newest first, so a name can differ from them. */
+  siblingTitles(sessionId: string, cwd: string): string[] {
+    return registry
+      .list()
+      .filter((s) => s.id !== sessionId && s.cwd === cwd)
+      .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
+      .slice(0, 12)
+      .map((s) => s.title);
+  },
+
+  onRetitled(): void {
+    registry.save();
+    broadcastAll({ kind: 'sessions_changed' });
+  },
   rateLimitWindows(): RateLimits {
     return usage.windows;
   },
@@ -515,7 +533,8 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
     case 'renameSession': {
       const title = req.title.trim();
       if (!title) throw new Error('Title cannot be empty');
-      registry.rename(req.sessionId, title);
+      // Marked as yours, so nothing generated overwrites it later.
+      registry.rename(req.sessionId, title, { byUser: true });
       broadcastAll({ kind: 'sessions_changed' });
       return sessionInfo(req.sessionId);
     }

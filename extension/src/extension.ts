@@ -16,6 +16,27 @@ import {
 } from './rateLimits';
 
 let client: DaemonClient | null = null;
+
+/**
+ * Re-read the session list and put each open tab's current name on it.
+ *
+ * A rename used to reach the sidebar of every window while the tab kept its old
+ * name until reattach: the local command was the only caller of setTitle.
+ * Sessions that name themselves make that the common case rather than the odd
+ * one, so the broadcast has to carry the tab too.
+ */
+async function refreshPanelTitles(): Promise<void> {
+  const live = client;
+  if (!live?.connected) return;
+  try {
+    for (const session of await live.listSessions()) {
+      panels.setTitle(session.id, session.title);
+    }
+  } catch {
+    // The daemon spoke a moment ago; if it has gone since, the tab keeps the
+    // name it has and the next broadcast corrects it.
+  }
+}
 let panels: ChatPanelManager;
 let sessionsProvider: SessionsProvider;
 let statusItem: vscode.StatusBarItem;
@@ -98,7 +119,14 @@ async function doConnect(context: vscode.ExtensionContext): Promise<DaemonClient
     onEvent: (sessionId, event) => panels.handleEvent(sessionId, event),
     onDelta: (sessionId, text) => panels.handleDelta(sessionId, text),
     onAgents: (sessionId, agents) => panels.handleAgents(sessionId, agents),
-    onSessionsChanged: () => sessionsProvider.refresh(),
+    onSessionsChanged: () => {
+      sessionsProvider.refresh();
+      // Tabs too, not just the tree. A rename used to reach the sidebar of
+      // every window while the tab kept its old name until reattach -- the
+      // local command was the only thing that ever called setTitle. Sessions
+      // that name themselves make that the common case rather than the odd one.
+      void refreshPanelTitles();
+    },
     onModels: (models) => panels.handleModels(models),
     onRateLimits: (usage) => {
       latestRateLimits = usage.windows;

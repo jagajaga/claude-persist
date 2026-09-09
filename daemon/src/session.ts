@@ -23,6 +23,19 @@ import {
   tasksFromLevelSignal,
 } from './agents.js';
 import { NO_CLAUDE_MESSAGE, claudeExecutable } from './claudeExecutable.js';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  composeTitle,
+  generateTitle,
+  isMaterialChange,
+  pickExchanges,
+  projectTag,
+  sessionBranches,
+  sessionIssue,
+  sessionVocabulary,
+  titleIsDue,
+} from './titler.js';
 import { incidentNotice } from './statusPage.js';
 import type { StatusIncident } from './statusPage.js';
 import { friendlyError, isSetupFailure, needsSignIn } from './errorHints.js';
@@ -91,6 +104,16 @@ export interface SessionCallbacks {
   onEvent(sessionId: string, event: PersistedEvent): void;
   onDelta(sessionId: string, text: string): void;
   onMetaChanged(): void;
+  /** A session renamed itself; persist it and tell the windows. */
+  onRetitled(): void;
+  /**
+   * What the other tabs on this project are called.
+   *
+   * A namer that cannot see its siblings names each session in isolation, and
+   * produces "Receipt backend" beside "Backend typecheck": two fair names that
+   * together tell you nothing about which tab to click.
+   */
+  siblingTitles(sessionId: string, cwd: string): string[];
   /** Raw ModelInfo[] from the SDK init handshake. */
   onModels(models: unknown[]): void;
   /**
@@ -639,6 +662,76 @@ export class DaemonSession {
    * bespoke path that replayed the original envelope — which made the work start
    * over rather than continue — and a hand-written continuation prompt.
    */
+  /**
+   * Name the session after what it has become about.
+   *
+   * Fire and forget: a tab name is a nicety, and nothing here may delay a turn,
+   * fail one, or hold a reference that keeps the session alive. It runs on the
+   * session's own account with tools switched off -- about a fortieth of an
+   * ordinary turn -- and asks again only once the work has moved on.
+   */
+  private async maybeRetitle(): Promise<void> {
+    if (
+      !titleIsDue({
+        turns: this.meta.turns ?? 0,
+        titledAtTurn: this.meta.titledAtTurn,
+        titleSetByUser: this.meta.titleSetByUser,
+        parked: Boolean(this.pending),
+      })
+    ) {
+      return;
+    }
+
+    // Sampled across the whole log, not at its ends. Ends alone misread a long
+    // session: the one that mentioned its pull request 335 times did so in the
+    // middle, and head-plus-tail picked a different number entirely. Four
+    // slices cost the same as two and cannot miss the middle.
+    const files = allLogFiles(this.meta.id);
+    const total = this.totalCount;
+    const slice = 150;
+    const spread = [0, 0.34, 0.67]
+      .map((at) => Math.floor(total * at))
+      .flatMap((from) => readRange(files, from, Math.min(total, from + slice)));
+    const opening = readRange(files, 0, Math.min(total, 40)).map((e) => e.event);
+    const recent = this.eventsSince(0, 150).events.map((e) => e.event);
+    const exchanges = pickExchanges(opening, recent);
+    const both = [...spread.map((e) => e.event), ...recent];
+    const vocabulary = sessionVocabulary(both);
+    const branches = sessionBranches(both);
+    const issue = sessionIssue(both);
+    // Recorded before the call, not after: if it fails, the next attempt should
+    // wait for the work to move again rather than retrying every turn.
+    this.meta.titledAtTurn = this.meta.turns ?? 0;
+    this.callbacks.onMetaChanged();
+
+    const project = path.basename(this.meta.cwd);
+    const name = await generateTitle({
+      exchanges,
+      vocabulary,
+      branches,
+      issue,
+      siblings: this.callbacks.siblingTitles(this.meta.id, this.meta.cwd),
+      project,
+      configDir: accountsStore.activeConcreteDir(),
+      // Somewhere other than the session's own directory: this leaves a
+      // throwaway transcript behind, and the importer lists transcripts by cwd.
+      cwd: os.homedir(),
+      ...(claudeExecutable() ? { claudeBin: claudeExecutable() as string } : {}),
+    });
+    if (!name) return;
+    // The project tag is prepended here rather than asked for: the directory
+    // already knows it, and a tab strip full of sessions needs the three
+    // letters that say which project before the words that say which work.
+    const title = composeTitle(projectTag(this.meta.cwd), name, issue);
+    if (title === this.meta.title) return;
+    // A rename that only rephrases moves a tab you had learned to recognise and
+    // tells you nothing new.
+    if (!isMaterialChange(this.meta.title, title)) return;
+    this.callbacks.log(`session ${this.meta.id} named itself "${title}"`);
+    this.meta.title = title;
+    this.callbacks.onRetitled();
+  }
+
   private runPendingRetry(): void {
     const pending = this.pending;
     if (!pending) return;
@@ -1358,6 +1451,8 @@ export class DaemonSession {
           ...(contextWindow ? { contextWindow } : {}),
           ...(turnTokens ? { turnTokens } : {}),
         });
+        this.meta.turns = (this.meta.turns ?? 0) + 1;
+        void this.maybeRetitle();
         // A plan limit comes back as an ordinary result, so decide here whether
         // this turn actually finished or was refused.
         // Only an errored turn can be a rate-limit rejection. `subtype` is

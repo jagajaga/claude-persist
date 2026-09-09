@@ -23,6 +23,8 @@ const noopCallbacks = {
   onEvent(): void {},
   onDelta(): void {},
   onMetaChanged(): void {},
+  onRetitled(): void {},
+  siblingTitles: () => [],
   onModels(): void {},
   onRateLimit(): void {},
   onUsage(): void {},

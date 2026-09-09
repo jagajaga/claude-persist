@@ -80,9 +80,9 @@ The [marketplace listing](https://marketplace.visualstudio.com/items?itemName=ja
 has the full list. In short: reload-proof sessions as editor tabs, a chat with
 tool cards, diffs, permissions and questions, image and file attachments,
 several Claude accounts with automatic rotation and resume when one hits its
-rate limit, subagent tracking with per-message attribution, downloads for the
-files a turn produces, automatic recovery from an overloaded server, and a UI
-that works on a phone.
+rate limit, subagent tracking with per-message attribution, sessions that name
+their own tabs, downloads for the files a turn produces, automatic recovery from
+an overloaded server, and a UI that works on a phone.
 
 ## Questions people ask
 
@@ -120,7 +120,7 @@ with `pkill -f 'claude-persist.*daemon/dist/main.js'`, and delete
 ```bash
 npm install
 npm run build          # tsc for shared, daemon and extension
-npm test               # 267 daemon + 272 extension tests
+npm test               # 336 daemon + 276 extension tests
 ./scripts/package.sh   # -> claude-persist-<version>.vsix, no bundled runtime
 ```
 

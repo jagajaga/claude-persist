@@ -25,8 +25,13 @@ export interface SessionMeta {
    * person would use.
    */
   turns?: number;
-  /** The turn count when the title was last generated. */
-  titledAtTurn?: number;
+  /**
+   * When the title was last generated.
+   *
+   * Time rather than a turn count: a turn is anything from a one-word answer to
+   * an hour of work, so counting them measures nothing anyone can feel.
+   */
+  titledAt?: number;
   /**
    * You named this one. Nothing generated ever replaces it -- a tab you
    * deliberately called something is a decision, not a placeholder.

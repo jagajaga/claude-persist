@@ -19,14 +19,21 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 export const TITLE_MODEL = 'claude-haiku-4-5';
 
 /**
- * Turns between re-namings.
+ * How long a session goes before its name is looked at again.
  *
- * Not every turn: a tab you have learned to recognise must not rename itself
- * under you while you are looking at it, and each naming costs a call. Twenty
- * is long enough that a session which has genuinely moved on gets a current
- * name, and short enough that it happens while you still care.
+ * Time, not turns: a turn is anything from a one-word answer to an hour of
+ * work, so counting them measures nothing you can feel. Twenty minutes of
+ * actually working in a tab is the point at which the subject may have moved.
+ *
+ * Only ever checked when a turn completes, so a tab nobody is touching is never
+ * re-named and never costs anything -- "twenty minutes" means twenty minutes of
+ * activity, not of wall clock.
+ *
+ * Looking again is not renaming. Most of the time the work is a continuation
+ * and the name still fits, which isMaterialChange decides; the rename happens
+ * only when the subject has genuinely become something else.
  */
-export const RETITLE_EVERY_TURNS = 20;
+export const RETITLE_AFTER_MS = 20 * 60_000;
 
 /**
  * The name half of a title: `blo|Post-merge CI`.
@@ -70,10 +77,12 @@ export interface Exchange {
 }
 
 export interface TitleState {
-  /** Completed turns so far. */
+  /** Completed turns so far. The first naming waits for one. */
   turns: number;
-  /** Turn count when the name was last asked for, or undefined if never. */
-  titledAtTurn?: number;
+  /** When the name was last asked for, or undefined if never. */
+  titledAt?: number;
+  /** Now, injected so the rule can be tested without waiting twenty minutes. */
+  now?: number;
   /** A name you chose yourself is never replaced by one of these. */
   titleSetByUser?: boolean;
   /**
@@ -96,9 +105,11 @@ export interface TitleState {
 export function titleIsDue(state: TitleState): boolean {
   if (state.titleSetByUser) return false;
   if (state.parked) return false;
+  // Before a turn has finished, the only thing to go on is the question, and
+  // the answer is usually what says what the work is.
   if (state.turns < 1) return false;
-  if (state.titledAtTurn === undefined) return true;
-  return state.turns - state.titledAtTurn >= RETITLE_EVERY_TURNS;
+  if (state.titledAt === undefined) return true;
+  return (state.now ?? Date.now()) - state.titledAt >= RETITLE_AFTER_MS;
 }
 
 /**
@@ -303,6 +314,7 @@ export function titlePrompt(
   vocabulary: string[] = [],
   branches: string[] = [],
   issue = '',
+  current = '',
 ): string {
   const body = exchanges
     .map((e) => `<${e.role}>\n${e.text}\n</${e.role}>`)
@@ -329,10 +341,17 @@ export function titlePrompt(
   const many = issue.endsWith('+')
     ? `\n\nSeveral issues are in play (${issue.slice(0, -1)} and others). That usually means a run of bug fixes rather than one subject: if they share a theme, name the theme; if they only share being broken, say what the run is over. It is not always bug fixing, so weigh this against everything else here.`
     : '';
+  // What it is called now. Most re-namings are of a session that simply carried
+  // on, and a tab you have learned to recognise must not be reworded for the
+  // sake of it -- only a subject that has actually become something else earns
+  // a new name.
+  const already = current
+    ? `\n\nThis conversation is currently called "${current}". It has been working for a while since that was chosen. If it is still about the same thing, reply with that name unchanged. Give a different name only if the subject has genuinely become something else.`
+    : '';
   const subject = vocabulary.length
     ? `\n\nWords this session keeps returning to, most frequent first:\n${vocabulary.join(', ')}`
     : '';
-  return `Name this conversation for a tab strip.${worked}${many}${subject}\n\n${body}${others}`;
+  return `Name this conversation for a tab strip.${already}${worked}${many}${subject}\n\n${body}${others}`;
 }
 
 /**
@@ -598,6 +617,8 @@ export interface TitleRequest {
   branches?: string[];
   /** The issue in hand, `#1226+` when there are several. */
   issue?: string;
+  /** What the tab is called now, so a continuation keeps its name. */
+  current?: string;
   /** The account this session runs on, so the naming is billed where the work is. */
   configDir: string;
   /** Where the throwaway transcript lands; not the session's own directory. */
@@ -622,6 +643,7 @@ export async function generateTitle(
         req.vocabulary ?? [],
         req.branches ?? [],
         req.issue ?? '',
+        req.current ?? '',
       ),
       options: {
         model: TITLE_MODEL,

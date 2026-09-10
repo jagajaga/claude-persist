@@ -704,7 +704,7 @@ export class DaemonSession {
     if (
       !titleIsDue({
         turns: this.meta.turns ?? 0,
-        titledAtTurn: this.meta.titledAtTurn,
+        titledAt: this.meta.titledAt,
         titleSetByUser: this.meta.titleSetByUser,
         parked: Boolean(this.pending),
       })
@@ -731,7 +731,7 @@ export class DaemonSession {
     const issue = sessionIssue(both);
     // Recorded before the call, not after: if it fails, the next attempt should
     // wait for the work to move again rather than retrying every turn.
-    this.meta.titledAtTurn = this.meta.turns ?? 0;
+    this.meta.titledAt = Date.now();
     this.callbacks.onMetaChanged();
 
     const project = path.basename(this.meta.cwd);
@@ -740,6 +740,9 @@ export class DaemonSession {
       vocabulary,
       branches,
       issue,
+      // Told what it is called now, so a session that simply carried on keeps
+      // the name rather than being reworded around the same subject.
+      current: this.meta.title,
       siblings: this.callbacks.siblingTitles(this.meta.id, this.meta.cwd),
       project,
       configDir: accountsStore.activeConcreteDir(),

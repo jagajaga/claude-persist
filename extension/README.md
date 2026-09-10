@@ -30,7 +30,9 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
 - **Sessions name themselves.** A tab is named at the one moment nobody knows
   what the work is -- when you create it. After the first turn the session works
   out what it turned out to be about, and looks again every twenty turns as the
-  work drifts: `blooper2.0-preview` becomes `blp|#1360+ Video model receipt`.
+  work drifts -- twenty minutes of working in a tab, not twenty minutes of the
+  clock, since the check only runs when a turn finishes: `blooper2.0-preview`
+  becomes `blp|#1360+ Video model receipt`.
   Three letters for the project, the issue in hand, then the work in at most
   twenty characters.
   - The **project tag** is the consonants of the directory rather than its first
@@ -45,6 +47,10 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
     what you typed, which in a long session is mostly steering. Naming from
     messages alone produced tabs called `Main merge` and `Backend mypy gate` --
     real things, and an hour of a week's work.
+  - Looking again is not renaming. Most of the time the work has simply carried
+    on, so the namer is told what the tab is called now and asked to keep it; a
+    rename that only rephrases is refused outright. Only a subject that has
+    become something else earns a new name.
   - It runs on the session's own account through the same login your turns use --
     no API key, no separate billing -- with tools switched off, which is what
     makes it cost about a fortieth of an ordinary turn. Nothing is named while a

@@ -4,7 +4,7 @@ import {
   MAX_NAME_CHARS,
   composeTitle,
   projectTag,
-  RETITLE_EVERY_TURNS,
+  RETITLE_AFTER_MS,
   cleanTitle,
   generateTitle,
   isMaterialChange,
@@ -28,15 +28,34 @@ test('due after the first completed turn, not before', () => {
   assert.equal(titleIsDue({ turns: 1 }), true);
 });
 
-test('not again until the work has moved', () => {
-  assert.equal(titleIsDue({ turns: 5, titledAtTurn: 1 }), false);
-  assert.equal(titleIsDue({ turns: RETITLE_EVERY_TURNS, titledAtTurn: 1 }), false);
-  assert.equal(titleIsDue({ turns: RETITLE_EVERY_TURNS + 1, titledAtTurn: 1 }), true);
+/**
+ * Time, not turns: a turn is anything from a one-word answer to an hour of
+ * work, so counting them measures nothing anyone can feel.
+ */
+test('not looked at again for twenty minutes', () => {
+  const at = 1_000_000;
+  assert.equal(titleIsDue({ turns: 9, titledAt: at, now: at + 60_000 }), false, 'a minute later');
+  assert.equal(
+    titleIsDue({ turns: 9, titledAt: at, now: at + RETITLE_AFTER_MS - 1 }),
+    false,
+    'a moment short of twenty minutes',
+  );
+  assert.equal(titleIsDue({ turns: 9, titledAt: at, now: at + RETITLE_AFTER_MS }), true);
+});
+
+/**
+ * "Twenty minutes" means twenty minutes of working in the tab: this is only
+ * ever asked when a turn completes, so a tab nobody touches for a week is never
+ * re-named and never costs a call.
+ */
+test('a tab with no activity is never looked at, however long it sits', () => {
+  // A week later, but the turn count says nothing has happened since.
+  assert.equal(titleIsDue({ turns: 0, titledAt: 1, now: 1 + 7 * 24 * 3600_000 }), false);
 });
 
 /** A name you chose is a decision. Nothing generated overrides a decision. */
 test('a name you set yourself is never replaced', () => {
-  assert.equal(titleIsDue({ turns: 500, titledAtTurn: 1, titleSetByUser: true }), false);
+  assert.equal(titleIsDue({ turns: 500, titledAt: 1, titleSetByUser: true }), false);
   assert.equal(titleIsDue({ turns: 1, titleSetByUser: true }), false);
 });
 
@@ -47,8 +66,8 @@ test('a name you set yourself is never replaced', () => {
  */
 test('nothing is named while a turn is parked', () => {
   assert.equal(titleIsDue({ turns: 1, parked: true }), false);
-  assert.equal(titleIsDue({ turns: 40, titledAtTurn: 1, parked: true }), false);
-  assert.equal(titleIsDue({ turns: 40, titledAtTurn: 1, parked: false }), true);
+  assert.equal(titleIsDue({ turns: 40, titledAt: 1, parked: true }), false);
+  assert.equal(titleIsDue({ turns: 40, titledAt: 1, parked: false }), true);
 });
 
 // ---------- what to name from ----------------------------------------------
@@ -761,4 +780,28 @@ test('several issues: the pattern is offered, not imposed', () => {
 test('one issue says nothing about bug runs', () => {
   const prompt = titlePrompt([{ role: 'user', text: 'fix this' }], [], [], [], '#1345');
   assert.doesNotMatch(prompt, /Several issues/);
+});
+
+/**
+ * Most re-namings are of a session that simply carried on. A tab you have
+ * learned to recognise must not be reworded for the sake of it -- only a
+ * subject that has actually become something else earns a new name.
+ */
+test('the namer is told what the tab is called now', () => {
+  const prompt = titlePrompt(
+    [{ role: 'user', text: 'carry on with the receipts' }],
+    [],
+    [],
+    [],
+    '',
+    'blp|#1360+ Video model receipt',
+  );
+  assert.match(prompt, /currently called "blp\|#1360\+ Video model receipt"/);
+  assert.match(prompt, /still about the same thing, reply with that name unchanged/);
+  assert.match(prompt, /genuinely become something else/);
+});
+
+test('a first naming has no current name to keep', () => {
+  const prompt = titlePrompt([{ role: 'user', text: 'start the receipts work' }]);
+  assert.doesNotMatch(prompt, /currently called/);
 });

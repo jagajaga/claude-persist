@@ -6,8 +6,10 @@ import {
   projectTag,
   RETITLE_AFTER_MS,
   cleanTitle,
+  clearsHistory,
   generateTitle,
   isMaterialChange,
+  namingWindow,
   tidyName,
   pickExchanges,
   sessionBranches,
@@ -32,25 +34,60 @@ test('due after the first completed turn, not before', () => {
  * Time, not turns: a turn is anything from a one-word answer to an hour of
  * work, so counting them measures nothing anyone can feel.
  */
-test('not looked at again for twenty minutes', () => {
+test('not looked at again until the interval has passed', () => {
   const at = 1_000_000;
   assert.equal(titleIsDue({ turns: 9, titledAt: at, now: at + 60_000 }), false, 'a minute later');
   assert.equal(
     titleIsDue({ turns: 9, titledAt: at, now: at + RETITLE_AFTER_MS - 1 }),
     false,
-    'a moment short of twenty minutes',
+    'a moment short of it',
   );
   assert.equal(titleIsDue({ turns: 9, titledAt: at, now: at + RETITLE_AFTER_MS }), true);
 });
 
 /**
- * "Twenty minutes" means twenty minutes of working in the tab: this is only
- * ever asked when a turn completes, so a tab nobody touches for a week is never
+ * The interval means that much time *working in the tab*: this is only ever
+ * asked when a turn completes, so a tab nobody touches for a week is never
  * re-named and never costs a call.
  */
 test('a tab with no activity is never looked at, however long it sits', () => {
   // A week later, but the turn count says nothing has happened since.
   assert.equal(titleIsDue({ turns: 0, titledAt: 1, now: 1 + 7 * 24 * 3600_000 }), false);
+});
+
+/**
+ * A tab is looked at often enough that its name keeps up with the work. Five
+ * minutes of actually working in it, not twenty: a name that lags the work was
+ * the whole complaint, and most looks decide nothing has changed and write
+ * nothing, so looking is nearly free.
+ */
+test('the interval is short enough that a name keeps up', () => {
+  assert.ok(
+    RETITLE_AFTER_MS <= 5 * 60_000,
+    'longer than five minutes and you finish a piece of work under the old name',
+  );
+  assert.ok(RETITLE_AFTER_MS >= 60_000, 'but not every turn: that is a call each time');
+});
+
+/**
+ * `/clear` and `/new` end one conversation and start another in the same tab.
+ * Waiting out the interval leaves you working on something new under the name
+ * of the thing you just finished.
+ */
+test('a cleared conversation is owed a name again', () => {
+  assert.equal(clearsHistory('/clear'), true);
+  assert.equal(clearsHistory('/new'), true);
+  assert.equal(clearsHistory('  /clear  '), true, 'typed with a stray space');
+  assert.equal(clearsHistory('/clear'.toUpperCase()), false, 'not a command Claude Code has');
+});
+
+/** `/newsletter-draft` is a message about newsletters. */
+test('only the command itself clears, not anything starting like it', () => {
+  assert.equal(clearsHistory('/newsletter-draft'), false);
+  assert.equal(clearsHistory('/clearance-report'), false);
+  assert.equal(clearsHistory('/news'), false);
+  assert.equal(clearsHistory('can we /clear this up'), false, 'said, not commanded');
+  assert.equal(clearsHistory('/new'), true, 'and the command still works');
 });
 
 /** A name you chose is a decision. Nothing generated overrides a decision. */
@@ -68,6 +105,61 @@ test('nothing is named while a turn is parked', () => {
   assert.equal(titleIsDue({ turns: 1, parked: true }), false);
   assert.equal(titleIsDue({ turns: 40, titledAt: 1, parked: true }), false);
   assert.equal(titleIsDue({ turns: 40, titledAt: 1, parked: false }), true);
+});
+
+// ---------- which part of the log to read -----------------------------------
+
+/**
+ * The whole point of recording where a `/clear` fell. A long session cleared at
+ * event 2000 has 2000 events of finished work above the conversation you are
+ * actually in; read from the top and the tab keeps the old name because the old
+ * work is nearly all the evidence there is.
+ */
+test('window: nothing before the clear is read', () => {
+  const { opening, spread } = namingWindow(2400, 2000);
+  assert.deepEqual(opening, [2000, 2040], 'the cleared conversation has its own opening');
+  assert.ok(
+    spread.every(([from]) => from >= 2000),
+    `every sample must start after the clear, got ${JSON.stringify(spread)}`,
+  );
+  assert.equal(spread[0][0], 2000);
+});
+
+/** With no clear, the window is the whole log, as it always was. */
+test('window: an uncleared session is read from the top', () => {
+  const { opening, spread } = namingWindow(900);
+  assert.deepEqual(opening, [0, 40]);
+  assert.deepEqual(spread[0], [0, 150]);
+});
+
+/**
+ * Ends alone misread a long session: the one that mentioned its pull request
+ * 335 times did so in the middle, and head-plus-tail picked a different number
+ * entirely.
+ */
+test('window: the middle is sampled, not skipped', () => {
+  const { spread } = namingWindow(3000);
+  assert.equal(spread.length, 3);
+  const middle = spread[1];
+  assert.ok(middle[0] > 600 && middle[0] < 2400, `${middle[0]} is not in the middle of the log`);
+  assert.ok(spread[2][0] > middle[0], 'and the three do not sit on top of each other');
+});
+
+/** A range that runs off the end of the log reads nothing, not garbage. */
+test('window: no range reaches past the end', () => {
+  for (const [total, cleared] of [
+    [10, 0],
+    [10, 8],
+    [5, 900],
+    [0, 0],
+  ]) {
+    const { opening, spread } = namingWindow(total, cleared);
+    for (const [from, to] of [opening, ...spread]) {
+      assert.ok(from >= 0 && from <= total, `${from} is outside a log of ${total}`);
+      assert.ok(to <= total, `${to} reads past the end of a log of ${total}`);
+      assert.ok(to >= from, 'and no range runs backwards');
+    }
+  }
 });
 
 // ---------- what to name from ----------------------------------------------
@@ -224,7 +316,19 @@ test('a long-but-name-shaped answer is cut at a word boundary', () => {
   assert.ok(name);
   assert.ok(name.length <= MAX_NAME_CHARS, `${name} is over budget`);
   assert.ok(!name.endsWith(' '), 'no trailing space where the cut fell');
-  assert.equal(name, 'Registration page', 'whole words, from the front');
+  assert.equal(name, 'Registration page invite emails', 'whole words, from the front');
+});
+
+/**
+ * The budget went from twenty to thirty-two when the issue number stopped
+ * riding in front of the name. Twenty is what turned "video continuation" into
+ * "Video" and "Registration page invite emails" into "Registration page": a
+ * name cut to its first noun is a category, and a strip of categories tells you
+ * nothing about which tab is which.
+ */
+test('the budget is wide enough for a name rather than a category', () => {
+  assert.ok(MAX_NAME_CHARS >= 32, 'a second noun is usually what distinguishes two tabs');
+  assert.equal(cleanTitle('Video continuation'), 'Video continuation');
 });
 
 // ---------- the shape of a tab name -----------------------------------------
@@ -269,7 +373,7 @@ test('the two halves join with a bar', () => {
   assert.equal(composeTitle('blo', 'Post-merge CI'), 'blo|Post-merge CI');
 });
 
-test('the name itself still fits twenty, whatever rides in front of it', () => {
+test('the name fits its budget, and the tag is all that rides in front of it', () => {
   const name = cleanTitle('Roaming fix shipped clean worktrees') ?? '';
   const title = composeTitle(projectTag('/home/me/blooper2.0'), name);
   assert.ok(name.length <= MAX_NAME_CHARS, `${name} is over budget`);
@@ -702,20 +806,16 @@ test('issue: read from prose as well as from commands', () => {
 });
 
 /**
- * Sharing one budget cost more than it looked: "#1354+ " is seven of twenty
- * characters, and "video continuation" came out as "Video". A number locates a
- * tab and describes nothing, so it rides outside the name's twenty.
+ * The number rode in front of the name for a while and was dropped. "#1354+ "
+ * is seven characters that describe nothing -- they locate a tab, and only for
+ * someone who already knows which number they want -- and paying them turned
+ * "video continuation" into "Video". The session is still read for its issues;
+ * they just no longer reach the tab.
  */
-test('the number goes in front of the name, not into it', () => {
-  assert.equal(
-    composeTitle('blp', 'roaming chat history', '#1226+'),
-    'blp|#1226+ roaming chat history',
-  );
-  assert.equal(composeTitle('blp', 'video continuation', '#1354'), 'blp|#1354 video continuation');
-});
-
-test('with no issue, the name has the whole budget', () => {
+test('no issue number ever reaches the tab', () => {
   assert.equal(composeTitle('blp', 'roaming chat history'), 'blp|roaming chat history');
+  assert.equal(composeTitle('blp', 'video continuation'), 'blp|video continuation');
+  assert.doesNotMatch(composeTitle('blp', 'video continuation'), /#/);
 });
 
 /**

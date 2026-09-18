@@ -925,6 +925,65 @@ test('messages without images leave the count alone', () => {
   assert.equal(meta.imageCount ?? 0, 0);
 });
 
+// ---------- clearing the conversation ---------------------------------------
+//
+// `/clear` and `/new` end one conversation and start another in the same tab.
+// Claude cannot see a word of what came before, so the name the tab earned now
+// describes work that is finished -- and the log above the clear is usually the
+// bulk of it, so it is also the wrong thing to name the next one from.
+// ---------------------------------------------------------------------------
+
+type Cleared = { meta: { clearedAt?: number; titledAt?: number; titleSetByUser?: boolean } };
+
+test('clearing marks where the new conversation starts and un-names the tab', () => {
+  const session = makeSession(`cleared-${Date.now()}`);
+  const meta = (session as unknown as Cleared).meta;
+  meta.titledAt = 1_700_000_000_000;
+
+  append(session, { type: 'user_message', text: 'the video model receipt is wrong' });
+  append(session, { type: 'assistant_text', text: 'fixed it' });
+  assert.equal(meta.clearedAt, undefined, 'nothing has been thrown away yet');
+
+  append(session, { type: 'user_message', text: '/clear' });
+  assert.equal(meta.clearedAt, 2, 'the clear is where the next name is read from');
+  assert.equal(
+    meta.titledAt,
+    undefined,
+    'and the name is owed at the next completed turn, not in five minutes',
+  );
+});
+
+test('an ordinary message changes neither', () => {
+  const session = makeSession(`uncleared-${Date.now()}`);
+  const meta = (session as unknown as Cleared).meta;
+  meta.titledAt = 1_700_000_000_000;
+  append(session, { type: 'user_message', text: '/newsletter copy for the launch' });
+  append(session, { type: 'user_message', text: 'and now the queue page' });
+  assert.equal(meta.clearedAt, undefined);
+  assert.equal(meta.titledAt, 1_700_000_000_000, 'a name that still fits is left alone');
+});
+
+/**
+ * Only a message from the person clears. An assistant quoting "/clear" back --
+ * explaining what it does, say -- is not someone clearing anything.
+ */
+test('only the person can clear the conversation', () => {
+  const session = makeSession(`cleared-who-${Date.now()}`);
+  const meta = (session as unknown as Cleared).meta;
+  append(session, { type: 'assistant_text', text: '/clear starts a fresh conversation' });
+  assert.equal(meta.clearedAt, undefined);
+});
+
+/** A second clear moves the mark: the newest conversation is the one to name. */
+test('clearing twice names from the last one', () => {
+  const session = makeSession(`cleared-twice-${Date.now()}`);
+  const meta = (session as unknown as Cleared).meta;
+  append(session, { type: 'user_message', text: '/clear' });
+  append(session, { type: 'user_message', text: 'the queue page' });
+  append(session, { type: 'user_message', text: '/new' });
+  assert.equal(meta.clearedAt, 2);
+});
+
 // ---------- a session imported from another machine -------------------------
 
 type Runnable = { workingDirectory(): string };

@@ -29,18 +29,24 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
   full context.
 - **Sessions name themselves.** A tab is named at the one moment nobody knows
   what the work is -- when you create it. After the first turn the session works
-  out what it turned out to be about, and looks again every twenty turns as the
-  work drifts -- twenty minutes of working in a tab, not twenty minutes of the
+  out what it turned out to be about, and looks again every five minutes as the
+  work drifts -- five minutes of working in a tab, not five minutes of the
   clock, since the check only runs when a turn finishes: `blooper2.0-preview`
-  becomes `blp|#1360+ Video model receipt`.
-  Three letters for the project, the issue in hand, then the work in at most
-  twenty characters.
+  becomes `blp|Video model receipt`. Three letters for the project, then the
+  work in at most thirty-two characters.
   - The **project tag** is the consonants of the directory rather than its first
     three letters, since `cld` is only ever claude-persist while `cla` is also
     `claude-code`, `clang` and `classifier`.
-  - The **issue number** is what finds a tab when you already know which PR you
-    want. A `+` means several are in play -- usually a run of bug fixes, and the
-    namer is told so without being made to assume it.
+  - **`/clear` and `/new` re-name the tab.** They start a different conversation
+    in the same tab, so the name is owed again at the very next turn rather than
+    at the next five-minute mark -- and it is read from the clear onwards, since
+    what came before is a conversation Claude can no longer see and is usually
+    most of the log.
+  - **No issue number.** It rode in front of the name for a while and was
+    dropped: a number says which tab, never what it is about, and it cost a
+    third of the name to say it -- long enough to turn `Video continuation` into
+    `Video`. The session is still read for its issues, and several at once still
+    tells the namer this is a run of fixes rather than one subject.
   - The **name** comes from the branch first, because a person wrote that branch
     to describe the change and it is the best evidence there is; then from what
     the session keeps returning to, counted across its whole log; and last from

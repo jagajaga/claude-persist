@@ -37,6 +37,15 @@ export interface SessionMeta {
    * deliberately called something is a decision, not a placeholder.
    */
   titleSetByUser?: boolean;
+  /**
+   * The event `/clear` or `/new` arrived at, if one ever did.
+   *
+   * Naming reads from here rather than from the top of the log. What came
+   * before belongs to a conversation Claude itself can no longer see, and it is
+   * the loudest thing in the transcript -- name from it and a cleared tab keeps
+   * describing the work you just finished.
+   */
+  clearedAt?: number;
 }
 
 export class Registry {

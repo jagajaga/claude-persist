@@ -22,27 +22,32 @@ export const TITLE_MODEL = 'claude-haiku-4-5';
  * How long a session goes before its name is looked at again.
  *
  * Time, not turns: a turn is anything from a one-word answer to an hour of
- * work, so counting them measures nothing you can feel. Twenty minutes of
- * actually working in a tab is the point at which the subject may have moved.
+ * work, so counting them measures nothing you can feel. Five minutes of
+ * actually working in a tab is the point at which the subject may have moved --
+ * short, because a name that lags the work is the whole complaint, and looking
+ * is cheap: most looks decide nothing has changed and write nothing.
  *
  * Only ever checked when a turn completes, so a tab nobody is touching is never
- * re-named and never costs anything -- "twenty minutes" means twenty minutes of
+ * re-named and never costs anything -- "five minutes" means five minutes of
  * activity, not of wall clock.
  *
  * Looking again is not renaming. Most of the time the work is a continuation
  * and the name still fits, which isMaterialChange decides; the rename happens
  * only when the subject has genuinely become something else.
  */
-export const RETITLE_AFTER_MS = 20 * 60_000;
+export const RETITLE_AFTER_MS = 5 * 60_000;
 
 /**
- * The name half of a title: `blo|Post-merge CI`.
+ * The name half of a title: `blp|Video model receipt`.
  *
- * A tab strip is narrow and shows several at once, so the budget is spent on
- * the part that differs. Twenty characters is about what stays readable before
- * the tab elides it.
+ * Thirty-two rather than twenty, and no issue number in front of it. The number
+ * located a tab faster than words could, but it cost a third of the name to say
+ * something only useful if you already knew which PR you wanted -- and "Video"
+ * is a worse tab than "Video continuation". The session is still read for its
+ * issues; what they are now used for is telling the namer when several are in
+ * play, which says the work is a run of fixes rather than one subject.
  */
-export const MAX_NAME_CHARS = 20;
+export const MAX_NAME_CHARS = 32;
 /** Past this the model answered with prose instead of a title. */
 const MAX_TITLE_WORDS = 12;
 /**
@@ -110,6 +115,60 @@ export function titleIsDue(state: TitleState): boolean {
   if (state.turns < 1) return false;
   if (state.titledAt === undefined) return true;
   return (state.now ?? Date.now()) - state.titledAt >= RETITLE_AFTER_MS;
+}
+
+/**
+ * Does this message throw the conversation away?
+ *
+ * `/clear` and `/new` end one conversation and begin another in the same tab.
+ * Claude cannot see a word of what came before, so the name that tab earned is
+ * now describing something that no longer exists -- and it is the name you are
+ * left looking at while you work on something else entirely.
+ *
+ * Matched at the word, not the prefix: `/newsletter-draft` is a message about
+ * newsletters, and throwing away the name for it would be a small mystery.
+ */
+export function clearsHistory(text: string): boolean {
+  return /^\/(?:new|clear)(?:\s|$)/.test(text.trim());
+}
+
+/** Enough of the first messages to say what the conversation was opened for. */
+const OPENING_EVENTS = 40;
+/** One sample of the log. Three of these is the whole evidence budget. */
+const SLICE_EVENTS = 150;
+
+/** Half-open `[start, end)` positions in the event log. */
+export type Range = [number, number];
+
+export interface NamingWindow {
+  /** What the conversation was opened for. */
+  opening: Range;
+  /** Samples spread across it, for what it turned into. */
+  spread: Range[];
+}
+
+/**
+ * Which parts of the log to read the evidence for a name out of.
+ *
+ * Sampled across the conversation rather than taken from its ends. Ends alone
+ * misread a long session: the one that mentioned its pull request 335 times did
+ * so in the middle, and head-plus-tail picked a different number entirely.
+ * Three slices cost the same as two and cannot miss the middle.
+ *
+ * Everything is measured from `clearedAt`, where the current conversation
+ * began, rather than from the top of the file. What is above it belongs to a
+ * conversation Claude itself can no longer see, and after a long session it is
+ * most of the log -- read from the top and a cleared tab goes on wearing the
+ * name of the work that finished in it.
+ */
+export function namingWindow(total: number, clearedAt = 0): NamingWindow {
+  const from = Math.max(0, Math.min(clearedAt, total));
+  const span = total - from;
+  const to = (start: number, length: number): Range => [start, Math.min(total, start + length)];
+  return {
+    opening: to(from, OPENING_EVENTS),
+    spread: [0, 0.34, 0.67].map((at) => to(from + Math.floor(span * at), SLICE_EVENTS)),
+  };
 }
 
 /**
@@ -428,24 +487,22 @@ export function sessionIssue(events: LoggedEvent[], min = 5): string {
 }
 
 /**
- * `blp|#1226+ roaming chat history` -- tag, issue, name, in order of how fast
- * each tells you which tab this is.
+ * `blp|Video model receipt` -- three letters for the project, then the work.
  *
- * The number rides outside the name's twenty characters rather than inside
- * them. Sharing the budget cost more than it looked: `#1354+ ` is seven
- * characters, and "video continuation" came out as "Video", "roaming chat
- * history" as "Roaming". A number locates a tab and describes nothing, so
- * taking a third of the description to carry it was the wrong trade.
+ * No issue number: it went in front of the name for a while and was dropped.
+ * It located a tab faster than words could, but only for someone who already
+ * knew the number, and it cost a third of the name to do it -- long enough to
+ * turn "Video continuation" into "Video". The number is still read from the
+ * session; it just no longer occupies the tab.
  */
-export function composeTitle(tag: string, name: string, issue = ''): string {
-  const label = issue ? `${issue} ${name}`.trim() : name;
-  return tag ? `${tag}|${label}` : label;
+export function composeTitle(tag: string, name: string): string {
+  return tag ? `${tag}|${name}` : name;
 }
 
 /**
  * Words that fit any session and so identify none.
  *
- * A tab name has twenty characters. "Continuity testing" spent eight of them on
+ * A tab name has a few words in it. "Continuity testing" spent one of them on
  * "testing", which was true of half the sessions open at the time. These are
  * dropped from a name rather than the name being rejected: what is left is
  * usually the part that was doing the work.
@@ -552,12 +609,15 @@ export function isMaterialChange(current: string, next: string): boolean {
   return shared * 2 < after.size;
 }
 
+// The budget is interpolated rather than written out: it has already moved once
+// from twenty to thirty-two, and a prompt still asking for twenty while the
+// cleaner accepts thirty-two would quietly throw the extra words away.
 const SYSTEM_PROMPT = [
-  'You name conversations for an editor tab strip, where twenty characters have to',
-  'let someone pick this tab out of twenty others at a glance.',
-  'Reply with the name alone: at most 20 characters, no quotes, no trailing period, no preamble.',
-  'Do not include an issue or pull request number -- one is added for you, and',
-  'repeating it costs you the words you have.',
+  'You name conversations for an editor tab strip, where a few words have to let',
+  'someone pick this tab out of twenty others at a glance.',
+  `Reply with the name alone: at most ${MAX_NAME_CHARS} characters, no quotes, no trailing period, no preamble.`,
+  'Do not include an issue or pull request number: a number says which tab, never',
+  'what it is about, and it costs you the words that would.',
   'A branch name, where there is one, is the best evidence you have: a person',
   'wrote it to describe the change. Prefer what it says over everything else,',
   'shortened to fit. The word list is next: it is what the session actually spent',

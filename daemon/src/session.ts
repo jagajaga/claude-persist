@@ -26,9 +26,11 @@ import { NO_CLAUDE_MESSAGE, claudeExecutable } from './claudeExecutable.js';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  clearsHistory,
   composeTitle,
   generateTitle,
   isMaterialChange,
+  namingWindow,
   pickExchanges,
   projectTag,
   sessionBranches,
@@ -367,6 +369,18 @@ export class DaemonSession {
       const images = (event.attachments ?? []).filter((a) => a.kind === 'image').length;
       if (images > 0) {
         this.meta.imageCount = (this.meta.imageCount ?? 0) + images;
+        this.callbacks.onMetaChanged();
+      }
+      // `/clear` and `/new` start a different conversation in the same tab, so
+      // the name is owed again at the next completed turn rather than at the
+      // next five-minute mark -- and it is owed from here, since nothing above
+      // this line is part of the conversation any more.
+      //
+      // Here rather than in sendMessage(): this is the one place a message from
+      // the person is recorded, so no other way of sending one can miss it.
+      if (typeof event.text === 'string' && clearsHistory(event.text)) {
+        this.meta.clearedAt = this.totalCount;
+        delete this.meta.titledAt;
         this.callbacks.onMetaChanged();
       }
     }
@@ -712,17 +726,10 @@ export class DaemonSession {
       return;
     }
 
-    // Sampled across the whole log, not at its ends. Ends alone misread a long
-    // session: the one that mentioned its pull request 335 times did so in the
-    // middle, and head-plus-tail picked a different number entirely. Four
-    // slices cost the same as two and cannot miss the middle.
     const files = allLogFiles(this.meta.id);
-    const total = this.totalCount;
-    const slice = 150;
-    const spread = [0, 0.34, 0.67]
-      .map((at) => Math.floor(total * at))
-      .flatMap((from) => readRange(files, from, Math.min(total, from + slice)));
-    const opening = readRange(files, 0, Math.min(total, 40)).map((e) => e.event);
+    const window = namingWindow(this.totalCount, this.meta.clearedAt);
+    const spread = window.spread.flatMap(([from, to]) => readRange(files, from, to));
+    const opening = readRange(files, ...window.opening).map((e) => e.event);
     const recent = this.eventsSince(0, 150).events.map((e) => e.event);
     const exchanges = pickExchanges(opening, recent);
     const both = [...spread.map((e) => e.event), ...recent];
@@ -755,7 +762,7 @@ export class DaemonSession {
     // The project tag is prepended here rather than asked for: the directory
     // already knows it, and a tab strip full of sessions needs the three
     // letters that say which project before the words that say which work.
-    const title = composeTitle(projectTag(this.meta.cwd), name, issue);
+    const title = composeTitle(projectTag(this.meta.cwd), name);
     if (title === this.meta.title) return;
     // A rename that only rephrases moves a tab you had learned to recognise and
     // tells you nothing new.

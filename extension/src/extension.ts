@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { RateLimits, SessionInfo } from '@claude-persist/shared';
 import { DaemonClient } from './daemonClient';
+import { pendingUpgrade } from './newerInstall';
 import { ChatPanelManager, VIEW_TYPE } from './chatPanel';
 import { SessionsProvider } from './sessionsView';
 import { sessionTitleFromInput } from './sessionTitle';
@@ -442,6 +443,25 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
   );
+
+  // A newer build installed beside this one is invisible from inside the
+  // window running the old one -- the daemon agrees with the extension that
+  // spawned it, because both are the old build. Only the extensions folder
+  // knows, so look there. Eight and a half days on a superseded build is what
+  // not looking costs, and every fix shipped in between went unseen.
+  const running = (context.extension.packageJSON as { version?: string }).version ?? '';
+  const waiting = running ? pendingUpgrade(context.extensionPath, running) : null;
+  if (waiting) {
+    void vscode.window
+      .showInformationMessage(
+        `claude-persist ${waiting} is installed but this window is still running ` +
+          `${running}. Reload to pick it up.`,
+        'Reload Window',
+      )
+      .then((choice) => {
+        if (choice) void vscode.commands.executeCommand('workbench.action.reloadWindow');
+      });
+  }
 
   // Connect eagerly so restored panels attach right after reload. A failure
   // here used to be swallowed outright, which made a failed daemon upgrade

@@ -27,6 +27,13 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
   attempts, instead of leaving you staring at a spinner.
 - **Import your existing Claude Code conversations** and carry on with their
   full context.
+- **A newer build gets noticed.** VS Code installs an update beside the running
+  one and loads it at the next window reload -- which, in a browser tab on a
+  phone, may never come. One window ran the same build for eight and a half days
+  with three newer ones sitting in the extensions folder, and nothing shipped in
+  them was ever reached. Nothing inside that window could tell: the daemon
+  agreed with the extension that spawned it, because both were the old build. So
+  the extensions folder is read directly, and a reload is offered.
 - **Sessions name themselves.** A tab is named at the one moment nobody knows
   what the work is -- when you create it. After the first turn the session works
   out what it turned out to be about, and looks again every five minutes as the

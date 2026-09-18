@@ -1474,65 +1474,124 @@ test('account menu: an account with no credentials says so', () => {
 // ---------------------------------------------------------------------------
 // Soft keyboard fit
 //
-// This document is an iframe inside the editor, and visualViewport reports the
-// WINDOW's visible height, not this frame's. Sizing the body to it left the
-// frame too tall by exactly the chrome above — browser toolbar plus tab bar —
-// so the bottom strip of the composer, the row with the send button, stayed
-// under the keyboard.
+// This document is an iframe inside the editor. visualViewport describes the
+// visible band in *this frame's* coordinates: offsetTop is where the band
+// starts relative to our layout viewport -- negative when it starts above us,
+// which is the ordinary case for a frame below browser chrome -- and height is
+// how tall it is. The last row anyone can see is offsetTop + height, and that
+// is where the document should end.
 // ---------------------------------------------------------------------------
 
-/** A phone: a 2400px window whose frame starts 200px down, and a keyboard. */
-function withViewport(h: Harness, opts: { windowVisible: number; frame: number }): void {
+/**
+ * A phone.
+ *
+ * `chromeAbove` is whatever sits between the top of the window and the top of
+ * this frame: browser toolbar, tab bar, editor tabs. The browser reports it as
+ * a negative offsetTop, so nothing here has to measure or remember it.
+ * `bandHeight` is how tall the visible band is -- what a keyboard shrinks.
+ */
+function withViewport(
+  h: Harness,
+  opts: { chromeAbove: number; bandHeight: number; frame: number },
+): void {
   const vv = h.window.visualViewport as DomNode;
-  vv.height = opts.windowVisible;
+  vv.height = opts.bandHeight;
+  vv.offsetTop = -opts.chromeAbove;
   Object.defineProperty(h.window, 'innerHeight', { value: opts.frame, configurable: true });
   vv.dispatchEvent(new h.window.MessageEvent('resize', { data: null }));
 }
 
 const bodyHeight = (h: Harness): number => parseInt(h.document.body.style.height, 10);
+const bodyTop = (h: Harness): number => parseInt(h.document.body.style.paddingTop || '0', 10);
 
 test('keyboard: with no keyboard the body fills the frame', () => {
   const h = createHarness('kbd-rest');
-  withViewport(h, { windowVisible: 2400, frame: 2200 }); // 200px of chrome above
+  withViewport(h, { chromeAbove: 200, bandHeight: 2400, frame: 2200 });
   assert.equal(bodyHeight(h), 2200, 'never taller than the frame it lives in');
 });
 
 /**
- * The bug: window visible height 1300 with 200px of chrome above means only
- * 1100px of this frame is showing. Using 1300 hid the last 200px — the send
- * button row.
+ * The bug this was written for: a band 1300 tall starting 200px above this
+ * frame leaves 1100px of it showing. Sizing the body to 1300 hid the last
+ * 200px -- the row with the send button.
  */
-test('keyboard: the body excludes the chrome above the frame', () => {
+test('keyboard: the body ends where the visible band ends', () => {
   const h = createHarness('kbd-up');
-  withViewport(h, { windowVisible: 2400, frame: 2200 }); // measure at rest
-  withViewport(h, { windowVisible: 1300, frame: 2200 }); // keyboard opens
+  withViewport(h, { chromeAbove: 200, bandHeight: 2400, frame: 2200 });
+  withViewport(h, { chromeAbove: 200, bandHeight: 1300, frame: 2200 }); // keyboard opens
   assert.equal(bodyHeight(h), 1100, 'was 1300, hiding the composer row');
 });
 
 test('keyboard: closing it restores the full frame', () => {
   const h = createHarness('kbd-close');
-  withViewport(h, { windowVisible: 2400, frame: 2200 });
-  withViewport(h, { windowVisible: 1300, frame: 2200 });
-  withViewport(h, { windowVisible: 2400, frame: 2200 });
+  withViewport(h, { chromeAbove: 200, bandHeight: 2400, frame: 2200 });
+  withViewport(h, { chromeAbove: 200, bandHeight: 1300, frame: 2200 });
+  withViewport(h, { chromeAbove: 200, bandHeight: 2400, frame: 2200 });
   assert.equal(bodyHeight(h), 2200);
 });
 
-/** A wrong measurement must not collapse the panel to nothing. */
+/**
+ * A wrong measurement must not collapse the panel to nothing.
+ *
+ * A band of 250 starting 200 above leaves 50px, which is small and *positive*:
+ * a negative height is rejected by CSS and the previous one silently stays, so
+ * a test using one passes whether the floor exists or not.
+ */
 test('keyboard: never collapses below a usable height', () => {
   const h = createHarness('kbd-floor');
-  withViewport(h, { windowVisible: 2400, frame: 2200 });
-  withViewport(h, { windowVisible: 10, frame: 2200 });
+  withViewport(h, { chromeAbove: 200, bandHeight: 2400, frame: 2200 });
+  withViewport(h, { chromeAbove: 200, bandHeight: 250, frame: 2200 });
   assert.ok(bodyHeight(h) >= 200, `collapsed to ${bodyHeight(h)}`);
 });
 
-/** Rotation changes both numbers; a stale measurement is worse than none. */
-test('keyboard: re-measures the chrome when the frame changes at rest', () => {
+/**
+ * Rotation changes every number at once. The old version measured the chrome
+ * while nothing covered the frame and subtracted that remembered figure, so it
+ * needed a moment at rest to notice; the band is simply read each time.
+ */
+test('keyboard: rotation needs no remeasuring', () => {
   const h = createHarness('kbd-rotate');
-  withViewport(h, { windowVisible: 2400, frame: 2200 }); // 200 chrome, portrait
-  withViewport(h, { windowVisible: 1100, frame: 1000 }); // 100 chrome, landscape
-  assert.equal(bodyHeight(h), 1000, 'landscape at rest fills its frame');
-  withViewport(h, { windowVisible: 600, frame: 1000 }); // keyboard, landscape
-  assert.equal(bodyHeight(h), 500, 'and the new chrome is what gets subtracted');
+  withViewport(h, { chromeAbove: 200, bandHeight: 2400, frame: 2200 }); // portrait
+  // Landscape, with a keyboard already up and different chrome -- never seen at
+  // rest, which is exactly what the remembered measurement got wrong.
+  withViewport(h, { chromeAbove: 100, bandHeight: 600, frame: 1000 });
+  assert.equal(bodyHeight(h), 500);
+});
+
+/**
+ * The band has two edges and a keyboard is only ever one of them. When
+ * something covers the *top* of the frame -- a browser bar overlapping it, a
+ * pinch-zoomed page panned down -- offsetTop is positive, and the rows above it
+ * cannot be seen. The title bar is row zero, so fixing only the bottom edge
+ * left it hidden under whatever was covering it.
+ */
+test('keyboard: content starts where the band starts, not where the frame does', () => {
+  const h = createHarness('kbd-top');
+  // The band begins 180px into the frame and ends 400px before it does.
+  withViewport(h, { chromeAbove: -180, bandHeight: 1620, frame: 2200 });
+  assert.equal(bodyTop(h), 180, 'the title bar was under the top bar');
+  assert.equal(bodyHeight(h), 1800, 'and the composer stops where the band does');
+});
+
+test('keyboard: nothing covering the top means no padding at all', () => {
+  const h = createHarness('kbd-top-none');
+  withViewport(h, { chromeAbove: 200, bandHeight: 2400, frame: 2200 });
+  assert.equal(bodyTop(h), 0);
+});
+
+/**
+ * Chrome on Android now puts its address bar at the *bottom* by default, below
+ * the page and above the keyboard. Nothing sits above the frame, and the band
+ * is short because the bar and the keyboard both eat into it -- so a version
+ * that works out "the chrome above" and subtracts it corrects in the wrong
+ * direction. offsetTop reports the layout as it actually is.
+ */
+test('keyboard: an address bar below the page is not chrome above it', () => {
+  const h = createHarness('kbd-bottom-bar');
+  withViewport(h, { chromeAbove: 0, bandHeight: 2250, frame: 2400 }); // 150px bar at rest
+  assert.equal(bodyHeight(h), 2250, 'the bar already takes its share');
+  withViewport(h, { chromeAbove: 0, bandHeight: 1250, frame: 2400 }); // keyboard too
+  assert.equal(bodyHeight(h), 1250);
 });
 
 /**
@@ -1575,11 +1634,11 @@ test('account menu: it does say "another" once one account works', () => {
  */
 test('keyboard: a shrinking frame is followed, not just a shrinking viewport', () => {
   const h = createHarness('kbd-layout-shrink');
-  withViewport(h, { windowVisible: 2400, frame: 2200 });
+  withViewport(h, { chromeAbove: 200, bandHeight: 2400, frame: 2200 });
   assert.equal(bodyHeight(h), 2200);
 
   // The keyboard resized the workbench: the frame shrank, the window did not.
-  withViewport(h, { windowVisible: 2400, frame: 1300 });
+  withViewport(h, { chromeAbove: 200, bandHeight: 2400, frame: 1300 });
   assert.equal(bodyHeight(h), 1300);
 });
 

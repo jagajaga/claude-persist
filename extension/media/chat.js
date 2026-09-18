@@ -70,58 +70,75 @@
 
   // Keep the panel inside whatever the on-screen keyboard leaves visible.
   //
-  // Platforms disagree about which viewport a keyboard shrinks. Chrome shrinks
-  // the visual viewport; a host whose page carries
-  // `interactive-widget=resizes-content` shrinks the layout viewport instead,
-  // and this frame simply gets a smaller innerHeight. Taking the smaller of the
-  // two needs to know neither which happened nor by how much.
+  // A keyboard does one of two things depending on the host. It shrinks the
+  // layout viewport, and this frame simply gets a smaller innerHeight; or --
+  // Android Chrome's default -- it is drawn *over* the page, the layout
+  // viewport never changes, and only the visual viewport shrinks.
   //
-  // The one correction that is needed: this document is an iframe inside the
-  // editor, and visualViewport reports the *window's* visible height, not this
-  // frame's. Sizing the body to it left the frame too tall by exactly the
-  // chrome above us -- browser toolbar plus tab bar -- so the bottom strip of
-  // the composer stayed under the keyboard. That difference is measurable while
-  // nothing covers us, and subtracted while something does.
+  // The second case used to be somebody else's problem: a line in code-server's
+  // own workbench.html asks for the first behaviour, and this file said so and
+  // left it there. That is a patch to another product's HTML, undone by every
+  // upgrade of it, and no extension should need one to put its own composer
+  // above the keyboard.
   //
-  // Where a host does neither -- Firefox on Android against an unpatched
-  // code-server -- nothing here can see the keyboard at all. Guessing its size
-  // produced a worse bug than the one it fixed: space reserved on a screen with
-  // no keyboard on it. scripts/fix-mobile-keyboard.sh is the fix for that, and
-  // it belongs on the server rather than in this file.
+  // It does not need one. visualViewport describes the visible band *in this
+  // frame's coordinates*: offsetTop is where that band starts relative to our
+  // layout viewport, height is how tall it is. So the last row of pixels anyone
+  // can see is offsetTop + height, whatever is covering the rest and whichever
+  // viewport moved -- and that is simply where the document should end.
+  //
+  // Measuring the band beats measuring the furniture. The previous version
+  // worked out the browser chrome above us and subtracted it, which assumed
+  // chrome is above: Chrome on Android now puts its address bar at the *bottom*
+  // by default, below the page and above the keyboard, and the subtraction then
+  // corrects in the wrong direction. offsetTop reports whatever the layout
+  // actually is, including that, without anything having to know about it.
   if (window.visualViewport) {
     const vv = window.visualViewport;
-    /** Chrome outside this iframe, measured at rest. */
-    let chromeOutside = 0;
     /** Never shrink to nothing if a measurement goes wrong. */
     const MIN_BODY_HEIGHT = 200;
 
+    /**
+     * The strip of this frame anybody can actually see, in its own coordinates.
+     *
+     * Both edges, because the band has two and a keyboard is only ever one of
+     * them. offsetTop is negative when the band starts above this frame -- the
+     * ordinary case, with browser and editor chrome stacked overhead, and then
+     * our own first row is visible. It is *positive* when something covers the
+     * top of the frame itself, and then the rows above it are not: the title
+     * bar sits at row zero, so fixing only the bottom edge left it hidden under
+     * whatever was covering it.
+     */
+    const visibleBand = () => {
+      const top = Math.max(0, vv.offsetTop);
+      // Never past the frame we were given: on a host that shrinks the layout
+      // viewport, innerHeight is already the answer and the band runs past it.
+      const bottom = Math.min(window.innerHeight, vv.offsetTop + vv.height);
+      // A wrong measurement must leave something usable rather than a sliver.
+      return { top, bottom: Math.max(top + MIN_BODY_HEIGHT, bottom) };
+    };
+
     const fitViewport = () => {
-      // Re-measure whenever nothing is covering us: rotation, a split editor,
-      // a toolbar hiding on scroll all change it, and a stale measurement is
-      // worse than none.
-      if (document.activeElement !== inputEl && vv.height >= window.innerHeight) {
-        chromeOutside = vv.height - window.innerHeight;
-      }
-      // Whichever is smaller: the frame we were given, or the part of the
-      // window still showing. A soft keyboard shrinks one or the other
-      // depending on the platform, and taking the minimum needs to know
-      // neither which nor by how much.
-      const visible = Math.min(window.innerHeight, vv.height - chromeOutside);
-      document.body.style.height = `${Math.max(MIN_BODY_HEIGHT, visible)}px`;
+      const { top, bottom } = visibleBand();
+      // border-box, so height is the outer edge and the padding pushes the
+      // content down off whatever is covering the top.
+      document.body.style.paddingTop = `${top}px`;
+      document.body.style.height = `${bottom}px`;
       if (pinned) scrollToBottom();
     };
 
     vv.addEventListener('resize', fitViewport);
+    // The band moves without resizing when the page is scrolled under a
+    // keyboard that is already open.
     vv.addEventListener('scroll', fitViewport);
-    // A keyboard that resizes the layout viewport arrives here rather than on
-    // the visual viewport, and is the case a correctly configured host gives.
+    // A keyboard that shrinks the layout viewport arrives here instead.
     window.addEventListener('resize', fitViewport);
     fitViewport();
 
-    visibleHeight = () =>
-      Math.max(MIN_BODY_HEIGHT, Math.min(window.innerHeight, vv.height - chromeOutside));
-
+    // What the composer has to fit inside: the band, not the frame.
+    visibleHeight = () => visibleBand().bottom;
   }
+
   // When the field gains focus (keyboard opening), force the composer into
   // view. The webview is an iframe inside code-server's page, so we rely on
   // scrollIntoView propagating to the top-level viewport — and mobile keyboard

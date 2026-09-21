@@ -2539,13 +2539,31 @@
     return false;
   }
 
+  /**
+   * True while something is laid over the transcript.
+   *
+   * This gesture belongs to the transcript, and an overlay covers it. The
+   * lightbox turns its pages on the very same movement, so one drag across a
+   * picture was stepping to the next picture *and* switching the editor tab
+   * underneath it.
+   *
+   * The lightbox calling preventDefault() does not help and was never going to:
+   * that stops the browser scrolling, not a listener on the document. Nor would
+   * stopPropagation() there be right -- it would mean every overlay had to
+   * remember to defend itself against this one. The gesture that has to know it
+   * is covered is this one.
+   */
+  function overlayOpen() {
+    return document.querySelector('.lightbox') !== null;
+  }
+
   document.addEventListener('touchstart', (e) => {
     if (e.touches.length !== 1) {
       touch = null; // pinch/zoom is never a tab switch
       return;
     }
     const t = e.touches[0];
-    touch = startedInScroller(e.target)
+    touch = overlayOpen() || startedInScroller(e.target)
       ? null
       : { x: t.clientX, y: t.clientY, at: Date.now() };
   }, { passive: true });

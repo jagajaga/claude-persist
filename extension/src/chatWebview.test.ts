@@ -2004,6 +2004,85 @@ function dragMove(h: Harness, node: DomNode, dx: number, dy = 0): DomNode {
 }
 
 /**
+ * A whole drag as the document sees one.
+ *
+ * `changedTouches` rather than `touches`, because that is what a touchend
+ * carries -- by the time a finger has lifted it is no longer touching anything,
+ * so the list of current touches is empty and the one that ended is over here.
+ * The lightbox's own handlers read `touches` and never needed this, which is
+ * exactly why a helper that set only `touches` could not see the bug.
+ */
+function documentSwipe(h: Harness, node: DomNode, dx: number, dy = 0): void {
+  touch(h, node, 'touchstart', [[200, 200]]);
+  touch(h, node, 'touchmove', [[200 + dx, 200 + dy]]);
+  const end = new h.window.Event('touchend', { bubbles: true, cancelable: true });
+  end.touches = [];
+  end.changedTouches = [{ clientX: 200 + dx, clientY: 200 + dy }];
+  node.dispatchEvent(end);
+}
+
+/**
+ * Swiping a picture turned the page and switched the editor tab with it.
+ *
+ * Two listeners read the same drag: the lightbox's, which steps between
+ * pictures, and the document's, which asks the host to change tab. The
+ * lightbox calls preventDefault(), but that stops the browser scrolling, not a
+ * listener on the document -- so both fired, every time.
+ */
+test('lightbox: swiping a picture does not switch the editor tab', () => {
+  const h = createHarness('swipe-not-tab');
+  withTwoPictures(h);
+  const shown = openPicture(h, 0);
+  documentSwipe(h, shown, -120);
+  assert.deepEqual(
+    h.posted.filter((m) => m.type === 'switchTab'),
+    [],
+    'the picture was the thing being swiped',
+  );
+});
+
+/** The backdrop is part of the overlay, not the transcript behind it. */
+test('lightbox: swiping beside the picture does not switch the tab either', () => {
+  const h = createHarness('swipe-not-tab-backdrop');
+  withTwoPictures(h);
+  openPicture(h, 0);
+  const box = h.document.querySelector('.lightbox') as DomNode;
+  documentSwipe(h, box, -120);
+  assert.deepEqual(h.posted.filter((m) => m.type === 'switchTab'), []);
+});
+
+/**
+ * And the gesture still works where it belongs. Without this the fix could be
+ * "never switch tabs", which passes both tests above and removes the feature.
+ */
+test('a swipe across the transcript still switches tab', () => {
+  const h = createHarness('swipe-tab-still-works');
+  withTwoPictures(h);
+  assert.equal(h.document.querySelector('.lightbox'), null, 'nothing is covering it');
+  documentSwipe(h, h.document.getElementById('thread') as DomNode, -120);
+  assert.deepEqual(
+    h.posted.filter((m) => m.type === 'switchTab').map((m) => m.direction),
+    ['next'],
+  );
+});
+
+/** Closing the overlay hands the gesture back. */
+test('once the picture is closed the swipe switches tab again', () => {
+  const h = createHarness('swipe-tab-after-close');
+  withTwoPictures(h);
+  openPicture(h, 0);
+  h.document.dispatchEvent(
+    new h.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+  );
+  assert.equal(h.document.querySelector('.lightbox'), null);
+  documentSwipe(h, h.document.getElementById('thread') as DomNode, 120);
+  assert.deepEqual(
+    h.posted.filter((m) => m.type === 'switchTab').map((m) => m.direction),
+    ['previous'],
+  );
+});
+
+/**
  * The drag was tracked but never claimed, so the browser read it as a scroll
  * too: turning a page dragged the transcript along behind the overlay.
  */

@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { claimOwnership, socketServing } from './ownership.js';
-import { readLock } from './lock.js';
+import { processStartTime, readLockHolder } from './lock.js';
 
 function scratch(): { lockFile: string; socketPath: string } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-ownership-test-'));
@@ -80,7 +80,7 @@ test('socketServing: false when the listener accepts but never replies', async (
 test('claimOwnership: takes a free lock', async () => {
   const { lockFile, socketPath } = scratch();
   assert.equal(await claimOwnership({ lockFile, socketPath, pid: 4242 }), true);
-  assert.equal(readLock(lockFile), '4242');
+  assert.equal(readLockHolder(lockFile)?.pid, 4242);
 });
 
 test('claimOwnership: defers to an owner that is alive and serving', async () => {
@@ -90,7 +90,7 @@ test('claimOwnership: defers to an owner that is alive and serving', async () =>
   try {
     fs.writeFileSync(lockFile, String(child.pid));
     assert.equal(await claimOwnership({ lockFile, socketPath, pid: 999999 }), false);
-    assert.equal(readLock(lockFile), String(child.pid)); // untouched
+    assert.equal(readLockHolder(lockFile)?.pid, child.pid); // untouched
   } finally {
     server.close();
     child.kill('SIGKILL');
@@ -107,7 +107,7 @@ test('claimOwnership: takes a lock left behind by a dead owner', async () => {
   });
   fs.writeFileSync(lockFile, String(deadPid));
   assert.equal(await claimOwnership({ lockFile, socketPath, pid: 777 }), true);
-  assert.equal(readLock(lockFile), '777');
+  assert.equal(readLockHolder(lockFile)?.pid, 777);
 });
 
 /**
@@ -123,7 +123,7 @@ test('claimOwnership: takes over from a live owner that is not serving', async (
     fs.writeFileSync(lockFile, String(child.pid));
     // No socket at all: exactly the state after an old daemon unlinked it.
     assert.equal(await claimOwnership({ lockFile, socketPath, pid: 555, graceMs: 300 }), true);
-    assert.equal(readLock(lockFile), '555');
+    assert.equal(readLockHolder(lockFile)?.pid, 555);
   } finally {
     child.kill('SIGKILL');
   }
@@ -143,7 +143,7 @@ test('claimOwnership: takes over from an owner whose listener has wedged', async
       probeMs: 300,
     });
     assert.equal(claimed, true);
-    assert.equal(readLock(lockFile), '556');
+    assert.equal(readLockHolder(lockFile)?.pid, 556);
   } finally {
     server.close();
     child.kill('SIGKILL');
@@ -157,7 +157,9 @@ test('claimOwnership: signals the displaced owner rather than only stealing the 
   child.once('exit', () => {
     signalled = true;
   });
-  fs.writeFileSync(lockFile, String(child.pid));
+  // Identified: the lock says which process instance took it, and that is the
+  // one still running. Only then may it be signalled.
+  fs.writeFileSync(lockFile, `${child.pid} ${processStartTime(child.pid as number)}`);
   assert.equal(await claimOwnership({ lockFile, socketPath, pid: 557, graceMs: 400 }), true);
   // SIGTERM reaches it; the grace loop gives it time to go.
   await new Promise((r) => setTimeout(r, 300));
@@ -165,9 +167,52 @@ test('claimOwnership: signals the displaced owner rather than only stealing the 
   child.kill('SIGKILL'); // no-op if already gone
 });
 
+/**
+ * The outage this was written for.
+ *
+ * The lock file survives its container; pid numbers do not. A PID namespace
+ * hands them out from the bottom again on every restart, so the number left
+ * behind by the last boot's daemon regularly belongs to something else
+ * entirely in this one -- an extension host, a language server. Taking over
+ * used to SIGTERM it, which is a daemon reaching outside itself to kill a
+ * process it has never met.
+ */
+test('claimOwnership: a pid reissued to somebody else is never signalled', async () => {
+  const { lockFile, socketPath } = scratch();
+  const bystander = liveProcess();
+  let signalled = false;
+  bystander.once('exit', () => {
+    signalled = true;
+  });
+  // Alive at that number, but started at a different moment: this is the last
+  // container's daemon pid, now belonging to an innocent process.
+  fs.writeFileSync(lockFile, `${bystander.pid} 1`);
+  assert.equal(await claimOwnership({ lockFile, socketPath, pid: 558, graceMs: 400 }), true);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(signalled, false, 'it is not our daemon and must be left alone');
+  assert.equal(readLockHolder(lockFile)?.pid, 558, 'and the lock is still taken');
+  bystander.kill('SIGKILL');
+});
+
+/** A lock from a build that recorded no start time cannot identify anyone. */
+test('claimOwnership: a legacy lock is cleared, not signalled', async () => {
+  const { lockFile, socketPath } = scratch();
+  const bystander = liveProcess();
+  let signalled = false;
+  bystander.once('exit', () => {
+    signalled = true;
+  });
+  fs.writeFileSync(lockFile, String(bystander.pid)); // pid alone, the old format
+  assert.equal(await claimOwnership({ lockFile, socketPath, pid: 559, graceMs: 400 }), true);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(signalled, false, 'unprovable identity must not cost a stranger its life');
+  assert.equal(readLockHolder(lockFile)?.pid, 559);
+  bystander.kill('SIGKILL');
+});
+
 test('claimOwnership: garbage in the lock file does not block takeover', async () => {
   const { lockFile, socketPath } = scratch();
   fs.writeFileSync(lockFile, 'not-a-pid');
   assert.equal(await claimOwnership({ lockFile, socketPath, pid: 888 }), true);
-  assert.equal(readLock(lockFile), '888');
+  assert.equal(readLockHolder(lockFile)?.pid, 888);
 });

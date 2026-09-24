@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import net from 'node:net';
 import { PROTOCOL_VERSION } from '@claude-persist/shared';
-import { acquireLock, isAlive, readLock } from './lock.js';
+import { acquireLock, holderIsIdentified, readLockHolder } from './lock.js';
 
 const DEFAULT_PROBE_MS = 2000;
 const DEFAULT_GRACE_MS = 2000;
@@ -73,14 +73,24 @@ export async function claimOwnership(opts: ClaimOptions): Promise<boolean> {
 
   if (acquireLock(lockFile, pid)) return true;
 
-  const owner = Number(readLock(lockFile));
+  const holder = readLockHolder(lockFile);
+  const owner = holder?.pid ?? 0;
   if (await socketServing(socketPath, probeMs)) {
     log(`daemon already running (pid ${owner || 'unknown'}) and serving, exiting`);
     return false;
   }
 
   log(`lock held by pid ${owner || 'unknown'} but nothing is serving ${socketPath} — taking over`);
-  if (owner && owner !== pid && isAlive(owner)) {
+  // Signal only a holder we can prove is the process that wrote this lock.
+  //
+  // The pid alone used to be enough, and that is what made this dangerous: the
+  // lock file outlives its container, pids are reissued from the bottom on
+  // every restart, and so the number regularly belongs to some unrelated
+  // process in the new namespace -- an extension host, a language server. This
+  // path then SIGTERMed it. Where identity cannot be established the lock is
+  // simply cleared, which loses nothing: a genuinely wedged old daemon notices
+  // the socket is no longer its own and stands down by itself.
+  if (holderIsIdentified(holder) && owner !== pid) {
     try {
       process.kill(owner, 'SIGTERM');
     } catch {
@@ -89,11 +99,13 @@ export async function claimOwnership(opts: ClaimOptions): Promise<boolean> {
     // Prefer letting it release the lock itself: its own shutdown also closes
     // SDK queries, so stealing the lock out from under it would orphan them.
     const deadline = Date.now() + graceMs;
-    while (Date.now() < deadline && readLock(lockFile) === String(owner)) {
+    while (Date.now() < deadline && readLockHolder(lockFile)?.pid === owner) {
       await new Promise((r) => setTimeout(r, 100));
     }
+  } else if (owner) {
+    log(`pid ${owner} is not the process that took this lock — not signalling it`);
   }
-  if (readLock(lockFile) === String(owner)) {
+  if (readLockHolder(lockFile)?.pid === owner) {
     log(`pid ${owner} did not release the lock in time — clearing it`);
     try {
       fs.unlinkSync(lockFile);

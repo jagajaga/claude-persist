@@ -74,6 +74,13 @@ holds it is actually serving, and takes over if not. It also watches its own
 socket: if an older build unlinks it during an upgrade, it rebinds rather than
 staying alive and unreachable.
 
+The lock records the holder's start time beside its pid, because a pid on its
+own is not an identity. `~/.claude-persist` outlives the container that wrote
+it, while a PID namespace hands numbers out from the bottom again on every
+restart — so yesterday's daemon number is routinely some unrelated process
+today, and taking over used to SIGTERM it. Signalling now requires proof of
+identity; where there is none the lock is simply cleared.
+
 ## What it does
 
 The [marketplace listing](https://marketplace.visualstudio.com/items?itemName=jaga.claude-persist-vscode)
@@ -120,7 +127,7 @@ with `pkill -f 'claude-persist.*daemon/dist/main.js'`, and delete
 ```bash
 npm install
 npm run build          # tsc for shared, daemon and extension
-npm test               # 357 daemon + 294 extension tests
+npm test               # 367 daemon + 294 extension tests
 ./scripts/package.sh   # -> claude-persist-<version>.vsix, no bundled runtime
 ```
 

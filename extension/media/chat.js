@@ -1566,8 +1566,8 @@
   function modelLabel(value) {
     if (!value) {
       // Nothing chosen does not mean "the default model". Every session
-      // resumes, and a resumed conversation continues on whatever its
-      // transcript recorded -- so this said "default" over tabs that were
+      // resumes, and a resumed conversation with no model passed continues on
+      // whatever its transcript recorded -- so this said "default" over tabs that were
       // answering from claude-opus-5. When the SDK has told us what is really
       // running, say that instead of a word that only looked like an answer.
       return activeModel ? modelName(activeModel) : 'default';

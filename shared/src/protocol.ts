@@ -67,11 +67,11 @@ export interface SessionInfo {
    * one asked for.
    *
    * Every session resumes -- the daemon passes the SDK session id -- and a
-   * resumed conversation continues on the model recorded in its own transcript.
-   * A preference stored while the session was idle therefore did not apply, and
-   * the panel, having nothing better, showed the preference as though it were
-   * fact: a tab reading "default" while every reply came from claude-opus-5.
-   * The SDK states the truth in its init message; this carries it.
+   * resumed conversation with no model chosen continues on the model recorded
+   * in its own transcript, not the account default. The panel, having only the
+   * stored preference, showed the empty one as "default": a tab reading
+   * "default" while every reply came from claude-opus-5. The SDK states the
+   * truth in its init message; this carries it.
    */
   activeModel?: string;
   /** Reasoning effort override; undefined = default. */

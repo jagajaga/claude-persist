@@ -40,9 +40,9 @@ export interface SessionMeta {
   /**
    * The model the SDK last said this session was running.
    *
-   * Observed, not chosen -- `model` above is the preference. They disagree
-   * whenever a resumed conversation carries a model its transcript recorded and
-   * the preference was set while nothing was running. Refreshed at every launch,
+   * Observed, not chosen -- `model` above is the preference. They disagree when
+   * no preference is stored: a resumed conversation then continues on the model
+   * its transcript recorded rather than the account default. Refreshed at every launch,
    * so a value left over from a previous daemon is corrected as soon as the
    * session starts rather than believed.
    */

@@ -953,6 +953,30 @@ export class DaemonSession {
     }
   }
 
+  /**
+   * Assert the stored model on a query that has just started.
+   *
+   * Passing `model` in the launch options does not move a session that is
+   * resuming: the conversation continues on whatever its own transcript
+   * recorded, so a model chosen while the session sat idle was quietly ignored
+   * and only the label in the panel changed. setModel is the same call the live
+   * path uses, and that one does take.
+   *
+   * Nothing to assert when no preference was ever expressed -- forcing a model
+   * nobody chose would drag every resumed conversation onto the account default
+   * behind the user's back.
+   */
+  private async applyStoredModel(): Promise<void> {
+    const wanted = this.meta.model;
+    if (!wanted || !this.activeQuery) return;
+    try {
+      await this.activeQuery.setModel(wanted);
+    } catch {
+      // A model the account cannot use, or a query that ended first. The turn
+      // is worth more than the preference; it continues on what it has.
+    }
+  }
+
   async setOptions(opts: {
     model?: string | null;
     effort?: NonNullable<SessionMeta['effort']> | null;
@@ -1180,6 +1204,7 @@ export class DaemonSession {
       .initializationResult()
       .then((init) => {
         if (Array.isArray(init.models)) this.callbacks.onModels(init.models);
+        void this.applyStoredModel();
         // Populate usage as soon as the session is up, so the status bar has a
         // percentage before the first turn rather than only after one.
         void this.pollUsage(q);
@@ -1415,9 +1440,17 @@ export class DaemonSession {
     this.lastSdkActivityAt = Date.now();
     switch (msg.type) {
       case 'system': {
-        if (msg.subtype === 'init' && typeof msg.session_id === 'string') {
-          if (this.meta.sdkSessionId !== msg.session_id) {
+        if (msg.subtype === 'init') {
+          if (typeof msg.session_id === 'string' && this.meta.sdkSessionId !== msg.session_id) {
             this.meta.sdkSessionId = msg.session_id;
+            this.callbacks.onMetaChanged();
+          }
+          // The one place anything says which model is actually answering. It
+          // was read for its session id alone and the rest discarded, so the
+          // panel had only the stored preference to show -- and showed it as
+          // fact, on sessions that were running something else entirely.
+          if (typeof msg.model === 'string' && this.meta.activeModel !== msg.model) {
+            this.meta.activeModel = msg.model;
             this.callbacks.onMetaChanged();
           }
         }

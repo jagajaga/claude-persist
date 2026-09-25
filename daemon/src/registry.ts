@@ -38,6 +38,16 @@ export interface SessionMeta {
    */
   titleSetByUser?: boolean;
   /**
+   * The model the SDK last said this session was running.
+   *
+   * Observed, not chosen -- `model` above is the preference. They disagree
+   * whenever a resumed conversation carries a model its transcript recorded and
+   * the preference was set while nothing was running. Refreshed at every launch,
+   * so a value left over from a previous daemon is corrected as soon as the
+   * session starts rather than believed.
+   */
+  activeModel?: string;
+  /**
    * The event `/clear` or `/new` arrived at, if one ever did.
    *
    * Naming reads from here rather than from the top of the log. What came

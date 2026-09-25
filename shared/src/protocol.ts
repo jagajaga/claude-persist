@@ -62,6 +62,18 @@ export interface SessionInfo {
   permissionMode: PermissionMode;
   /** Model alias/id override; undefined = account default. */
   model?: string;
+  /**
+   * The model the SDK reports this session is running, which is not always the
+   * one asked for.
+   *
+   * Every session resumes -- the daemon passes the SDK session id -- and a
+   * resumed conversation continues on the model recorded in its own transcript.
+   * A preference stored while the session was idle therefore did not apply, and
+   * the panel, having nothing better, showed the preference as though it were
+   * fact: a tab reading "default" while every reply came from claude-opus-5.
+   * The SDK states the truth in its init message; this carries it.
+   */
+  activeModel?: string;
   /** Reasoning effort override; undefined = default. */
   effort?: EffortLevel;
   createdAt: number;
@@ -151,6 +163,13 @@ export interface PersistedEvent {
 export interface ModelDescriptor {
   value: string;
   displayName: string;
+  /**
+   * What `value` actually resolves to -- `default` and `opus[1m]` both report
+   * `claude-opus-5-5[1m]`. The SDK has always sent this; it was dropped on the
+   * way through, which left the panel unable to recognise the model a resumed
+   * session told it it was running.
+   */
+  resolvedModel?: string;
   description?: string;
   effortLevels?: EffortLevel[];
 }

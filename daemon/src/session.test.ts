@@ -1032,3 +1032,119 @@ test('cwd: checked once, not on every turn', () => {
     .filter((d) => /not on this machine/.test(d));
   assert.equal(notices.length, 1, 'saying it once is telling; saying it every turn is noise');
 });
+
+// ---------- the model that is actually answering ----------------------------
+//
+// The SDK's init message says which model is running. It was read for its
+// session id and the rest thrown away, so the daemon never knew -- and the
+// panel, with only the stored preference to go on, showed that as fact. Every
+// session resumes, and a resumed conversation keeps the model its transcript
+// recorded, so the preference and the truth part company routinely.
+
+type Modelled = { meta: { model?: string; activeModel?: string; sdkSessionId?: string } };
+
+/** Drive the SDK message pump directly; `private` is erased at runtime. */
+function sdkMessage(session: InstanceType<typeof DaemonSession>, msg: Record<string, unknown>): void {
+  (session as unknown as { handleSdkMessage(m: Record<string, unknown>): void }).handleSdkMessage(msg);
+}
+
+test('model: the init message is believed about what is running', () => {
+  const session = makeSession(`model-init-${Date.now()}`);
+  const meta = (session as unknown as Modelled).meta;
+  sdkMessage(session, { type: 'system', subtype: 'init', session_id: 'abc', model: 'claude-opus-5' });
+  assert.equal(meta.activeModel, 'claude-opus-5');
+  assert.equal(meta.sdkSessionId, 'abc', 'and the session id is still read');
+});
+
+/** The preference is not evidence. They are separate facts and stay separate. */
+test('model: what is running does not overwrite what was chosen', () => {
+  const session = makeSession(`model-pref-${Date.now()}`);
+  const meta = (session as unknown as Modelled).meta;
+  meta.model = 'default';
+  sdkMessage(session, { type: 'system', subtype: 'init', session_id: 'x', model: 'claude-opus-5' });
+  assert.equal(meta.model, 'default', 'the preference is what you asked for');
+  assert.equal(meta.activeModel, 'claude-opus-5', 'this is what you got');
+});
+
+test('model: an init without one leaves the last known answer alone', () => {
+  const session = makeSession(`model-none-${Date.now()}`);
+  const meta = (session as unknown as Modelled).meta;
+  sdkMessage(session, { type: 'system', subtype: 'init', session_id: 'x', model: 'claude-opus-5' });
+  sdkMessage(session, { type: 'system', subtype: 'init', session_id: 'x' });
+  assert.equal(meta.activeModel, 'claude-opus-5', 'silence is not a correction');
+});
+
+test('model: a later init reports the change', () => {
+  const session = makeSession(`model-change-${Date.now()}`);
+  const meta = (session as unknown as Modelled).meta;
+  sdkMessage(session, { type: 'system', subtype: 'init', session_id: 'x', model: 'claude-opus-5' });
+  sdkMessage(session, { type: 'system', subtype: 'init', session_id: 'x', model: 'claude-opus-5-5[1m]' });
+  assert.equal(meta.activeModel, 'claude-opus-5-5[1m]');
+});
+
+/** Only init says this; a stray model on another message is not an answer. */
+test('model: a non-init system message says nothing about the model', () => {
+  const session = makeSession(`model-noninit-${Date.now()}`);
+  const meta = (session as unknown as Modelled).meta;
+  sdkMessage(session, { type: 'system', subtype: 'compact', model: 'claude-haiku-4-5' });
+  assert.equal(meta.activeModel, undefined);
+});
+
+/**
+ * The other half: a preference has to actually reach a resumed session.
+ *
+ * Launch options do not move one -- the conversation continues on the model its
+ * transcript recorded -- so 35 sessions were rewritten to "default" in the
+ * registry while every one of them went on answering from Opus 5.
+ */
+type Forceable = {
+  meta: { model?: string };
+  activeQuery: unknown;
+  applyStoredModel(): Promise<void>;
+};
+
+function withQuery(
+  session: InstanceType<typeof DaemonSession>,
+  setModel: (m: string) => Promise<void>,
+): Forceable {
+  const s = session as unknown as Forceable;
+  s.activeQuery = { setModel };
+  return s;
+}
+
+test('model: a stored preference is asserted on the query that just started', async () => {
+  const asked: string[] = [];
+  const s = withQuery(makeSession(`force-${Date.now()}`), async (m) => {
+    asked.push(m);
+  });
+  s.meta.model = 'default';
+  await s.applyStoredModel();
+  assert.deepEqual(asked, ['default'], 'resuming ignores launch options; this does not');
+});
+
+/** Nobody chose anything, so nothing is imposed. */
+test('model: with no preference, no model is forced on the conversation', async () => {
+  const asked: string[] = [];
+  const s = withQuery(makeSession(`force-none-${Date.now()}`), async (m) => {
+    asked.push(m);
+  });
+  s.meta.model = undefined;
+  await s.applyStoredModel();
+  assert.deepEqual(asked, [], 'forcing here would move every session behind your back');
+});
+
+/** A model the account cannot use must cost the preference, never the turn. */
+test('model: a refused setModel does not take the turn down with it', async () => {
+  const s = withQuery(makeSession(`force-fail-${Date.now()}`), async () => {
+    throw new Error('no such model');
+  });
+  s.meta.model = 'claude-nonexistent';
+  await s.applyStoredModel(); // must not reject
+});
+
+test('model: nothing is asserted when there is no query to assert it on', async () => {
+  const s = makeSession(`force-noquery-${Date.now()}`) as unknown as Forceable;
+  s.meta.model = 'default';
+  s.activeQuery = null;
+  await s.applyStoredModel(); // must not throw
+});

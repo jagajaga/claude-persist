@@ -1539,6 +1539,8 @@
   const ALL_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
   let modelInfos = [];
   let currentModel = '';
+  /** What the SDK says is answering, which the preference does not decide. */
+  let activeModel = '';
   let currentEffort = '';
   let accountInfos = [];
 
@@ -1562,9 +1564,24 @@
   });
 
   function modelLabel(value) {
-    if (!value) return 'default';
+    if (!value) {
+      // Nothing chosen does not mean "the default model". Every session
+      // resumes, and a resumed conversation continues on whatever its
+      // transcript recorded -- so this said "default" over tabs that were
+      // answering from claude-opus-5. When the SDK has told us what is really
+      // running, say that instead of a word that only looked like an answer.
+      return activeModel ? modelName(activeModel) : 'default';
+    }
     const info = modelInfos.find((m) => m.value === value);
     return (info && info.displayName) || value;
+  }
+
+  /** A resolved model id as the probe would name it, else the id itself. */
+  function modelName(resolved) {
+    const info = modelInfos.find(
+      (m) => m.resolvedModel === resolved || m.value === resolved,
+    );
+    return (info && info.displayName) || resolved;
   }
 
   /** Effort levels the selected model supports; the full set when unknown. */
@@ -1600,7 +1617,14 @@
   function renderModelMenu() {
     modelMenu.replaceChildren();
     modelMenu.appendChild(el('div', 'menu-title', 'Model'));
-    const models = [{ value: '', label: 'default' }].concat(
+    const models = [
+      {
+        value: '',
+        // Named for what it actually resolves to here, when that is known: the
+        // bare word claimed a model rather than reporting one.
+        label: activeModel && !currentModel ? `default (${modelName(activeModel)})` : 'default',
+      },
+    ].concat(
       modelInfos
         .filter((m) => m.value !== 'default') // our '' entry already means default
         .map((m) => ({ value: m.value, label: m.displayName || m.value })),
@@ -2080,6 +2104,7 @@
           setRunning(msg.info.status === 'running');
           applyPermissionMode(msg.info.permissionMode);
           currentModel = msg.info.model || '';
+          activeModel = msg.info.activeModel || '';
           currentEffort = msg.info.effort || '';
           if (typeof msg.info.imageCount === 'number') conversationImages = msg.info.imageCount;
           renderPill();

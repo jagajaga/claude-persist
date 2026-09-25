@@ -2405,3 +2405,99 @@ test('image count: a message with no attachments does not disturb the count', ()
   h.send(liveEvent({ type: 'user_message', text: 'no pictures here' }));
   assert.ok(h.document.querySelector('#thread .user-msg'));
 });
+
+// ---------- the model a session is actually on -------------------------------
+//
+// Every session resumes: the daemon hands the SDK a session id, and a resumed
+// conversation continues on the model recorded in its own transcript. A model
+// chosen while the session sat idle therefore never applied, and the panel --
+// having only the stored preference -- displayed it as fact. A real tab showed
+// "default" checked above a reply that said, in words, "I'm Opus 5".
+
+const MODELS = [
+  { value: 'default', displayName: 'Default (recommended)', resolvedModel: 'claude-opus-5-5[1m]' },
+  { value: 'opus[1m]', displayName: 'Opus (1M context)', resolvedModel: 'claude-opus-5-5[1m]' },
+  { value: 'sonnet', displayName: 'Sonnet', resolvedModel: 'claude-sonnet-5' },
+];
+
+function openModelMenu(h: Harness): string[] {
+  h.document
+    .getElementById('model-pill')
+    .dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+  return [...h.document.querySelectorAll('.menu-item')].map((i: DomNode) => i.textContent);
+}
+
+function pill(h: Harness): string {
+  return h.document.getElementById('model-pill-label').textContent;
+}
+
+/** info reaches the panel on a replay, which is how the daemon sends it. */
+function sendInfo(h: Harness, info: Record<string, unknown>): void {
+  h.send({
+    type: 'replay',
+    reset: true,
+    hasEarlier: false,
+    events: [],
+    info: { status: 'idle', permissionMode: 'default', ...info },
+  });
+}
+
+/** The bug, exactly as photographed. */
+test('model: a resumed session shows what it is running, not "default"', () => {
+  const h = createHarness('model-truth');
+  h.send({ type: 'models', models: MODELS });
+  sendInfo(h, { model: '', activeModel: 'claude-opus-5' });
+  assert.doesNotMatch(
+    pill(h),
+    /default/,
+    'the tab claimed a model nobody had checked; it was answering from Opus 5',
+  );
+  assert.match(pill(h), /claude-opus-5/);
+});
+
+/** A resolved id the probe knows is shown by its name, not its id. */
+test('model: a known resolved id is named', () => {
+  const h = createHarness('model-truth-named');
+  h.send({ type: 'models', models: MODELS });
+  sendInfo(h, { model: '', activeModel: 'claude-sonnet-5' });
+  assert.match(pill(h), /Sonnet/);
+});
+
+/** With nothing running yet there is nothing to report, and no claim is made. */
+test('model: before the SDK says anything, the pill still reads default', () => {
+  const h = createHarness('model-truth-unknown');
+  h.send({ type: 'models', models: MODELS });
+  sendInfo(h, { model: '' });
+  assert.equal(pill(h), 'default');
+});
+
+/** A chosen model is the label; the preference is what you picked. */
+test('model: an explicit choice is shown as itself', () => {
+  const h = createHarness('model-truth-chosen');
+  h.send({ type: 'models', models: MODELS });
+  sendInfo(h, { model: 'sonnet', activeModel: 'claude-sonnet-5' });
+  assert.match(pill(h), /Sonnet/);
+});
+
+/**
+ * The menu entry too. "default" as a bare word asserted a model; naming what it
+ * resolves to here turns the claim into a report.
+ */
+test('model menu: the default entry says what default currently is', () => {
+  const h = createHarness('model-menu-truth');
+  h.send({ type: 'models', models: MODELS });
+  sendInfo(h, { model: '', activeModel: 'claude-opus-5' });
+  const labels = openModelMenu(h);
+  assert.ok(
+    labels.some((l: string) => /default \(claude-opus-5\)/.test(l)),
+    labels.join(' | '),
+  );
+});
+
+test('model menu: with a model chosen, the default entry makes no claim', () => {
+  const h = createHarness('model-menu-chosen');
+  h.send({ type: 'models', models: MODELS });
+  sendInfo(h, { model: 'sonnet', activeModel: 'claude-sonnet-5' });
+  const labels = openModelMenu(h);
+  assert.ok(labels.some((l: string) => l.trim() === 'default'), labels.join(' | '));
+});

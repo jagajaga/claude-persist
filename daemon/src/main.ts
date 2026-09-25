@@ -456,6 +456,7 @@ function sessionInfo(id: string): SessionInfo {
     status: live?.status ?? 'idle',
     permissionMode: meta.permissionMode ?? 'default',
     ...(meta.model ? { model: meta.model } : {}),
+    ...(meta.activeModel ? { activeModel: meta.activeModel } : {}),
     ...(meta.effort ? { effort: meta.effort } : {}),
     createdAt: meta.createdAt,
     lastActivityAt: meta.lastActivityAt,

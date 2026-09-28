@@ -13,6 +13,7 @@ delete process.env.CLAUDE_CONFIG_DIR;
 import {
   AccountsStore,
   accountIdentity,
+  defaultTwin,
   ensureSdkTranscript,
   scanAccounts,
   shareUserConfig,
@@ -662,4 +663,91 @@ test('AccountsStore: first run starts on the inherited CLAUDE_CONFIG_DIR', () =>
     if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = previous;
   }
+});
+
+// ---------------------------------------------------------------- one login, one row
+//
+// ~/.claude and a named account can hold the same login -- sign into Claude
+// Code in a terminal, then add yourself as a named account. Two copies of one
+// OAuth grant do not stay two working copies: the refresh token rotates, and
+// the copy that refreshed last leaves the other holding a dead token.
+//
+// Listed separately, the dead one was the default row -- always first -- so
+// rotation picked it, it failed, and the failure was recorded against the
+// identity they share, taking the working account down with it. A real
+// senia00 went to "logged out" this way three times in ten days.
+
+/** A home directory laid out as the real one is: ~/.claude and ~/.claude.json. */
+function homeWith(defaultUuid: string | null, named: Record<string, string>) {
+  const home = tmpDir();
+  const claudeDir = path.join(home, '.claude');
+  const accountsDir = path.join(home, '.claude-accounts');
+  writeCredentials(claudeDir);
+  if (defaultUuid) writeConfig(path.join(home, '.claude.json'), defaultUuid);
+  for (const [name, uuid] of Object.entries(named)) {
+    const dir = path.join(accountsDir, name);
+    writeCredentials(dir);
+    writeConfig(path.join(dir, '.claude.json'), uuid);
+  }
+  const identity = (dir: string | null) => accountIdentity(dir, home);
+  return { home, claudeDir, accountsDir, identity, stateDir: path.join(home, '.claude-persist') };
+}
+
+test('one login: the default row goes when a named account is the same person', () => {
+  const h = homeWith('senia-uuid', { blooper: 'b-uuid', senia00: 'senia-uuid', serokell: 's-uuid' });
+  const names = scanAccounts(h.claudeDir, h.accountsDir, '', h.identity).map((a) => a.name);
+  assert.deepEqual(names.sort(), ['blooper', 'senia00', 'serokell'], 'three logins, three rows');
+});
+
+test('one login: a default that is somebody else stays', () => {
+  const h = homeWith('someone-else', { blooper: 'b-uuid', senia00: 'senia-uuid' });
+  const names = scanAccounts(h.claudeDir, h.accountsDir, '', h.identity).map((a) => a.name);
+  assert.ok(names.includes('default'), 'it is a real, separate login');
+});
+
+/** Unknown is not the same. A default with no identity on disk is kept. */
+test('one login: a default whose identity cannot be read is kept', () => {
+  const h = homeWith(null, { senia00: 'senia-uuid' });
+  const names = scanAccounts(h.claudeDir, h.accountsDir, '', h.identity).map((a) => a.name);
+  assert.ok(names.includes('default'));
+});
+
+test('one login: without an identity to compare, nothing changes', () => {
+  const h = homeWith('senia-uuid', { senia00: 'senia-uuid' });
+  const names = scanAccounts(h.claudeDir, h.accountsDir, '').map((a) => a.name);
+  assert.ok(names.includes('default'), 'callers that do not ask get the old list');
+});
+
+test('defaultTwin: finds the named copy, and only a real match', () => {
+  const h = homeWith('senia-uuid', { blooper: 'b-uuid', senia00: 'senia-uuid' });
+  const named = ['blooper', 'senia00'].map((n) => path.join(h.accountsDir, n));
+  assert.equal(defaultTwin(named, h.identity), path.join(h.accountsDir, 'senia00'));
+  const h2 = homeWith('nobody', { blooper: 'b-uuid' });
+  assert.equal(defaultTwin([path.join(h2.accountsDir, 'blooper')], h2.identity), null);
+});
+
+/**
+ * A stored "default" choice must not keep sessions on ~/.claude once that row is
+ * gone: that is the copy whose token dies. It means the named twin.
+ */
+test('store: a default choice resolves to its named twin', () => {
+  const h = homeWith('senia-uuid', { blooper: 'b-uuid', senia00: 'senia-uuid' });
+  fs.mkdirSync(h.stateDir, { recursive: true });
+  fs.writeFileSync(path.join(h.stateDir, 'account.json'), JSON.stringify({ configDir: null }));
+  const store = new AccountsStore({ claudeDir: h.claudeDir, accountsDir: h.accountsDir, stateDir: h.stateDir });
+  const twin = path.join(h.accountsDir, 'senia00');
+  assert.equal(store.active, twin);
+  assert.equal(store.activeConcreteDir(), twin, 'never the dead copy in ~/.claude');
+  const listed = store.list();
+  assert.deepEqual(listed.filter((a) => a.active).map((a) => a.name), ['senia00']);
+  assert.ok(!listed.some((a) => a.configDir === null), 'and no default row to rotate onto');
+});
+
+test('store: an explicit choice of another account is left alone', () => {
+  const h = homeWith('senia-uuid', { blooper: 'b-uuid', senia00: 'senia-uuid' });
+  const store = new AccountsStore({ claudeDir: h.claudeDir, accountsDir: h.accountsDir, stateDir: h.stateDir });
+  const blooper = path.join(h.accountsDir, 'blooper');
+  store.setActive(blooper);
+  assert.equal(store.active, blooper);
+  assert.deepEqual(store.list().filter((a) => a.active).map((a) => a.name), ['blooper']);
 });

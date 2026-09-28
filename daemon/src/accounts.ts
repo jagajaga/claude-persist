@@ -37,6 +37,7 @@ export function scanAccounts(
   claudeDir: string,
   accountsDir: string,
   envConfigDir: string | undefined = process.env.CLAUDE_CONFIG_DIR,
+  identity?: (configDir: string | null) => string | null,
 ): Array<{ name: string; configDir: string | null }> {
   const out: Array<{ name: string; configDir: string | null }> = [
     { name: DEFAULT_ACCOUNT_NAME, configDir: null },
@@ -67,7 +68,38 @@ export function scanAccounts(
       out.push({ name: `${path.basename(envDir)} (CLAUDE_CONFIG_DIR)`, configDir: envDir });
     }
   }
+  // One login, one row. See defaultTwin for why a duplicate is worse than
+  // clutter.
+  if (identity && defaultTwin(named, identity)) out.shift();
   return out;
+}
+
+/**
+ * The named account that is the same login as the default one, or null.
+ *
+ * Signing into Claude Code in a terminal writes ~/.claude; adding the same
+ * person as a named account writes a second copy of the same login. Two copies
+ * of one OAuth grant do not stay two working copies -- the refresh token
+ * rotates, and whichever copy refreshes last leaves the other holding a dead
+ * one. Observed: ~/.claude at `expiresAt: 0` with no refresh token, beside a
+ * named account that worked.
+ *
+ * Listing both was worse than untidy. The default row always comes first, so
+ * rotation reaching for "the next account" picked the dead copy; it failed to
+ * authenticate; and a failure is recorded against the login identity, which the
+ * two share -- so the working account was marked unusable with it. Three times
+ * in ten days a freshly signed-in account went to "logged out" this way.
+ *
+ * The named copy is the one kept: somebody created it on purpose, and it is the
+ * one the daemon has been keeping alive.
+ */
+export function defaultTwin(
+  namedDirs: string[],
+  identity: (configDir: string | null) => string | null,
+): string | null {
+  const own = identity(null);
+  if (!own) return null;
+  return namedDirs.find((dir) => identity(dir) === own) ?? null;
 }
 
 /** Two paths pointing at one directory, symlinks and trailing slashes aside. */
@@ -457,14 +489,37 @@ export class AccountsStore {
     return { claudeDir: this.claudeDir, accountsDir: this.accountsDir };
   }
 
+  /** Login identity, read the same way rotation reads it. */
+  private readonly identity = (configDir: string | null): string | null =>
+    accountIdentity(configDir, path.dirname(this.claudeDir));
+
+  /** Named accounts holding credentials, for twin detection. */
+  private namedDirs(): string[] {
+    return scanAccounts(this.claudeDir, this.accountsDir)
+      .map((a) => a.configDir)
+      .filter((d): d is string => d !== null && !samePath(d, this.claudeDir));
+  }
+
+  /**
+   * The account actually in use.
+   *
+   * A stored choice of "default" whose login is also a named account means that
+   * named account: the default row is no longer listed, and running sessions on
+   * ~/.claude would put them back on the copy that dies.
+   */
+  private effectiveActive(): string | null {
+    if (this.activeConfigDir !== null) return this.activeConfigDir;
+    return defaultTwin(this.namedDirs(), this.identity);
+  }
+
   /** null = default account (no CLAUDE_CONFIG_DIR override). */
   get active(): string | null {
-    return this.activeConfigDir;
+    return this.effectiveActive();
   }
 
   /** The active dir as a concrete path, for callers (like ensureSdkTranscript) that need one. */
   activeConcreteDir(): string {
-    return this.activeConfigDir ?? this.claudeDir;
+    return this.effectiveActive() ?? this.claudeDir;
   }
 
   /** Every known config dir, concrete (the default resolved to ~/.claude). */
@@ -473,9 +528,10 @@ export class AccountsStore {
   }
 
   list(): AccountInfo[] {
-    return scanAccounts(this.claudeDir, this.accountsDir).map((a) => ({
+    const active = this.effectiveActive();
+    return scanAccounts(this.claudeDir, this.accountsDir, undefined, this.identity).map((a) => ({
       ...a,
-      active: a.configDir === this.activeConfigDir,
+      active: a.configDir === active,
       signedIn: accountSignedIn(a.configDir, this.claudeDir),
       // Whether a login still works is rotation's business, not the store's:
       // it is learned from a request failing, not from anything on disk.

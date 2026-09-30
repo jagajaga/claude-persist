@@ -1090,3 +1090,79 @@ test('model: a non-init system message says nothing about the model', () => {
   assert.equal(meta.activeModel, undefined);
 });
 
+
+/** A cleared conversation starts with no names behind it and nothing held. */
+test('clearing forgets the old conversation’s names', () => {
+  const session = makeSession(`cleared-names-${Date.now()}`);
+  const meta = (session as unknown as { meta: { pastTitles?: string[]; pendingTitle?: string } }).meta;
+  meta.pastTitles = ['blp|Character sheet'];
+  meta.pendingTitle = 'blp|Zombie processes';
+  append(session, { type: 'user_message', text: '/clear' });
+  assert.equal(meta.pastTitles, undefined, 'the new subject may take a name the old one had');
+  assert.equal(meta.pendingTitle, undefined);
+});
+
+// ---------- the tab through a real day --------------------------------------
+
+type Namable = {
+  meta: { title: string; turns?: number; titledAt?: number; pastTitles?: string[]; pendingTitle?: string };
+  namer: (opts: unknown) => Promise<string | null>;
+  maybeRetitle(): Promise<void>;
+};
+
+/** Ask the session to name itself once, with the namer answering `answer`. */
+async function look(s: Namable, answer: string): Promise<string> {
+  s.namer = async () => answer;
+  s.meta.turns = (s.meta.turns ?? 0) + 1;
+  // Due: either never named, or named long enough ago.
+  if (s.meta.titledAt !== undefined) s.meta.titledAt = 0;
+  await s.maybeRetitle();
+  return s.meta.title;
+}
+
+/**
+ * The worst real session, replayed: the namer alternated between two threads
+ * all day, and every alternation became a rename. Now the tab takes its first
+ * name and holds it.
+ */
+test('naming: a session covering two threads stops flipping between them', async () => {
+  const s = makeSession(`pingpong-${Date.now()}`, { cwd: '/home/me/blooper2.0' }) as unknown as Namable;
+  const answers = [
+    'Character sheet', 'Zombie process cleanup', 'Character sheet', 'Runaway processes',
+    'Character sheet', 'Zombie process resource leak', 'Character sheet', 'Zombie process cleanup',
+  ];
+  const titles: string[] = [];
+  for (const a of answers) titles.push(await look(s, a));
+  const changes = titles.filter((t, i) => i === 0 || t !== titles[i - 1]).length;
+  assert.equal(titles[0], 'blp|Character sheet', 'the first name is taken straight away');
+  assert.ok(changes <= 2, `the tab changed ${changes} times: ${titles.join(' -> ')}`);
+});
+
+/** A subject that really does move, and stays moved, still gets its name. */
+test('naming: a change that holds for two looks is taken', async () => {
+  const s = makeSession(`sustained-${Date.now()}`, { cwd: '/home/me/blooper2.0' }) as unknown as Namable;
+  await look(s, 'Jean landing page');
+  assert.equal(await look(s, 'Turnstile captcha'), 'blp|Jean landing page', 'one look is a detour');
+  assert.equal(await look(s, 'Turnstile captcha'), 'blp|Turnstile captcha', 'two agreeing looks are a change');
+  assert.deepEqual(s.meta.pastTitles, ['blp|Jean landing page'], 'and the old name is remembered');
+  assert.equal(s.meta.pendingTitle, undefined, 'with nothing left held');
+});
+
+/** Once it has moved on, going back is refused: that is the ping-pong, one level up. */
+test('naming: after a real change, the old name is not taken back', async () => {
+  const s = makeSession(`noreturn-${Date.now()}`, { cwd: '/home/me/blooper2.0' }) as unknown as Namable;
+  await look(s, 'Jean landing page');
+  await look(s, 'Turnstile captcha');
+  await look(s, 'Turnstile captcha');
+  await look(s, 'Jean landing page');
+  assert.equal(await look(s, 'Jean landing page'), 'blp|Turnstile captcha');
+});
+
+/** The namer answered with the tag it was shown; the tab gets one tag, not two. */
+test('naming: a tag in the answer is not doubled on the tab', async () => {
+  const s = makeSession(`doubletag-${Date.now()}`, { cwd: '/home/me/blooper2.0' }) as unknown as Namable;
+  s.namer = async () => 'Blp|one message one video';
+  s.meta.turns = 1;
+  await s.maybeRetitle();
+  assert.doesNotMatch(s.meta.title, /\|.*\|/, s.meta.title);
+});

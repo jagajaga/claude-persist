@@ -7,6 +7,10 @@ import {
   RETITLE_AFTER_MS,
   cleanTitle,
   clearsHistory,
+  decideRename,
+  MAX_PAST_TITLES,
+  rememberTitle,
+  withoutTag,
   generateTitle,
   isMaterialChange,
   namingWindow,
@@ -56,17 +60,16 @@ test('a tab with no activity is never looked at, however long it sits', () => {
 });
 
 /**
- * A tab is looked at often enough that its name keeps up with the work. Five
- * minutes of actually working in it, not twenty: a name that lags the work was
- * the whole complaint, and most looks decide nothing has changed and write
- * nothing, so looking is nearly free.
+ * Fast to name, slow to rename. Five minutes was measured and found wrong: 197
+ * renames across 17 sessions in ten days, a quarter of them back to a name the
+ * session already had -- every look was another chance to flip. The first name
+ * does not wait for this at all (titledAt is unset), so slowing it costs
+ * nothing at creation or after /clear.
  */
-test('the interval is short enough that a name keeps up', () => {
-  assert.ok(
-    RETITLE_AFTER_MS <= 5 * 60_000,
-    'longer than five minutes and you finish a piece of work under the old name',
-  );
-  assert.ok(RETITLE_AFTER_MS >= 60_000, 'but not every turn: that is a call each time');
+test('a named tab is looked at again only after a real stretch of work', () => {
+  assert.ok(RETITLE_AFTER_MS >= 15 * 60_000, 'five minutes flipped tabs between two threads all day');
+  assert.ok(RETITLE_AFTER_MS <= 30 * 60_000, 'but not so long that finished work keeps the name');
+  assert.equal(titleIsDue({ turns: 1 }), true, 'and the first name still comes at the first turn');
 });
 
 /**
@@ -904,4 +907,111 @@ test('the namer is told what the tab is called now', () => {
 test('a first naming has no current name to keep', () => {
   const prompt = titlePrompt([{ role: 'user', text: 'start the receipts work' }]);
   assert.doesNotMatch(prompt, /currently called/);
+});
+
+
+// ---------- a name that stays put ------------------------------------------
+//
+// Measured on the real log before this was written: 197 renames in ten days,
+// five sessions renaming 13 to 48 times, 25% of every rename going back to a
+// name the session had already worn, and 7% with the tag doubled.
+
+const settled = (current: string, past: string[] = [], pending?: string) => ({
+  current,
+  past,
+  ...(pending ? { pending } : {}),
+  firstNaming: false,
+});
+
+/** The worst session, verbatim: two threads, and the tab followed whichever was newest. */
+test('rename: a name the session already wore is not taken back', () => {
+  const memory = settled('blp|Character sheet', ['blp|Zombie process cleanup']);
+  const d = decideRename(memory, 'blp|Zombie process cleanup');
+  assert.equal(d.rename, false);
+  assert.equal(d.reason, 'returns');
+});
+
+/** Back to it in other words is still back to it: "Zombie processes" is that subject. */
+test('rename: returning in different words is still returning', () => {
+  const memory = settled('blp|Character sheet', ['blp|Zombie process cleanup']);
+  assert.equal(decideRename(memory, 'blp|Zombie processes').rename, false);
+});
+
+/** One detour -- "Workspace replay", "Redo edit guidance" -- is not the subject changing. */
+test('rename: a new subject is held until the next look agrees', () => {
+  const first = decideRename(settled('blp|One message one video'), 'blp|Redo edit guidance');
+  assert.equal(first.rename, false);
+  assert.equal(first.reason, 'unconfirmed');
+  assert.ok(!first.rename && first.pending === 'blp|Redo edit guidance', 'held, not dropped');
+  const second = decideRename(
+    settled('blp|One message one video', [], 'blp|Redo edit guidance'),
+    'blp|Redo edit guidance',
+  );
+  assert.equal(second.rename, true);
+  assert.equal(second.reason, 'confirmed');
+});
+
+test('rename: a held proposal the next look disagrees with is replaced, not applied', () => {
+  const d = decideRename(settled('blp|One message one video', [], 'blp|Workspace replay'), 'blp|Redo edit guidance');
+  assert.equal(d.rename, false);
+  assert.ok(!d.rename && d.pending === 'blp|Redo edit guidance');
+});
+
+/** When the look finds the same subject, a detour waiting to be confirmed is let go. */
+test('rename: the same subject clears whatever was held', () => {
+  const d = decideRename(settled('blp|One message one video', [], 'blp|Workspace replay'), 'blp|One message one video');
+  assert.equal(d.rename, false);
+  assert.ok(!d.rename && d.pending === undefined);
+});
+
+/** A returning name must not be confirmable later by a held copy of itself. */
+test('rename: returning also lets go of what was held', () => {
+  const d = decideRename(
+    settled('blp|Character sheet', ['blp|Zombie process cleanup'], 'blp|Zombie process cleanup'),
+    'blp|Zombie process cleanup',
+  );
+  assert.equal(d.rename, false);
+  assert.equal(d.reason, 'returns');
+});
+
+/** A placeholder is not a name anyone learned; the first answer is taken as it is. */
+test('rename: the first name needs no second opinion', () => {
+  const d = decideRename({ current: 'blooper2.0-', past: [], firstNaming: true }, 'blp|Jean landing page');
+  assert.equal(d.rename, true);
+  assert.equal(d.reason, 'first');
+});
+
+test('rename: a rewording of the current name is no rename at all', () => {
+  const d = decideRename(settled('blp|Chat image references'), 'blp|Chat image refs');
+  assert.equal(d.rename, false);
+  assert.equal(d.reason, 'same');
+});
+
+test('remembered names: the new one is appended, its near-copies dropped, and it is bounded', () => {
+  assert.deepEqual(rememberTitle(['blp|Zombie processes'], 'blp|Zombie process cleanup'), ['blp|Zombie process cleanup']);
+  assert.deepEqual(rememberTitle(['blp|A thing'], 'blp|Other work'), ['blp|A thing', 'blp|Other work']);
+  let past: string[] = [];
+  // Genuinely different subjects: near-copies would be merged, which is the point.
+  const words = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee'.split(' ');
+  for (const w of words) past = rememberTitle(past, `blp|${w} ${w}s`);
+  assert.equal(past.length, MAX_PAST_TITLES);
+});
+
+// ---------- the doubled tag --------------------------------------------------
+
+test('tag: every tag is removed, not only the first', () => {
+  assert.equal(withoutTag('blp|Blp|one message one video'), 'one message one video');
+  assert.equal(withoutTag('blp|Video model receipt'), 'Video model receipt');
+  assert.equal(withoutTag('Video model receipt'), 'Video model receipt');
+});
+
+/** A name that merely contains a bar is not tagged: only a short prefix is a tag. */
+test('tag: a longer word before a bar is part of the name', () => {
+  assert.equal(withoutTag('Frontend|backend split'), 'Frontend|backend split');
+});
+
+/** The namer copied the tag it was shown; whatever it sends back, one tag goes on. */
+test('tag: an answer that brings its own tag loses it', () => {
+  assert.equal(cleanTitle('Blp|one message one video'), 'one message one video');
+  assert.equal(cleanTitle('blp|cld|Tab names'), 'Tab names');
 });

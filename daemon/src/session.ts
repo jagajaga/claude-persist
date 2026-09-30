@@ -28,15 +28,17 @@ import path from 'node:path';
 import {
   clearsHistory,
   composeTitle,
+  decideRename,
   generateTitle,
-  isMaterialChange,
   namingWindow,
   pickExchanges,
   projectTag,
+  rememberTitle,
   sessionBranches,
   sessionIssue,
   sessionVocabulary,
   titleIsDue,
+  withoutTag,
 } from './titler.js';
 import { incidentNotice } from './statusPage.js';
 import type { StatusIncident } from './statusPage.js';
@@ -381,6 +383,10 @@ export class DaemonSession {
       if (typeof event.text === 'string' && clearsHistory(event.text)) {
         this.meta.clearedAt = this.totalCount;
         delete this.meta.titledAt;
+        // The old conversation's names say nothing about this one: keeping them
+        // would stop the new subject from ever taking a name the old one had.
+        delete this.meta.pastTitles;
+        delete this.meta.pendingTitle;
         this.callbacks.onMetaChanged();
       }
     }
@@ -714,6 +720,9 @@ export class DaemonSession {
    * session's own account with tools switched off -- about a fortieth of an
    * ordinary turn -- and asks again only once the work has moved on.
    */
+  /** The model call behind a name; a field so a test can script its answers. */
+  private namer: typeof generateTitle = generateTitle;
+
   private async maybeRetitle(): Promise<void> {
     if (
       !titleIsDue({
@@ -736,20 +745,25 @@ export class DaemonSession {
     const vocabulary = sessionVocabulary(both);
     const branches = sessionBranches(both);
     const issue = sessionIssue(both);
+    // Nothing generated yet for this conversation -- new, or just cleared -- so
+    // there is no learned name to protect and the first answer is taken as is.
+    const firstNaming = this.meta.titledAt === undefined;
     // Recorded before the call, not after: if it fails, the next attempt should
     // wait for the work to move again rather than retrying every turn.
     this.meta.titledAt = Date.now();
     this.callbacks.onMetaChanged();
 
     const project = path.basename(this.meta.cwd);
-    const name = await generateTitle({
+    const name = await this.namer({
       exchanges,
       vocabulary,
       branches,
       issue,
       // Told what it is called now, so a session that simply carried on keeps
       // the name rather than being reworded around the same subject.
-      current: this.meta.title,
+      // Without its tag: shown `blp|X`, the namer answered `Blp|X` and the tag
+      // went on twice.
+      current: withoutTag(this.meta.title),
       siblings: this.callbacks.siblingTitles(this.meta.id, this.meta.cwd),
       project,
       configDir: accountsStore.activeConcreteDir(),
@@ -762,12 +776,34 @@ export class DaemonSession {
     // The project tag is prepended here rather than asked for: the directory
     // already knows it, and a tab strip full of sessions needs the three
     // letters that say which project before the words that say which work.
-    const title = composeTitle(projectTag(this.meta.cwd), name);
-    if (title === this.meta.title) return;
-    // A rename that only rephrases moves a tab you had learned to recognise and
-    // tells you nothing new.
-    if (!isMaterialChange(this.meta.title, title)) return;
-    this.callbacks.log(`session ${this.meta.id} named itself "${title}"`);
+    // Stripped here too, not only in cleanTitle: this is where the one tag goes
+    // on, so this is where a second one is kept off, whatever the namer is.
+    const title = composeTitle(projectTag(this.meta.cwd), withoutTag(name));
+    const decision = decideRename(
+      {
+        current: this.meta.title,
+        past: this.meta.pastTitles ?? [],
+        pending: this.meta.pendingTitle,
+        firstNaming,
+      },
+      title,
+    );
+    if (!decision.rename) {
+      // Held, or let go: either way the pending proposal is whatever this look
+      // left, so a detour cannot sit waiting to be confirmed by a later one.
+      if (this.meta.pendingTitle !== decision.pending) {
+        if (decision.pending) this.meta.pendingTitle = decision.pending;
+        else delete this.meta.pendingTitle;
+        this.callbacks.onMetaChanged();
+      }
+      return;
+    }
+    this.callbacks.log(`session ${this.meta.id} named itself "${title}" (${decision.reason})`);
+    // The placeholder a session was created with is not a name it wore.
+    if (!firstNaming) {
+      this.meta.pastTitles = rememberTitle(this.meta.pastTitles ?? [], this.meta.title);
+    }
+    delete this.meta.pendingTitle;
     this.meta.title = title;
     this.callbacks.onRetitled();
   }

@@ -19,23 +19,23 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 export const TITLE_MODEL = 'claude-haiku-4-5';
 
 /**
- * How long a session goes before its name is looked at again.
+ * How long a named session goes before its name is looked at again.
  *
- * Time, not turns: a turn is anything from a one-word answer to an hour of
- * work, so counting them measures nothing you can feel. Five minutes of
- * actually working in a tab is the point at which the subject may have moved --
- * short, because a name that lags the work is the whole complaint, and looking
- * is cheap: most looks decide nothing has changed and write nothing.
+ * Fast to name, slow to rename. The first name still comes at the first
+ * completed turn, and a `/clear` still earns one at the next -- neither waits
+ * for this. What this governs is looking *again*, and it was five minutes,
+ * which measured out as the wrong trade: 197 renames across 17 sessions in ten
+ * days, five of them renaming 13 to 48 times, a quarter of every rename going
+ * back to a name the session already had. Every look was one more chance to
+ * flip between two threads.
+ *
+ * A rename also needs two looks to agree (see decideRename), so a subject has
+ * to hold for at least this long, and usually twice it, before the tab moves.
  *
  * Only ever checked when a turn completes, so a tab nobody is touching is never
- * re-named and never costs anything -- "five minutes" means five minutes of
- * activity, not of wall clock.
- *
- * Looking again is not renaming. Most of the time the work is a continuation
- * and the name still fits, which isMaterialChange decides; the rename happens
- * only when the subject has genuinely become something else.
+ * re-named and never costs anything.
  */
-export const RETITLE_AFTER_MS = 5 * 60_000;
+export const RETITLE_AFTER_MS = 15 * 60_000;
 
 /**
  * The name half of a title: `blp|Video model receipt`.
@@ -644,12 +644,23 @@ const SYSTEM_PROMPT = [
  * produces a confident-looking fragment of a sentence, which is exactly the
  * failure that would be hardest to notice.
  */
+/**
+ * The name without its project tag: `blp|Video model receipt` -> `Video model receipt`.
+ *
+ * Every tag, not the first: `blp|Blp|one message one video` is what came of
+ * showing the namer the current title tag and all. It copied the tag back, and
+ * the tag was put in front a second time -- 14 of 197 renames.
+ */
+export function withoutTag(title: string): string {
+  return title.replace(/^\s*(?:[a-z0-9]{1,4}\|\s*)+/i, '').trim();
+}
+
 export function cleanTitle(raw: string): string | null {
   const firstLine = raw.split('\n').map((l) => l.trim()).find((l) => l.length > 0);
   if (!firstLine) return null;
-  const stripped = firstLine
+  const stripped = withoutTag(firstLine
     // Models label their answers even when told not to.
-    .replace(/^(?:title|name)\s*[:\-]\s*/i, '')
+    .replace(/^(?:title|name)\s*[:\-]\s*/i, ''))
     .replace(/^["'`“”‘’]+|["'`“”‘’]+$/g, '')
     .replace(/\s+/g, ' ')
     .replace(/[.!]+$/, '')
@@ -734,4 +745,66 @@ export async function generateTitle(
   } catch {
     return null;
   }
+}
+
+export interface RenameMemory {
+  /** The title the tab has now. */
+  current: string;
+  /** Titles this conversation has worn before, oldest first. */
+  past: string[];
+  /** A different name the last look proposed and did not yet apply. */
+  pending?: string;
+  /**
+   * No name has been generated for this conversation yet: it was just created,
+   * or `/clear` just made it a different one. There is nothing to be stable
+   * about, and waiting for a second look would leave the placeholder up.
+   */
+  firstNaming: boolean;
+}
+
+export type RenameDecision =
+  | { rename: true; reason: 'first' | 'confirmed' }
+  | { rename: false; pending?: string; reason: 'same' | 'returns' | 'unconfirmed' };
+
+/** How many past names are remembered. Plenty: a stable session has one. */
+export const MAX_PAST_TITLES = 20;
+
+/**
+ * Should the tab take the name the namer just proposed?
+ *
+ * Two rules, both from what the old behaviour did to real tabs.
+ *
+ * Never go back. A session covering two threads was named after whichever the
+ * newest events showed, so it alternated: "Character sheet", "Zombie process
+ * cleanup", "Character sheet", "Runaway processes", "Character sheet"... The old
+ * check only compared against the name it had now, and A -> B -> A passes that
+ * every time. A name the session has already worn is not a new subject, it is
+ * the other half of the same one, and the tab keeps what it has.
+ *
+ * Two looks must agree. One detour -- "Workspace replay", "Redo edit guidance"
+ * -- was enough to take the name, and synonyms counted as a new subject ("Chat
+ * image refs" and "Dialogue image reference" took turns). A proposal is held
+ * and only applied if the next look proposes the same thing.
+ *
+ * The first name is exempt from both: it replaces a placeholder, not a name
+ * anyone has learned.
+ */
+export function decideRename(memory: RenameMemory, proposed: string): RenameDecision {
+  if (proposed === memory.current || !isMaterialChange(memory.current, proposed)) {
+    return { rename: false, reason: 'same' };
+  }
+  if (memory.firstNaming) return { rename: true, reason: 'first' };
+  if (memory.past.some((earlier) => !isMaterialChange(earlier, proposed))) {
+    return { rename: false, reason: 'returns' };
+  }
+  if (memory.pending && !isMaterialChange(memory.pending, proposed)) {
+    return { rename: true, reason: 'confirmed' };
+  }
+  return { rename: false, pending: proposed, reason: 'unconfirmed' };
+}
+
+/** The past-names list after leaving `title` behind. */
+export function rememberTitle(past: string[], title: string): string[] {
+  const kept = past.filter((earlier) => isMaterialChange(earlier, title));
+  return [...kept, title].slice(-MAX_PAST_TITLES);
 }

@@ -36,17 +36,24 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
   the extensions folder is read directly, and a reload is offered.
 - **Sessions name themselves.** A tab is named at the one moment nobody knows
   what the work is -- when you create it. After the first turn the session works
-  out what it turned out to be about, and looks again every five minutes as the
-  work drifts -- five minutes of working in a tab, not five minutes of the
-  clock, since the check only runs when a turn finishes: `blooper2.0-preview`
-  becomes `blp|Video model receipt`. Three letters for the project, then the
-  work in at most thirty-two characters.
+  out what it turned out to be about: `blooper2.0-preview` becomes
+  `blp|Video model receipt`. Three letters for the project, then the work in at
+  most thirty-two characters.
+  - **Fast to name, slow to rename.** The first name comes at the first
+    finished turn. After that the name is looked at every fifteen minutes of
+    work in the tab, and a new name has to be proposed by two looks in a row
+    before the tab changes -- one detour is not the subject changing.
+  - **A tab never goes back.** A session covering two threads used to flip
+    between them all day ("Character sheet", "Zombie process cleanup",
+    "Character sheet"...): a quarter of all renames went back to a name the tab
+    had already had. The names a session has worn are remembered, and none of
+    them is taken again.
   - The **project tag** is the consonants of the directory rather than its first
     three letters, since `cld` is only ever claude-persist while `cla` is also
     `claude-code`, `clang` and `classifier`.
   - **`/clear` and `/new` re-name the tab.** They start a different conversation
     in the same tab, so the name is owed again at the very next turn rather than
-    at the next five-minute mark -- and it is read from the clear onwards, since
+    after two agreeing looks -- and it is read from the clear onwards, since
     what came before is a conversation Claude can no longer see and is usually
     most of the log.
   - **No issue number.** It rode in front of the name for a while and was

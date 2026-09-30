@@ -56,6 +56,13 @@ export interface SessionMeta {
    * describing the work you just finished.
    */
   clearedAt?: number;
+  /**
+   * Names this conversation has worn, oldest first. A proposal matching one of
+   * them is the other half of a subject the tab already covers, not a new one.
+   */
+  pastTitles?: string[];
+  /** A different name proposed by the last look and held for the next to confirm. */
+  pendingTitle?: string;
 }
 
 export class Registry {

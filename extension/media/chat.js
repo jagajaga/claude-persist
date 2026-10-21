@@ -2003,8 +2003,11 @@
     chipsEl.replaceChildren();
     items.forEach((item, index) => {
       const chip = el('span', 'chip');
-      chip.appendChild(el('span', null, `${item.kind === 'image' ? '▣ ' : '▤ '}${item.label}`));
+      const name = el('span', 'chip-label', `${item.kind === 'image' ? '▣ ' : '▤ '}${item.label}`);
+      name.title = item.label;
+      chip.appendChild(name);
       const remove = el('button', 'chip-x', '×');
+      remove.setAttribute('aria-label', `Remove ${item.label}`);
       remove.addEventListener('click', () =>
         vscode.postMessage({ type: 'removeAttachment', index }));
       chip.appendChild(remove);

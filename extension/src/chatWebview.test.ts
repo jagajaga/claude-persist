@@ -2641,3 +2641,18 @@ test('composer: a picture the editor inserted becomes an upload and leaves the t
   assert.equal(box.querySelector('img'), null, 'the picture is an attachment now, not part of the text');
   assert.equal(box.value, 'see this ');
 });
+
+/**
+ * The × is a real control: it says what it removes, and the full name is
+ * reachable when the chip shows only the start of it. (Where it sits and
+ * whether a finger can hit it is layout, measured in a real browser.)
+ */
+test('attachment chip: the remove button names what it removes', () => {
+  const h = createHarness('chip-label');
+  const name = '1792565694870-keyboard-1792565692138-0.jpg';
+  h.send({ type: 'attachments', items: [{ kind: 'image', label: name }] });
+  const x = h.document.querySelector('#chips .chip-x');
+  assert.ok(x, 'every chip has a remove button');
+  assert.equal(x.getAttribute('aria-label'), `Remove ${name}`);
+  assert.equal(h.document.querySelector('#chips .chip-label').title, name);
+});

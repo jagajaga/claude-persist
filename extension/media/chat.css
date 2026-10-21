@@ -381,24 +381,42 @@ button.secondary {
   gap: 4px;
   border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,0.35));
   border-radius: 999px;
-  padding: 2px 9px;
+  padding: 2px 4px 2px 9px;
   font-size: 0.85em;
   background: var(--vscode-badge-background);
   color: var(--vscode-badge-foreground);
-  max-width: 260px;
+  max-width: min(260px, 100%);
+  white-space: nowrap;
+}
+/* The name gives way, never the ×. The chip used to clip itself with
+   overflow:hidden while the name could not shrink, so any name longer than
+   the chip -- every upload, "1792565694870-keyboard-…-0.jpg" -- pushed the ×
+   past the edge, where it was cut off and could not be tapped. */
+.chip-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .chip .file-link { color: inherit; }
 .chip-x {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  min-height: 20px;
   background: transparent;
   border: none;
+  border-radius: 999px;
   color: inherit;
-  padding: 0 0 0 2px;
+  padding: 0;
   font-size: 1.05em;
   line-height: 1;
   cursor: pointer;
+}
+/* A finger needs a real target: 32px, not the 10px glyph. */
+@media (pointer: coarse) {
+  .chip-x { min-width: 32px; min-height: 32px; font-size: 1.3em; }
 }
 .chip-x:hover { background: transparent; opacity: 0.7; }
 

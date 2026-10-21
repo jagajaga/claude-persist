@@ -56,13 +56,32 @@
         inputEl.textContent = String(text ?? '');
       },
     });
-    inputEl.addEventListener('input', () => {
+    inputEl.addEventListener('input', (e) => {
       liftPictures();
+      if (e.inputType === 'insertFromPaste' || e.inputType === 'insertFromDrop') flattenPaste();
       // Emptied by hand, an editor keeps a stray <br>, which hides the placeholder.
       if (inputEl.value === '' && inputEl.firstChild && !inputEl.querySelector('img')) {
         inputEl.textContent = '';
       }
     });
+  }
+
+  /**
+   * Whatever a paste brought in, as plain text.
+   *
+   * The editor is rich so that the keyboard's picture can land, which means a
+   * paste of copied web text arrives with its bold, links and colours. The
+   * composer is plain text, so once the editor has inserted it the markup goes
+   * and the words stay. Pictures are lifted out first, by liftPictures.
+   */
+  function flattenPaste() {
+    if (!inputEl.querySelector('*:not(br)')) return;
+    inputEl.textContent = inputEl.value;
+    const selection = window.getSelection && window.getSelection();
+    if (selection) {
+      selection.selectAllChildren(inputEl);
+      selection.collapseToEnd();
+    }
   }
 
   /** A data: URL as a File, without fetch (the panel's CSP forbids fetching data:). */
@@ -2568,18 +2587,13 @@
       sendFiles(files);
       return;
     }
-    // Text: flattened by hand, since a rich editor would keep the formatting of
-    // whatever was copied and the composer is plain text.
-    const html = data ? data.getData('text/html') : '';
-    const text = (data ? data.getData('text/plain') : '') ||
-      // Parsed inertly: a DOMParser document runs no scripts and loads nothing.
-      (html ? new DOMParser().parseFromString(html, 'text/html').body.textContent || '' : '');
-    if (text) {
-      e.preventDefault();
-      insertAtCaret(text);
-    }
-    // Nothing readable at all is a keyboard picture on release Firefox: leave
-    // the paste alone so the editor inserts it, and liftPictures takes it.
+    // Anything else is never cancelled -- text included. On release Firefox the
+    // keyboard's picture arrives as a paste whose clipboardData is whatever text
+    // happens to be on the system clipboard, and the picture is the paste's
+    // default action. Measured on a phone: this handler saw 72 characters of
+    // text/plain, cancelled the paste to insert them "as plain text", and the
+    // cancellation took the picture with it. So the editor does the inserting,
+    // and formatting is stripped afterwards (flattenPaste) instead of up front.
   });
   // Drag & drop anywhere onto the chat.
   document.body.addEventListener('dragover', (e) => e.preventDefault());

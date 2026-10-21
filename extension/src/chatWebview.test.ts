@@ -2566,24 +2566,55 @@ test('composer: a picture offered only as an item is still taken', async () => {
   assert.ok(h.posted.some((m) => m.type === 'uploadBegin'));
 });
 
-/** The editor is rich so the keyboard's picture can land; text must not bring formatting. */
-test('composer: pasted text arrives as plain text', () => {
-  const h = createHarness('composer-plain');
+/**
+ * Measured on the phone, release Firefox 158: the keyboard's picture arrived as a
+ * paste carrying 72 characters of text/plain -- whatever was on the system
+ * clipboard -- and the picture was the paste's default action. Cancelling a text
+ * paste to insert it "as plain text" cancelled the picture with it.
+ */
+test('composer: a paste carrying text is never cancelled (it may be the keyboard picture)', () => {
+  const h = createHarness('composer-text-not-cancelled');
   const box = h.document.getElementById('input');
-  const ev = pasteEvent(h, { files: [], items: [], getData: (t: string) => (t === 'text/plain' ? 'bold and link' : '<b>bold</b>') });
+  const ev = pasteEvent(h, { files: [], items: [{ kind: 'string', type: 'text/plain' }], getData: (t: string) => (t === 'text/plain' ? 'x'.repeat(72) : '') });
   box.dispatchEvent(ev);
-  assert.equal(ev.defaultPrevented, true, 'the editor would have kept the formatting');
+  assert.equal(ev.defaultPrevented, false, 'cancelling this is what lost the picture');
+});
+
+function pasted(h: Harness, html: string): DomNode {
+  const box = h.document.getElementById('input');
+  box.innerHTML = html;
+  const ev = new h.window.Event('input', { bubbles: true });
+  ev.inputType = 'insertFromPaste';
+  box.dispatchEvent(ev);
+  return box;
+}
+
+/** The editor is rich so the picture can land; whatever else a paste brings is made plain. */
+test('composer: formatting a paste brought in is stripped, the words kept', () => {
+  const h = createHarness('composer-flatten');
+  const box = pasted(h, '<b>bold</b> <i>and</i> <a href="x">link</a>');
+  assert.equal(box.querySelectorAll('*').length, 0, 'no markup left in the composer');
   assert.equal(box.value, 'bold and link');
 });
 
-test('composer: HTML with no plain text is flattened, not inserted', () => {
-  const h = createHarness('composer-html-only');
+test('composer: line breaks survive the flattening', () => {
+  const h = createHarness('composer-flatten-lines');
+  const box = pasted(h, '<div>one</div><div><span style="color:red">two</span></div>');
+  assert.equal(box.querySelectorAll('*').length, 0);
+  assert.match(box.value, /one[\s\S]*two/);
+});
+
+/** Typing is not pasting: the editor's own line structure is left alone while you type. */
+test('composer: typing is never flattened', () => {
+  const h = createHarness('composer-no-flatten-typing');
   const box = h.document.getElementById('input');
-  const ev = pasteEvent(h, { files: [], items: [], getData: (t: string) => (t === 'text/html' ? '<b>bold</b> <script>x()</script>text' : '') });
+  // A rich editor types new lines as <div>s; rebuilding them on every keystroke
+  // would throw the caret to the end while you type.
+  box.innerHTML = '<div>a</div><div>b</div>';
+  const ev = new h.window.Event('input', { bubbles: true });
+  ev.inputType = 'insertText';
   box.dispatchEvent(ev);
-  assert.equal(ev.defaultPrevented, true);
-  assert.equal(box.querySelectorAll('*').length, 0, 'no markup in the composer');
-  assert.match(box.value, /bold/);
+  assert.equal(box.innerHTML, '<div>a</div><div>b</div>');
 });
 
 /**

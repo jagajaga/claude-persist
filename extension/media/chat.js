@@ -2574,6 +2574,20 @@
   });
 
   // Paste an image/file straight into the input.
+  // Read clipboardData.types first, before anything touches .files or .items.
+  //
+  // Found by measurement on the phone, not by reading Firefox: with the paste
+  // handler below on its own, Gboard's picture never arrived (0 of 2 tries on
+  // Firefox 158, Android). With a logging build that happened to read .types
+  // first, it arrived every time (2 of 2), and with nothing added but this one
+  // read, it arrived again. Why the order matters inside Firefox is not
+  // established -- reading .files first evidently sends its lazily-filled
+  // clipboard data down a path that loses the keyboard's picture. Kept in
+  // exactly the form that was tested: a capture listener on the document, so
+  // it runs before any paste handler.
+  document.addEventListener('paste', (e) => {
+    void (e.clipboardData && [...e.clipboardData.types]);
+  }, true);
   inputEl.addEventListener('paste', (e) => {
     const data = e.clipboardData;
     let files = [...(data?.files || [])];

@@ -2656,3 +2656,22 @@ test('attachment chip: the remove button names what it removes', () => {
   assert.equal(x.getAttribute('aria-label'), `Remove ${name}`);
   assert.equal(h.document.querySelector('#chips .chip-label').title, name);
 });
+
+/**
+ * Order matters, measured on the phone: Gboard's picture arrived only when the
+ * paste's clipboardData.types was read before anything touched .files or
+ * .items (Firefox 158 on Android: 0 of 2 without it, 3 of 3 with it).
+ */
+test('composer: a paste reads clipboardData.types before .files or .items', () => {
+  const h = createHarness('composer-types-first');
+  const box = h.document.getElementById('input');
+  const order: string[] = [];
+  const data = {
+    get types() { order.push('types'); return ['text/plain']; },
+    get files() { order.push('files'); return []; },
+    get items() { order.push('items'); return []; },
+    getData: () => '',
+  };
+  box.dispatchEvent(pasteEvent(h, data));
+  assert.equal(order[0], 'types', `read in the order ${order.join(', ')}`);
+});

@@ -105,7 +105,7 @@ function domHtml(sessionId: string): string {
   <footer id="composer">
     <div id="input-box">
       <div id="chips" hidden></div>
-      <textarea id="input" rows="1"></textarea>
+      <div id="input" contenteditable="plaintext-only" role="textbox" data-placeholder="Message Claude…"></div>
       <div id="composer-row">
         <button id="attach"></button>
         <button id="model-pill"><span id="model-pill-label">default</span></button>
@@ -2500,4 +2500,88 @@ test('model menu: with a model chosen, the default entry makes no claim', () => 
   sendInfo(h, { model: 'sonnet', activeModel: 'claude-sonnet-5' });
   const labels = openModelMenu(h);
   assert.ok(labels.some((l: string) => l.trim() === 'default'), labels.join(' | '));
+});
+
+// ---------- the composer takes pictures from the keyboard ------------------
+//
+// Gboard inserts images through Android's rich-content API, and only into a
+// field that declares it accepts them. Firefox declares that for contenteditable
+// alone ("contenteditable allows image insertion", GeckoEditable.java); a
+// <textarea> gets the type hint "textarea" and Gboard answers "Firefox does not
+// support image pasting here". Chrome draws the same line. The picture then
+// arrives as an ordinary paste.
+
+test('composer: the real panel uses an editable div, never a textarea', () => {
+  const panel = fs.readFileSync(path.join(__dirname, '..', 'src', 'chatPanel.ts'), 'utf8');
+  assert.match(panel, /<div id="input" contenteditable="plaintext-only"/);
+  assert.doesNotMatch(panel, /<textarea id="input"/, 'a textarea cannot be handed images by the keyboard');
+});
+
+test('composer: reads and writes like the textarea it replaced', () => {
+  const h = createHarness('composer-value');
+  const box = h.document.getElementById('input');
+  box.value = 'hello\nworld';
+  assert.equal(box.value, 'hello\nworld');
+  box.textContent = 'typed\n';
+  assert.equal(box.value, 'typed', "the editor's trailing line break is not the person's");
+  box.value = '';
+  assert.equal(box.textContent, '');
+});
+
+/** An emptied editor keeps a stray line break, which would hide the placeholder. */
+test('composer: emptied by hand, it is really empty again', () => {
+  const h = createHarness('composer-empty');
+  const box = h.document.getElementById('input');
+  box.innerHTML = '<br>';
+  box.dispatchEvent(new h.window.Event('input', { bubbles: true }));
+  assert.equal(box.childNodes.length, 0, 'the placeholder only shows on :empty');
+});
+
+function pasteEvent(h: Harness, clipboardData: unknown): DomNode {
+  const ev = new h.window.Event('paste', { bubbles: true, cancelable: true });
+  ev.clipboardData = clipboardData;
+  return ev;
+}
+
+test('composer: a pasted picture becomes an upload, not text', async () => {
+  const h = createHarness('composer-image');
+  const box = h.document.getElementById('input');
+  const file = new (h.window as unknown as { File: typeof File }).File([new Uint8Array([137, 80, 78, 71])], 'image.png', { type: 'image/png' });
+  const ev = pasteEvent(h, { files: [file], items: [], getData: () => '' });
+  box.dispatchEvent(ev);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(ev.defaultPrevented, true);
+  assert.ok(h.posted.some((m) => m.type === 'uploadBegin'), JSON.stringify(h.posted.map((m) => m.type)));
+  assert.equal(box.value, '');
+});
+
+/** A keyboard-inserted picture may be listed only among the items. */
+test('composer: a picture offered only as an item is still taken', async () => {
+  const h = createHarness('composer-image-item');
+  const box = h.document.getElementById('input');
+  const file = new (h.window as unknown as { File: typeof File }).File([new Uint8Array([1])], 'image.png', { type: 'image/png' });
+  const ev = pasteEvent(h, { files: [], items: [{ kind: 'file', getAsFile: () => file }], getData: () => '' });
+  box.dispatchEvent(ev);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.ok(h.posted.some((m) => m.type === 'uploadBegin'));
+});
+
+/** Where plaintext-only is unsupported the editor is rich, and a paste must not keep formatting. */
+test('composer: on a rich-editor fallback, pasted text arrives as plain text', () => {
+  const h = createHarness('composer-plain');
+  const box = h.document.getElementById('input');
+  box.contentEditable = 'true';
+  const ev = pasteEvent(h, { files: [], items: [], getData: (t: string) => (t === 'text/plain' ? 'bold and link' : '<b>bold</b>') });
+  box.dispatchEvent(ev);
+  assert.equal(ev.defaultPrevented, true, 'the browser would have inserted the formatting');
+  assert.equal(box.value, 'bold and link');
+});
+
+/** A plain text paste in a plaintext editor is the browser's to do. */
+test('composer: plain text pastes are left to the browser', () => {
+  const h = createHarness('composer-native');
+  const box = h.document.getElementById('input');
+  const ev = pasteEvent(h, { files: [], items: [], getData: () => 'hi' });
+  box.dispatchEvent(ev);
+  assert.equal(ev.defaultPrevented, false);
 });

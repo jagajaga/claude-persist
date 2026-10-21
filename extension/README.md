@@ -114,6 +114,10 @@ or [Open VSX](https://open-vsx.org/extension/jaga/claude-persist-vscode)
 - **Add files** by dragging them in, pasting from the clipboard, or from the
   `+` menu, which can also browse files on the server. Uploads from the browser
   are chunked, show progress, and are capped at 10 MB.
+- **Images from the phone keyboard.** Tap a screenshot or copied image in
+  Gboard's clipboard strip and it is attached. The keyboard only offers images
+  to a rich-text field, so the composer is one -- plain text only, so pasted
+  text never brings its formatting along.
 - **Inline previews** with a full-size lightbox, including for image paths you
   type or that a tool returns.
 - **Video previews.** An `.mp4`, `.webm` or `.mov` shows its first frame with a

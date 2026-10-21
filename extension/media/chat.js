@@ -17,6 +17,60 @@
   const messagesEl = document.getElementById('messages');
   const threadEl = document.getElementById('thread');
   const inputEl = document.getElementById('input');
+
+  /**
+   * The composer is an editable div rather than a <textarea>, so the keyboard
+   * can hand it pictures.
+   *
+   * Gboard puts screenshots and copied images in its clipboard strip, and tapping
+   * one inserts it through Android's rich-content API -- but only into a field
+   * that says it accepts images. Firefox says so only for contenteditable
+   * ("contenteditable allows image insertion", GeckoEditable.java); a textarea
+   * gets the type hint "textarea" and Gboard answers "Firefox does not support
+   * image pasting here". Chrome draws the same line. The image then arrives as an
+   * ordinary paste event, which the handler below already turns into an upload.
+   *
+   * Everything else in this file reads and writes `.value` as if it were still a
+   * textarea, so the div is given one. Plain text only: plaintext-only where the
+   * engine supports it, and on older engines a rich editor whose pastes are
+   * flattened to text.
+   */
+  if (inputEl.tagName !== 'TEXTAREA') {
+    try {
+      inputEl.contentEditable = 'plaintext-only';
+    } catch {
+      inputEl.contentEditable = 'true';
+    }
+    if (inputEl.contentEditable !== 'plaintext-only') inputEl.contentEditable = 'true';
+    Object.defineProperty(inputEl, 'value', {
+      configurable: true,
+      get() {
+        const raw = typeof inputEl.innerText === 'string' ? inputEl.innerText : inputEl.textContent || '';
+        // An editor leaves a <br> behind in an emptied or newly broken line; that
+        // trailing newline is the editor's, not a line anyone typed.
+        return raw.replace(/\n$/, '');
+      },
+      set(text) {
+        inputEl.textContent = String(text ?? '');
+      },
+    });
+    // Emptied by hand, an editor keeps a stray <br>, which hides the placeholder.
+    inputEl.addEventListener('input', () => {
+      if (inputEl.value === '' && inputEl.firstChild) inputEl.textContent = '';
+    });
+  }
+
+  /** Put text at the caret, as typing would, keeping it on the undo stack. */
+  function insertAtCaret(text) {
+    inputEl.focus();
+    try {
+      if (document.execCommand('insertText', false, text)) return;
+    } catch {
+      // not implemented here; fall through
+    }
+    inputEl.value = inputEl.value + text;
+    inputEl.dispatchEvent(new Event('input'));
+  }
   const sendBtn = document.getElementById('send');
   const permToggle = document.getElementById('perm-toggle');
   const agentsChip = document.getElementById('agents-chip');
@@ -2286,11 +2340,7 @@
       if (!attached && navigator.clipboard.readText) {
         const text = await navigator.clipboard.readText();
         if (text) {
-          const start = inputEl.selectionStart ?? inputEl.value.length;
-          inputEl.value =
-            inputEl.value.slice(0, start) + text + inputEl.value.slice(inputEl.selectionEnd ?? start);
-          inputEl.dispatchEvent(new Event('input'));
-          inputEl.focus();
+          insertAtCaret(text);
           attached = true;
         }
       }
@@ -2471,10 +2521,26 @@
 
   // Paste an image/file straight into the input.
   inputEl.addEventListener('paste', (e) => {
-    const files = [...(e.clipboardData?.files || [])];
+    const data = e.clipboardData;
+    let files = [...(data?.files || [])];
+    // An image the keyboard inserted can arrive as a file item without being
+    // listed in .files; take it from the items too.
+    if (!files.length && data?.items) {
+      files = [...data.items]
+        .filter((item) => item.kind === 'file')
+        .map((item) => item.getAsFile())
+        .filter(Boolean);
+    }
     if (files.length) {
       e.preventDefault();
       sendFiles(files);
+      return;
+    }
+    // A rich editor (the fallback where plaintext-only is unsupported) would keep
+    // the formatting of whatever was copied. The composer is plain text.
+    if (inputEl.contentEditable === 'true' && data) {
+      e.preventDefault();
+      insertAtCaret(data.getData('text/plain'));
     }
   });
   // Drag & drop anywhere onto the chat.

@@ -304,8 +304,20 @@ button.secondary {
   font-size: inherit;
   line-height: 1.45;
   padding: 2px 4px 6px;
+  /* A div, not a textarea (see chat.js): keep line breaks and long words the
+     way a textarea would, and scroll once it reaches its cap. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-y: auto;
+  min-height: 1.45em;
+  cursor: text;
 }
 #input:focus { outline: none; }
+#input:empty::before {
+  content: attr(data-placeholder);
+  color: var(--vscode-input-placeholderForeground, rgba(128,128,128,0.8));
+  pointer-events: none;
+}
 
 #composer-row { display: flex; align-items: center; gap: 8px; }
 .flex-spacer { flex: 1; }

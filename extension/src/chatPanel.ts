@@ -1006,7 +1006,7 @@ export class ChatPanelManager {
   <footer id="composer">
     <div id="input-box">
       <div id="chips" hidden></div>
-      <textarea id="input" rows="1" placeholder="Message Claude…"></textarea>
+      <div id="input" contenteditable="plaintext-only" role="textbox" aria-multiline="true" aria-label="Message Claude" data-placeholder="Message Claude…" spellcheck="true"></div>
       <div id="composer-row">
         <button id="attach" class="icon-btn" title="Attach files">+</button>
         <button id="model-pill" class="pill" title="Model and reasoning effort">

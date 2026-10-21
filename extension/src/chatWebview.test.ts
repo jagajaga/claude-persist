@@ -105,7 +105,7 @@ function domHtml(sessionId: string): string {
   <footer id="composer">
     <div id="input-box">
       <div id="chips" hidden></div>
-      <div id="input" contenteditable="plaintext-only" role="textbox" data-placeholder="Message Claude…"></div>
+      <div id="input" contenteditable="true" role="textbox" data-placeholder="Message Claude…"></div>
       <div id="composer-row">
         <button id="attach"></button>
         <button id="model-pill"><span id="model-pill-label">default</span></button>
@@ -2513,7 +2513,7 @@ test('model menu: with a model chosen, the default entry makes no claim', () => 
 
 test('composer: the real panel uses an editable div, never a textarea', () => {
   const panel = fs.readFileSync(path.join(__dirname, '..', 'src', 'chatPanel.ts'), 'utf8');
-  assert.match(panel, /<div id="input" contenteditable="plaintext-only"/);
+  assert.match(panel, /<div id="input" contenteditable="true"/, 'rich, or release Firefox drops the picture');
   assert.doesNotMatch(panel, /<textarea id="input"/, 'a textarea cannot be handed images by the keyboard');
 });
 
@@ -2566,22 +2566,47 @@ test('composer: a picture offered only as an item is still taken', async () => {
   assert.ok(h.posted.some((m) => m.type === 'uploadBegin'));
 });
 
-/** Where plaintext-only is unsupported the editor is rich, and a paste must not keep formatting. */
-test('composer: on a rich-editor fallback, pasted text arrives as plain text', () => {
+/** The editor is rich so the keyboard's picture can land; text must not bring formatting. */
+test('composer: pasted text arrives as plain text', () => {
   const h = createHarness('composer-plain');
   const box = h.document.getElementById('input');
-  box.contentEditable = 'true';
   const ev = pasteEvent(h, { files: [], items: [], getData: (t: string) => (t === 'text/plain' ? 'bold and link' : '<b>bold</b>') });
   box.dispatchEvent(ev);
-  assert.equal(ev.defaultPrevented, true, 'the browser would have inserted the formatting');
+  assert.equal(ev.defaultPrevented, true, 'the editor would have kept the formatting');
   assert.equal(box.value, 'bold and link');
 });
 
-/** A plain text paste in a plaintext editor is the browser's to do. */
-test('composer: plain text pastes are left to the browser', () => {
-  const h = createHarness('composer-native');
+test('composer: HTML with no plain text is flattened, not inserted', () => {
+  const h = createHarness('composer-html-only');
   const box = h.document.getElementById('input');
-  const ev = pasteEvent(h, { files: [], items: [], getData: () => 'hi' });
+  const ev = pasteEvent(h, { files: [], items: [], getData: (t: string) => (t === 'text/html' ? '<b>bold</b> <script>x()</script>text' : '') });
+  box.dispatchEvent(ev);
+  assert.equal(ev.defaultPrevented, true);
+  assert.equal(box.querySelectorAll('*').length, 0, 'no markup in the composer');
+  assert.match(box.value, /bold/);
+});
+
+/**
+ * Release Firefox: a keyboard picture fires a paste whose data is empty, and the
+ * picture exists only in what the editor inserts next. Cancelling this paste
+ * would cancel the picture -- the first version of this fix did exactly that.
+ */
+test('composer: an empty paste is left for the editor to insert the picture', () => {
+  const h = createHarness('composer-empty-paste');
+  const box = h.document.getElementById('input');
+  const ev = pasteEvent(h, { files: [], items: [], getData: () => '' });
   box.dispatchEvent(ev);
   assert.equal(ev.defaultPrevented, false);
+});
+
+/** What release Firefox inserts: <img src="data:image/png;base64,...">. It becomes an upload. */
+test('composer: a picture the editor inserted becomes an upload and leaves the text', async () => {
+  const h = createHarness('composer-lift');
+  const box = h.document.getElementById('input');
+  box.innerHTML = 'see this <img src="data:image/png;base64,iVBORw0KGgo=">';
+  box.dispatchEvent(new h.window.Event('input', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 50));
+  assert.ok(h.posted.some((m) => m.type === 'uploadBegin'), JSON.stringify(h.posted.map((m) => m.type)));
+  assert.equal(box.querySelector('img'), null, 'the picture is an attachment now, not part of the text');
+  assert.equal(box.value, 'see this ');
 });

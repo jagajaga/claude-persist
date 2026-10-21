@@ -27,21 +27,23 @@
    * that says it accepts images. Firefox says so only for contenteditable
    * ("contenteditable allows image insertion", GeckoEditable.java); a textarea
    * gets the type hint "textarea" and Gboard answers "Firefox does not support
-   * image pasting here". Chrome draws the same line. The image then arrives as an
-   * ordinary paste event, which the handler below already turns into an upload.
+   * image pasting here". Chrome draws the same line.
+   *
+   * And it has to be a *rich* editor, not plaintext-only. Release Firefox fires
+   * the paste event for a keyboard image with an empty clipboardData -- "we don't
+   * currently implement a way to put that in the data transfer yet"
+   * (EditorBase.cpp, fixed only on trunk) -- and the image exists solely in what
+   * the editor inserts afterwards: <img src="data:image/png;base64,...">
+   * (HTMLEditorDataTransfer.cpp, ImgFromData). A plaintext-only editor throws
+   * it away; that was the "no toast, and still no picture" of the first try.
+   * So pictures that land in the box are lifted out and uploaded (below), and
+   * text pastes are flattened by hand so formatting still never gets in.
    *
    * Everything else in this file reads and writes `.value` as if it were still a
-   * textarea, so the div is given one. Plain text only: plaintext-only where the
-   * engine supports it, and on older engines a rich editor whose pastes are
-   * flattened to text.
+   * textarea, so the div is given one.
    */
   if (inputEl.tagName !== 'TEXTAREA') {
-    try {
-      inputEl.contentEditable = 'plaintext-only';
-    } catch {
-      inputEl.contentEditable = 'true';
-    }
-    if (inputEl.contentEditable !== 'plaintext-only') inputEl.contentEditable = 'true';
+    inputEl.contentEditable = 'true';
     Object.defineProperty(inputEl, 'value', {
       configurable: true,
       get() {
@@ -54,12 +56,42 @@
         inputEl.textContent = String(text ?? '');
       },
     });
-    // Emptied by hand, an editor keeps a stray <br>, which hides the placeholder.
     inputEl.addEventListener('input', () => {
-      if (inputEl.value === '' && inputEl.firstChild) inputEl.textContent = '';
+      liftPictures();
+      // Emptied by hand, an editor keeps a stray <br>, which hides the placeholder.
+      if (inputEl.value === '' && inputEl.firstChild && !inputEl.querySelector('img')) {
+        inputEl.textContent = '';
+      }
     });
   }
 
+  /** A data: URL as a File, without fetch (the panel's CSP forbids fetching data:). */
+  function fileFromDataUrl(url, index) {
+    const m = /^data:([^;,]+)(;base64)?,(.*)$/s.exec(url);
+    if (!m) return null;
+    const type = m[1];
+    const raw = m[2] ? atob(m[3]) : decodeURIComponent(m[3]);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    const ext = (type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace(/[^a-z0-9]/gi, '');
+    return new File([bytes], `keyboard-${Date.now()}-${index}.${ext}`, { type });
+  }
+
+  /**
+   * Turn any picture the editor inserted into an upload, and take it back out.
+   *
+   * The composer is plain text to everything downstream; a picture in it is an
+   * attachment that arrived by the only road release Firefox offers for one.
+   */
+  function liftPictures() {
+    const images = [...inputEl.querySelectorAll('img')];
+    if (!images.length) return;
+    const files = images
+      .map((img, i) => fileFromDataUrl(img.getAttribute('src') || '', i))
+      .filter(Boolean);
+    for (const img of images) img.remove();
+    if (files.length) sendFiles(files);
+  }
   /** Put text at the caret, as typing would, keeping it on the undo stack. */
   function insertAtCaret(text) {
     inputEl.focus();
@@ -2536,12 +2568,18 @@
       sendFiles(files);
       return;
     }
-    // A rich editor (the fallback where plaintext-only is unsupported) would keep
-    // the formatting of whatever was copied. The composer is plain text.
-    if (inputEl.contentEditable === 'true' && data) {
+    // Text: flattened by hand, since a rich editor would keep the formatting of
+    // whatever was copied and the composer is plain text.
+    const html = data ? data.getData('text/html') : '';
+    const text = (data ? data.getData('text/plain') : '') ||
+      // Parsed inertly: a DOMParser document runs no scripts and loads nothing.
+      (html ? new DOMParser().parseFromString(html, 'text/html').body.textContent || '' : '');
+    if (text) {
       e.preventDefault();
-      insertAtCaret(data.getData('text/plain'));
+      insertAtCaret(text);
     }
+    // Nothing readable at all is a keyboard picture on release Firefox: leave
+    // the paste alone so the editor inserts it, and liftPictures takes it.
   });
   // Drag & drop anywhere onto the chat.
   document.body.addEventListener('dragover', (e) => e.preventDefault());

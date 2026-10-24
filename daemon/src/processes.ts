@@ -42,6 +42,8 @@ export interface ProcessSnapshot {
   processes: ProcInfo[];
   /** All processes on the machine, for "showing 40 of 812". */
   total: number;
+  /** Every orphan on the machine, listed or not: what reapOrphans would free. */
+  orphans: { count: number; rssBytes: number };
   sampledAt: number;
 }
 
@@ -218,18 +220,32 @@ export class ProcessSampler {
       return { count, rss };
     };
 
-    // The interesting ones: busiest and biggest, merged, no duplicates.
+    // Orphans are judged across every process, not just the ones listed: a
+    // small leftover is still a leftover, and the phone's "kill orphans" button
+    // must say how much it would free.
+    const cwdOf = new Map<number, string | null>();
+    const isOrphan = (pid: number): boolean => {
+      if (!cwdOf.has(pid)) cwdOf.set(pid, src.cwd(pid));
+      const cwd = cwdOf.get(pid)!;
+      // The kernel marks a deleted directory "(deleted)"; a path that is gone is as good.
+      return cwd !== null && (cwd.endsWith(' (deleted)') || !src.exists(cwd));
+    };
+    const commandOf = (p: (typeof all)[number]): string => {
+      const raw = src.read(p.pid, 'cmdline') ?? '';
+      return (raw.replace(/\0+$/, '').split('\0').join(' ') || `[${p.comm}]`).slice(0, 300);
+    };
+    const orphanList = all.filter((p) => isOrphan(p.pid) && protection(p.pid, commandOf(p), src.self, ancestors) === null);
+
+    // The interesting ones: busiest, biggest and orphaned, merged, no duplicates.
     const byCpu = [...all].sort((a, b) => (cpuOf.get(b.pid) ?? 0) - (cpuOf.get(a.pid) ?? 0)).slice(0, limit);
     const byMem = [...all].sort((a, b) => b.rssBytes + b.swapBytes - (a.rssBytes + a.swapBytes)).slice(0, limit);
     const chosen = new Map<number, (typeof all)[number]>();
-    for (const p of [...byCpu, ...byMem]) chosen.set(p.pid, p);
+    for (const p of [...byCpu, ...byMem, ...orphanList.slice(0, limit)]) chosen.set(p.pid, p);
 
     const processes: ProcInfo[] = [...chosen.values()].map((p) => {
-      const raw = src.read(p.pid, 'cmdline') ?? '';
-      const command = (raw.replace(/\0+$/, '').split('\0').join(' ') || `[${p.comm}]`).slice(0, 300);
-      const cwd = src.cwd(p.pid);
-      // The kernel marks a deleted directory "(deleted)"; a path that is gone is as good.
-      const orphaned = cwd !== null && (cwd.endsWith(' (deleted)') || !src.exists(cwd));
+      const command = commandOf(p);
+      const orphaned = isOrphan(p.pid);
+      const cwd = cwdOf.get(p.pid) ?? null;
       const reason = protection(p.pid, command, src.self, ancestors);
       const t = tree(p.pid);
       // Session first: the claude binary lives under code-server's extensions
@@ -258,7 +274,11 @@ export class ProcessSampler {
         ...(role ? { role } : {}),
       };
     });
-    return { processes, total: all.length, sampledAt: now };
+    const orphans = {
+      count: orphanList.length,
+      rssBytes: orphanList.reduce((n, p) => n + p.rssBytes, 0),
+    };
+    return { processes, total: all.length, orphans, sampledAt: now };
   }
 
   /** Every process whose working directory is gone, with its tree. */

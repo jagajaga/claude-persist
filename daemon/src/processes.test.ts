@@ -108,6 +108,26 @@ test('a process whose working directory was deleted is an orphan', () => {
   assert.equal(sampler.sample().processes.find((p) => p.pid === 800)!.orphaned, false);
 });
 
+/** The kill-orphans button says how much it frees, so the count cannot stop at the top N. */
+test('the orphan total covers every orphan, listed or not', () => {
+  const snap = new ProcessSampler(fakeProc(machine()).source).sample(1);
+  assert.ok(!snap.processes.some((p) => p.pid === 701), 'only the top one is listed');
+  assert.deepEqual(snap.orphans, { count: 2, rssBytes: (2_000_000 + 500_000) * 1024 });
+});
+
+test('a small orphan is listed even when it is neither busy nor big', () => {
+  const procs = machine().filter((p) => p.pid !== 700 && p.pid !== 701);
+  procs.push({ pid: 900, ppid: 1, comm: 'node', cmd: 'node tiny-watcher', cpu: 0, rssKb: 10, cwd: '/gone (deleted)' });
+  const snap = new ProcessSampler(fakeProc(procs).source).sample(1);
+  assert.ok(snap.processes.some((p) => p.pid === 900 && p.orphaned));
+});
+
+test('code-server is never counted as an orphan, even with its cwd gone', () => {
+  const procs = machine().map((p) => (p.pid === 38 ? { ...p, cwd: '/old (deleted)' } : p));
+  const snap = new ProcessSampler(fakeProc(procs).source).sample(100);
+  assert.equal(snap.orphans.count, 2);
+});
+
 test('a tree reports its children and the memory they hold', () => {
   const vite = new ProcessSampler(fakeProc(machine()).source).sample().processes.find((p) => p.pid === 700)!;
   assert.equal(vite.descendants, 1);

@@ -93,3 +93,15 @@ export function gatewayPort(
     return null;
   }
 }
+
+/**
+ * Whether to protect the way in under memory pressure (see rescue.ts):
+ * `{ "port": 7790, "protect": true }`. Off unless asked for, because it uses sudo.
+ */
+export function gatewayProtect(readConfig: () => string = () => fs.readFileSync(gatewayConfigPath, 'utf8')): boolean {
+  try {
+    return (JSON.parse(readConfig()) as { protect?: unknown }).protect === true;
+  } catch {
+    return false;
+  }
+}

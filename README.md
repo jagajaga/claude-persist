@@ -247,6 +247,33 @@ however many times a phone retries it, even across a daemon restart; and
 `POST /rpc` answers any single request over plain HTTP for networks where
 WebSockets keep dying.
 
+#### When the machine is overloaded
+
+The phone is also the way back in when the host is swamped. `processes`
+lists the busiest and the biggest processes, and flags any whose working
+directory has been deleted (a dev server left behind by a removed worktree is
+the usual culprit). `killProcess` signals one process, or a whole tree with the
+deepest children first so a watcher cannot respawn what was just killed.
+`reapOrphans` kills every orphan in one go and reports how much memory that
+frees. Everything is read straight from `/proc`, and no process is spawned to
+do it. pid 1, code-server and the daemon itself are always refused, because
+killing them would cut the very connection the request came over.
+
+That path is only useful while it survives. The kernel's OOM killer picks by
+size, so by default code-server and the daemon are as likely to go as the hog.
+Add `"protect": true`:
+
+```bash
+echo '{"port": 7790, "protect": true}' > ~/.claude-persist/gateway.json
+```
+
+With that set, the daemon uses passwordless sudo (`sudo -n`, never a prompt),
+once at startup, to give itself and code-server an `oom_score_adj` of -800 and
+to renice every one of their threads to -5. The OOM killer then takes almost
+anything else first, and the daemon still gets scheduled under heavy load.
+-800 is deliberately not -1000 ("never kill"). Without sudo it logs that and
+runs unprotected.
+
 ### Optional: daemon under systemd
 
 The daemon is self-spawning, but a user unit brings it back after a reboot.

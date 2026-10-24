@@ -352,7 +352,13 @@ export type Request =
    * ordinary `event` pushes, each carrying its sessionId.
    */
   | { id: number; op: 'feed'; limit?: number }
-  | { id: number; op: 'unfeed' };
+  | { id: number; op: 'unfeed' }
+  /** The top processes by CPU and by memory, with orphans and protected ones flagged. */
+  | { id: number; op: 'processes'; limit?: number }
+  /** Signal a process (and with `tree`, everything under it). Refuses protected ones. */
+  | { id: number; op: 'killProcess'; pid: number; signal?: 'SIGTERM' | 'SIGKILL'; tree?: boolean }
+  /** Stop every process whose working directory has been deleted. */
+  | { id: number; op: 'reapOrphans'; signal?: 'SIGTERM' | 'SIGKILL' };
 
 export type Push =
   | { kind: 'event'; sessionId: string; event: PersistedEvent }

@@ -17,7 +17,7 @@ import type { HelloResult } from '@claude-persist/shared';
 import { PROTOCOL_VERSION } from '@claude-persist/shared';
 import { NO_CLAUDE_MESSAGE, claudeExecutable } from './claudeExecutable.js';
 import { AccountUsageStore } from './accountUsage.js';
-import { ensureDirs, gatewayPort, socketPath, socketIsFile, lockPath, sessionLogPath, logPath, pendingTurnSessionIds, pendingTurnPath } from './paths.js';
+import { ensureDirs, gatewayPort, gatewayProtect, socketPath, socketIsFile, lockPath, sessionLogPath, logPath, pendingTurnSessionIds, pendingTurnPath } from './paths.js';
 import { releaseLock } from './lock.js';
 import { claimOwnership } from './ownership.js';
 import { Registry } from './registry.js';
@@ -30,6 +30,7 @@ import { LoginManager } from './login.js';
 import { applyRateLimitEvent, applyUsageResponse } from './usage.js';
 import { StatsSampler } from './serverStats.js';
 import { listDirectory, readFileSlice } from './fsView.js';
+import { ProcessSampler, childrenFrom, killProcess, realProcSource } from './processes.js';
 import {
   type IdentityOf,
   type RotationState,
@@ -483,6 +484,7 @@ function sessionInfo(id: string): SessionInfo {
 }
 
 const statsSampler = new StatsSampler();
+const processSampler = new ProcessSampler();
 
 /** Sessions worth reading for the feed: recently active ones, newest first. */
 const FEED_SESSIONS = 30;
@@ -573,6 +575,27 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
     case 'unfeed':
       feedSubscribers.delete(client);
       return null;
+    case 'processes':
+      return processSampler.sample(req.limit ?? 40);
+    case 'killProcess': {
+      // Judged against a fresh look, not the phone's possibly stale one.
+      const snapshot = processSampler.sample(100_000).processes;
+      const result = killProcess(req.pid, req.signal ?? 'SIGTERM', req.tree ?? false, snapshot, childrenFrom(realProcSource));
+      logLine(`killProcess ${req.pid} ${req.signal ?? 'SIGTERM'}${req.tree ? ' (tree)' : ''}: ${JSON.stringify(result)}`);
+      return result;
+    }
+    case 'reapOrphans': {
+      const orphans = processSampler.orphans();
+      const snapshot = processSampler.sample(100_000).processes;
+      const signal = req.signal ?? 'SIGTERM';
+      const results = orphans.map((o) => ({
+        pid: o.pid,
+        command: o.command,
+        ...killProcess(o.pid, signal, false, snapshot, childrenFrom(realProcSource)),
+      }));
+      logLine(`reapOrphans ${signal}: ${orphans.length} processes`);
+      return { reaped: results, freedBytes: orphans.reduce((n, o) => n + o.rssBytes, 0) };
+    }
     case 'interrupt': {
       void getSession(req.sessionId).interrupt();
       return null;
@@ -794,6 +817,11 @@ async function start(): Promise<void> {
 
   // The phone's way in. See gateway.ts; off unless gateway.json asks for it.
   const mobilePort = gatewayPort();
+  if (mobilePort !== null && gatewayProtect()) {
+    void import('./rescue.js').then(({ protectRescuePath, rescueTargets }) =>
+      protectRescuePath(rescueTargets(realProcSource), logLine),
+    );
+  }
   if (mobilePort !== null) {
     // Loaded only when switched on: the gateway pulls in `ws`, and a daemon
     // that most people run without it must never fail to start over it.

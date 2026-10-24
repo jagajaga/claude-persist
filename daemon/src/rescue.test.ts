@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RESCUE_OOM_ADJ, protectRescuePath, protectionScript, rescueTargets } from './rescue.js';
+import { RESCUE_OOM_ADJ, protectRescuePath, protectionScript, rescueFailure, rescueTargets } from './rescue.js';
 import type { ProcSource } from './processes.js';
 
 function source(cmds: Record<number, string>, self = 50): ProcSource {
@@ -64,5 +64,19 @@ test('protect: without sudo it says so and carries on', () => {
     cb(new Error('sudo: a password is required'))) as unknown as typeof import('node:child_process').execFile;
   const logs: string[] = [];
   protectRescuePath([50], (m) => logs.push(m), fakeRun);
-  assert.match(logs[0], /could not protect 50 .*continuing unprotected/);
+  assert.match(logs[0], /could not protect 50: no passwordless sudo; continuing unprotected/);
+});
+
+/** Measured on this host: root inside Docker, both writes refused. */
+test('failure: a container without the capabilities is named as such', () => {
+  const stderr = 'sh: 3: echo: echo: I/O error\nrenice: failed to set priority for 19 (process ID): Operation not permitted\n';
+  assert.match(rescueFailure('Command failed: sudo -n sh -c for p in 19; do', stderr), /CAP_SYS_RESOURCE.*cap_add/);
+});
+
+test('failure: no sudo is said plainly', () => {
+  assert.equal(rescueFailure('Command failed', 'sudo: a password is required\n'), 'no passwordless sudo');
+});
+
+test('failure: anything else shows its own first line, not the command', () => {
+  assert.equal(rescueFailure('Command failed: sudo -n sh -c long script', 'sh: renice: not found\n'), 'sh: renice: not found');
 });

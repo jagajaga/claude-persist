@@ -274,6 +274,14 @@ anything else first, and the daemon still gets scheduled under heavy load.
 -800 is deliberately not -1000 ("never kill"). Without sudo it logs that and
 runs unprotected.
 
+In a Docker container, sudo is not enough: Docker's default capability set
+drops the two capabilities this needs, so even root is refused. Add them to
+the container and restart it:
+
+```yaml
+cap_add: [SYS_RESOURCE, SYS_NICE]   # docker compose; or --cap-add for docker run
+```
+
 ### Optional: daemon under systemd
 
 The daemon is self-spawning, but a user unit brings it back after a reboot.

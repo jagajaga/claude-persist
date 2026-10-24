@@ -50,6 +50,21 @@ export function protectionScript(pids: number[], oomAdj = RESCUE_OOM_ADJ, nice =
   ].join('\n');
 }
 
+/**
+ * Why protection failed, in words. err.message starts with the whole command
+ * line, which hid the cause: inside Docker even root is refused, because the
+ * default capability set drops CAP_SYS_RESOURCE (needed to lower
+ * oom_score_adj) and CAP_SYS_NICE (needed for a negative nice).
+ */
+export function rescueFailure(message: string, stderr: string): string {
+  if (/I\/O error|Operation not permitted|Permission denied/.test(stderr)) {
+    return 'root here lacks CAP_SYS_RESOURCE and CAP_SYS_NICE (a container drops them by default; ' +
+      'add cap_add: [SYS_RESOURCE, SYS_NICE] to it)';
+  }
+  if (/password is required|a terminal is required/.test(stderr + message)) return 'no passwordless sudo';
+  return (stderr.trim().split('\n')[0] || message.split('\n')[0]).slice(0, 200);
+}
+
 /** Apply it; reports what happened, never throws. */
 export function protectRescuePath(
   pids: number[],
@@ -57,8 +72,11 @@ export function protectRescuePath(
   run: typeof execFile = execFile,
 ): void {
   if (pids.length === 0) return;
-  run('sudo', ['-n', 'sh', '-c', protectionScript(pids)], { timeout: 10_000 }, (err) => {
-    if (err) log(`rescue: could not protect ${pids.join(',')} (${err.message.split('\n')[0]}); continuing unprotected`);
-    else log(`rescue: protected pids ${pids.join(',')} (oom_score_adj ${RESCUE_OOM_ADJ}, nice ${RESCUE_NICE})`);
+  run('sudo', ['-n', 'sh', '-c', protectionScript(pids)], { timeout: 10_000 }, (err, _stdout, stderr) => {
+    if (!err) {
+      log(`rescue: protected pids ${pids.join(',')} (oom_score_adj ${RESCUE_OOM_ADJ}, nice ${RESCUE_NICE})`);
+      return;
+    }
+    log(`rescue: could not protect ${pids.join(',')}: ${rescueFailure(err.message, String(stderr ?? ''))}; continuing unprotected`);
   });
 }

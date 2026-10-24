@@ -127,7 +127,7 @@ with `pkill -f 'claude-persist.*daemon/dist/main.js'`, and delete
 ```bash
 npm install
 npm run build          # tsc for shared, daemon and extension
-npm test               # 367 daemon + 294 extension tests
+npm test               # 442 daemon + 294 extension tests
 ./scripts/package.sh   # -> claude-persist-<version>.vsix, no bundled runtime
 ```
 
@@ -220,6 +220,32 @@ It adds `interactive-widget=resizes-content` to code-server's viewport meta, so
 the keyboard shrinks the layout viewport and the whole workbench — editors,
 terminals and this extension's composer — stays above it. Hard-reload the
 browser afterwards; the HTML is cached.
+
+### Mobile gateway (for the Android client)
+
+The daemon can also serve its protocol over a WebSocket, for the
+[Android client](https://github.com/jagajaga/claude-persist-android). It is
+**off by default**; switch it on with
+
+```bash
+echo '{"port": 7790}' > ~/.claude-persist/gateway.json   # then restart the daemon
+```
+
+or `CLAUDE_PERSIST_GATEWAY_PORT=7790` for a one-off run. It binds to
+`127.0.0.1` only. The phone reaches it through code-server's own proxy --
+`https://<your-code-server>/proxy/7790/ws` -- so it sits behind whatever
+already protects code-server (Authelia, here) and no reverse-proxy rule has to
+change.
+
+It serves the same requests as the editor uses, plus a few the phone needs:
+`serverStats` (CPU, memory, swap, load, disk), `fsList` / `fsRead` (a
+read-only file browser, paged so large files resume on a bad link), and `feed`
+(the newest messages across every chat, then live). It is built for a poor
+connection: the server pings every ten seconds and lets go of a client that
+stops answering; a message sent with a `clientMessageId` is recorded once
+however many times a phone retries it, even across a daemon restart; and
+`POST /rpc` answers any single request over plain HTTP for networks where
+WebSockets keep dying.
 
 ### Optional: daemon under systemd
 

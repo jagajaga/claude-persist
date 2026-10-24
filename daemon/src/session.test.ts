@@ -1166,3 +1166,35 @@ test('naming: a tag in the answer is not doubled on the tab', async () => {
   await s.maybeRetitle();
   assert.doesNotMatch(s.meta.title, /\|.*\|/, s.meta.title);
 });
+
+// ---------- one message, however many times the phone sends it ---------------
+
+/**
+ * A phone on a bad network cannot tell a lost message from a lost
+ * acknowledgement, so it sends again. The id it gave the message, stored in
+ * the transcript, is how the second copy is recognised.
+ */
+test('send: a retry with the same client id is refused, and nothing is recorded', () => {
+  const session = makeSession(`idem-${Date.now()}`);
+  append(session, { type: 'user_message', text: 'hello', clientMessageId: 'phone-42' });
+  const before = session.eventCount;
+  const s = session as unknown as { sendMessage(t: string, a: unknown[], id?: string): boolean };
+  assert.equal(s.sendMessage('hello', [], 'phone-42'), false);
+  assert.equal(session.eventCount, before, 'no second copy in the transcript');
+});
+
+test('send: a different client id is a different message', () => {
+  const session = makeSession(`idem-other-${Date.now()}`);
+  append(session, { type: 'user_message', text: 'hello', clientMessageId: 'phone-1' });
+  const s = session as unknown as { hasClientMessage(id: string): boolean };
+  assert.equal(s.hasClientMessage('phone-1'), true);
+  assert.equal(s.hasClientMessage('phone-2'), false);
+});
+
+/** Only the person's messages count: an assistant line is never a duplicate send. */
+test('send: only user messages are matched by client id', () => {
+  const session = makeSession(`idem-kind-${Date.now()}`);
+  append(session, { type: 'assistant_text', text: 'x', clientMessageId: 'phone-9' } as never);
+  const s = session as unknown as { hasClientMessage(id: string): boolean };
+  assert.equal(s.hasClientMessage('phone-9'), false);
+});

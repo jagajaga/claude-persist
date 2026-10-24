@@ -409,7 +409,22 @@ export class DaemonSession {
     this.appendEvent({ type: 'status', status, detail });
   }
 
-  sendMessage(text: string, attachments: Attachment[] = []): void {
+  /**
+   * Is a message with this client id already in the transcript?
+   *
+   * Searched in the in-memory tail -- the newest thousand events -- which is
+   * where a retry lands: it follows the original by seconds or minutes, never
+   * by a thousand events.
+   */
+  hasClientMessage(clientMessageId: string): boolean {
+    return this.tail.some(
+      (p) => p.event.type === 'user_message' && p.event.clientMessageId === clientMessageId,
+    );
+  }
+
+  /** False, and nothing sent, when this is a retry of a message already here. */
+  sendMessage(text: string, attachments: Attachment[] = [], clientMessageId?: string): boolean {
+    if (clientMessageId && this.hasClientMessage(clientMessageId)) return false;
     // Keep the path and media type so the panel can render a thumbnail on
     // replay; the base64 itself is deliberately never persisted.
     const labels: AttachmentRef[] = attachments.map((a) =>
@@ -426,6 +441,7 @@ export class DaemonSession {
       type: 'user_message',
       text,
       ...(labels.length ? { attachments: labels } : {}),
+      ...(clientMessageId ? { clientMessageId } : {}),
     });
 
     const content: unknown[] = [];
@@ -449,7 +465,9 @@ export class DaemonSession {
 
     // Nothing to send into: the session already said why, and pushing anyway
     // would leave it "running" forever against a query that never started.
-    if (!this.ensureQuery()) return;
+    // Accepted either way: the message is in the transcript, and the session
+    // has said why nothing ran -- resending it would only add a second copy.
+    if (!this.ensureQuery()) return true;
     const envelope = {
       type: 'user',
       message: { role: 'user', content },
@@ -459,6 +477,7 @@ export class DaemonSession {
     this.input!.push(envelope);
     this.setStatus('running');
     this.armStallWatchdog();
+    return true;
   }
 
   /**

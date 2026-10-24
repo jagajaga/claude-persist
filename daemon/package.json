@@ -9,6 +9,10 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "*",
-    "@claude-persist/shared": "0.1.0"
+    "@claude-persist/shared": "0.1.0",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.2"
   }
 }

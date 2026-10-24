@@ -50,6 +50,11 @@ cp -r shared/dist extension/daemon/node_modules/@claude-persist/shared/dist
 # Marketplaces hand a platform-specific build to the platforms it targets and
 # the universal one to everybody else, so publishing both covers every machine
 # without multiplying the download.
+# ws, for the mobile gateway (daemon/src/gateway.ts). Pure JavaScript with no
+# dependencies of its own; loaded only when the gateway is switched on.
+mkdir -p extension/daemon/node_modules/ws
+cp -r node_modules/ws/. extension/daemon/node_modules/ws/
+
 cp -r node_modules/@anthropic-ai/claude-agent-sdk \
       extension/daemon/node_modules/@anthropic-ai/
 # The SDK package that matches CP_TARGET. Derived rather than passed in, so

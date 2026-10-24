@@ -68,3 +68,28 @@ export function pendingTurnSessionIds(): string[] {
     return [];
   }
 }
+
+/** Opt-in switch for the mobile gateway: `{ "port": 7790 }`. */
+export const gatewayConfigPath = path.join(baseDir, 'gateway.json');
+
+/**
+ * The port the mobile gateway should listen on, or null to not start it.
+ *
+ * Off unless asked for: it is a network listener, and the editor -- the only
+ * client most people have -- never needs one. An environment variable wins
+ * over the file so a one-off run can try it without touching the setting.
+ */
+export function gatewayPort(
+  env: NodeJS.ProcessEnv = process.env,
+  readConfig: () => string = () => fs.readFileSync(gatewayConfigPath, 'utf8'),
+): number | null {
+  const valid = (n: unknown): number | null =>
+    typeof n === 'number' && Number.isInteger(n) && n > 0 && n < 65536 ? n : null;
+  const fromEnv = (env.CLAUDE_PERSIST_GATEWAY_PORT ?? '').trim();
+  if (fromEnv) return valid(Number(fromEnv));
+  try {
+    return valid((JSON.parse(readConfig()) as { port?: unknown }).port);
+  } catch {
+    return null;
+  }
+}

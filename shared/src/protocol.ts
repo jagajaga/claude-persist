@@ -108,7 +108,13 @@ export interface AttachmentRef {
 
 /** A single chat-visible event. Persisted events replay after reconnect. */
 export type ChatEvent =
-  | { type: 'user_message'; text: string; attachments?: AttachmentRef[] }
+  /**
+   * `clientMessageId` is the sender's own id for this message. A phone on a bad
+   * network cannot know whether a send it never heard back about arrived, so
+   * it sends again; the id, kept here in the transcript, is how the daemon
+   * recognises the second copy -- even after it has restarted in between.
+   */
+  | { type: 'user_message'; text: string; attachments?: AttachmentRef[]; clientMessageId?: string }
   /** `agent` names the subagent that wrote it; absent means the main thread. */
   | { type: 'assistant_text'; text: string; agent?: string }
   | { type: 'tool_use'; toolUseId?: string; toolName: string; input: unknown; agent?: string }
@@ -297,7 +303,12 @@ export type Request =
    */
   | { id: number; op: 'attach'; sessionId: string; sinceSeq: number; limit?: number }
   | { id: number; op: 'detach'; sessionId: string }
-  | { id: number; op: 'sendMessage'; sessionId: string; text: string; attachments?: Attachment[] }
+  /**
+   * Answers `{ duplicate: true }`, and sends nothing, when a message with the
+   * same `clientMessageId` is already in the transcript: a retry from a client
+   * that never saw the first acknowledgement.
+   */
+  | { id: number; op: 'sendMessage'; sessionId: string; text: string; attachments?: Attachment[]; clientMessageId?: string }
   | { id: number; op: 'interrupt'; sessionId: string }
   | { id: number; op: 'permission'; sessionId: string; requestId: string; allow: boolean; message?: string; answers?: Record<string, string> }
   | { id: number; op: 'setPermissionMode'; sessionId: string; mode: PermissionMode }
@@ -327,7 +338,21 @@ export type Request =
   /** Stop one running subagent. Needs the SDK task id, not the tool_use id. */
   | { id: number; op: 'stopAgent'; sessionId: string; taskId: string }
   /** `configDir: null` switches back to the default account. */
-  | { id: number; op: 'setAccount'; configDir: string | null };
+  | { id: number; op: 'setAccount'; configDir: string | null }
+  // ---- for the mobile client, served through the gateway ----
+  /** CPU, memory, swap, load and disk of the machine the daemon runs on. */
+  | { id: number; op: 'serverStats' }
+  /** A directory listing. Read-only; absolute paths only. */
+  | { id: number; op: 'fsList'; path: string }
+  /** One page of a file; text when it is text, else base64. */
+  | { id: number; op: 'fsRead'; path: string; offset?: number; length?: number }
+  /**
+   * Subscribe to every session's events at once, for the feed across all
+   * chats. Answers with the most recent ones; after that they arrive as
+   * ordinary `event` pushes, each carrying its sessionId.
+   */
+  | { id: number; op: 'feed'; limit?: number }
+  | { id: number; op: 'unfeed' };
 
 export type Push =
   | { kind: 'event'; sessionId: string; event: PersistedEvent }

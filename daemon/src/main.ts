@@ -17,7 +17,7 @@ import type { HelloResult } from '@claude-persist/shared';
 import { PROTOCOL_VERSION } from '@claude-persist/shared';
 import { NO_CLAUDE_MESSAGE, claudeExecutable } from './claudeExecutable.js';
 import { AccountUsageStore } from './accountUsage.js';
-import { ensureDirs, socketPath, socketIsFile, lockPath, sessionLogPath, logPath, pendingTurnSessionIds, pendingTurnPath } from './paths.js';
+import { ensureDirs, gatewayPort, socketPath, socketIsFile, lockPath, sessionLogPath, logPath, pendingTurnSessionIds, pendingTurnPath } from './paths.js';
 import { releaseLock } from './lock.js';
 import { claimOwnership } from './ownership.js';
 import { Registry } from './registry.js';
@@ -28,6 +28,8 @@ import { importClaudeSession, listClaudeSessions } from './importer.js';
 import { accountIdentity, accountsStore, shareUserConfig } from './accounts.js';
 import { LoginManager } from './login.js';
 import { applyRateLimitEvent, applyUsageResponse } from './usage.js';
+import { StatsSampler } from './serverStats.js';
+import { listDirectory, readFileSlice } from './fsView.js';
 import {
   type IdentityOf,
   type RotationState,
@@ -99,14 +101,29 @@ const sessions = new Map<string, DaemonSession>();
 /** sessionId -> set of client connections subscribed to it */
 const subscribers = new Map<string, Set<Client>>();
 
+/** A connection: the editor over the Unix socket, or the phone over the gateway. */
 interface Client {
-  socket: net.Socket;
   send(message: ServerMessage): void;
   attached: Set<string>;
 }
 
+/** Clients following every session at once: the phone's feed across all chats. */
+const feedSubscribers = new Set<Client>();
+
+/**
+ * What the feed carries. The rest -- tool calls, results, status ticks -- is
+ * the detail of a chat, not news from it, and on a bad network it is most of
+ * the bytes.
+ */
+const FEED_EVENT_TYPES = new Set(['user_message', 'assistant_text', 'permission_request', 'question_request', 'result']);
+
 function broadcast(sessionId: string, message: ServerMessage): void {
-  for (const client of subscribers.get(sessionId) ?? []) client.send(message);
+  const subs = subscribers.get(sessionId);
+  for (const client of subs ?? []) client.send(message);
+  if (message.kind === 'event' && FEED_EVENT_TYPES.has(message.event.event.type)) {
+    // Once only: a client attached to this chat already has it.
+    for (const client of feedSubscribers) if (!subs?.has(client)) client.send(message);
+  }
 }
 
 function broadcastAll(message: ServerMessage): void {
@@ -465,6 +482,35 @@ function sessionInfo(id: string): SessionInfo {
   };
 }
 
+const statsSampler = new StatsSampler();
+
+/** Sessions worth reading for the feed: recently active ones, newest first. */
+const FEED_SESSIONS = 30;
+const FEED_PER_SESSION = 40;
+
+/**
+ * The newest feed-worthy events across recently active chats, newest first.
+ *
+ * Only recently active sessions are opened: constructing one reads its log,
+ * and opening every session ever made to show the last few hours would make
+ * the first feed request the slowest thing the daemon does.
+ */
+function recentFeed(limit = 200): Array<{ sessionId: string; title: string; event: unknown }> {
+  const metas = registry
+    .list()
+    .sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))
+    .slice(0, FEED_SESSIONS);
+  const out: Array<{ sessionId: string; title: string; event: { ts: number; seq: number; event: { type: string } } }> = [];
+  for (const meta of metas) {
+    const session = getSession(meta.id);
+    const { events } = session.eventsSince(Math.max(0, session.eventCount - 400), 400);
+    const kept = events.filter((e) => FEED_EVENT_TYPES.has(e.event.type)).slice(-FEED_PER_SESSION);
+    for (const event of kept) out.push({ sessionId: meta.id, title: meta.title, event });
+  }
+  out.sort((a, b) => b.event.ts - a.event.ts);
+  return out.slice(0, Math.max(1, Math.min(1000, limit)));
+}
+
 function handleRequest(client: Client, req: Request): unknown | Promise<unknown> {
   switch (req.op) {
     case 'hello':
@@ -510,10 +556,23 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
     }
     case 'sendMessage': {
       const session = getSession(req.sessionId);
-      session.sendMessage(req.text, req.attachments ?? []);
-      registry.touch(req.sessionId);
-      return null;
+      const accepted = session.sendMessage(req.text, req.attachments ?? [], req.clientMessageId);
+      if (accepted) registry.touch(req.sessionId);
+      return { duplicate: !accepted };
     }
+    case 'serverStats':
+      return statsSampler.sample();
+    case 'fsList':
+      return listDirectory(req.path);
+    case 'fsRead':
+      return readFileSlice(req.path, req.offset, req.length);
+    case 'feed': {
+      feedSubscribers.add(client);
+      return recentFeed(req.limit);
+    }
+    case 'unfeed':
+      feedSubscribers.delete(client);
+      return null;
     case 'interrupt': {
       void getSession(req.sessionId).interrupt();
       return null;
@@ -614,15 +673,24 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
 
 const clients = new Set<Client>();
 
-function onConnection(socket: net.Socket): void {
-  const client: Client = {
-    socket,
-    attached: new Set(),
-    send(message: ServerMessage): void {
-      if (!socket.destroyed) socket.write(`${JSON.stringify(message)}\n`);
-    },
-  };
+/** A new connection, however it arrived. */
+function openClient(send: (message: ServerMessage) => void): Client {
+  const client: Client = { attached: new Set(), send };
   clients.add(client);
+  return client;
+}
+
+/** Forget a connection and everything it was subscribed to. */
+function closeClient(client: Client): void {
+  clients.delete(client);
+  feedSubscribers.delete(client);
+  for (const sessionId of client.attached) subscribers.get(sessionId)?.delete(client);
+}
+
+function onConnection(socket: net.Socket): void {
+  const client = openClient((message) => {
+    if (!socket.destroyed) socket.write(`${JSON.stringify(message)}\n`);
+  });
 
   let buffer = '';
   socket.on('data', (chunk) => {
@@ -660,10 +728,7 @@ function onConnection(socket: net.Socket): void {
     }
   });
 
-  const cleanup = (): void => {
-    clients.delete(client);
-    for (const sessionId of client.attached) subscribers.get(sessionId)?.delete(client);
-  };
+  const cleanup = (): void => closeClient(client);
   socket.on('close', cleanup);
   socket.on('error', cleanup);
 }
@@ -726,6 +791,28 @@ async function start(): Promise<void> {
     });
   };
   bind();
+
+  // The phone's way in. See gateway.ts; off unless gateway.json asks for it.
+  const mobilePort = gatewayPort();
+  if (mobilePort !== null) {
+    // Loaded only when switched on: the gateway pulls in `ws`, and a daemon
+    // that most people run without it must never fail to start over it.
+    void import('./gateway.js')
+      .then(({ startGateway }) => startGateway<Client>({
+      port: mobilePort,
+      handlers: {
+        open: (send) => openClient(send as (message: ServerMessage) => void),
+        request: (client, req) => handleRequest(client, req as unknown as Request),
+        close: closeClient,
+      },
+      log: logLine,
+    }))
+      .catch((err: unknown) => {
+      // A taken port must not take the daemon with it: the editor does not
+      // need the gateway, and losing every chat to a port clash would be absurd.
+      logLine(`gateway did not start on port ${mobilePort}: ${String(err)}`);
+    });
+  }
 
   /**
    * Self-heal: notice when our socket file stops being ours.

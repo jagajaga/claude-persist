@@ -297,6 +297,7 @@ test('subagent text is stamped with the agent that wrote it', () => {
 
 test('the main thread is not badged', () => {
   const session = makeSession(`agent-main-${Date.now()}`);
+  session.status = 'running'; // mid-turn, as main-thread text always is
   feed(session, {
     type: 'assistant',
     parent_tool_use_id: null,
@@ -1197,4 +1198,41 @@ test('send: only user messages are matched by client id', () => {
   append(session, { type: 'assistant_text', text: 'x', clientMessageId: 'phone-9' } as never);
   const s = session as unknown as { hasClientMessage(id: string): boolean };
   assert.equal(s.hasClientMessage('phone-9'), false);
+});
+
+// ---------------------------------------------------------------------------
+// A turn nobody asked for still counts as running
+// ---------------------------------------------------------------------------
+
+/** Measured after a daemon restart: the resumed CLI's first result is empty, then the real turn runs. */
+test('the model talking after a stray result shows the session running again', () => {
+  const session = makeSession(`stray-result-${Date.now()}`);
+  session.status = 'running';
+  feed(session, { type: 'result', subtype: 'success', result: '', duration_ms: 228 });
+  assert.equal(session.status, 'idle');
+  feed(session, {
+    type: 'assistant',
+    parent_tool_use_id: null,
+    message: { content: [{ type: 'tool_use', id: 'toolu_x', name: 'Bash', input: { command: 'ls' } }] },
+  });
+  assert.equal(session.status, 'running', 'the real turn is under way');
+  feed(session, { type: 'result', subtype: 'success', result: 'done' });
+  assert.equal(session.status, 'idle', 'and its own result ends it');
+});
+
+test('a subagent writing while the main thread is idle does not mark the turn running', () => {
+  const session = makeSession(`idle-subagent-${Date.now()}`);
+  feed(session, {
+    type: 'assistant',
+    parent_tool_use_id: 'toolu_bg',
+    message: { content: [{ type: 'text', text: 'background work' }] },
+  });
+  assert.equal(session.status, 'idle');
+});
+
+test('an errored session is not quietly relabelled running', () => {
+  const session = makeSession(`errored-${Date.now()}`);
+  session.status = 'error';
+  feed(session, { type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'text', text: 'x' }] } });
+  assert.equal(session.status, 'error');
 });

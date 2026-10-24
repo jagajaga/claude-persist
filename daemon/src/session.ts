@@ -1468,6 +1468,16 @@ export class DaemonSession {
     // transcript at once, interleaved.
     const agent = this.agentTagFor(parent);
     this.lastSdkActivityAt = Date.now();
+    // The model is talking, so a turn is under way, whatever the status says.
+    // Two ways that happens with no message from us to set "running": a
+    // resumed CLI answers its first message with an empty result (228 ms, no
+    // summary) and only then does the real work, and the CLI starts a turn of
+    // its own when a background task finishes. Both left a working chat shown
+    // as idle in the sidebar and on the phone, with no stall watchdog behind it.
+    if (msg.type === 'assistant' && !parent && this.status === 'idle') {
+      this.setStatus('running');
+      this.armStallWatchdog();
+    }
     switch (msg.type) {
       case 'system': {
         if (msg.subtype === 'init') {

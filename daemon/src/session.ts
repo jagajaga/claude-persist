@@ -935,6 +935,29 @@ export class DaemonSession {
     return true;
   }
 
+  /**
+   * Move the chat to another folder. The next turn starts there, with the
+   * whole conversation: the SDK transcript is found wherever it was written
+   * and copied to where the new folder expects it (ensureSdkTranscript), the
+   * same way a switch of account keeps it.
+   *
+   * Refused mid-turn: the tools in flight are working in the old folder.
+   */
+  moveTo(cwd: string): void {
+    if (this.status === 'running' || this.busy) {
+      throw new Error('This chat is working. Stop it, or wait for it to finish, before moving it.');
+    }
+    if (cwd === this.meta.cwd) return;
+    const from = this.meta.cwd;
+    this.meta.cwd = cwd;
+    this.cwdChecked = false;
+    this.effectiveCwd = '';
+    this.disposeActiveQuery();
+    this.callbacks.onMetaChanged();
+    this.callbacks.log(`session ${this.meta.id} moved from ${from} to ${cwd}`);
+    this.appendEvent({ type: 'status', status: this.status, detail: `Working folder changed to ${cwd}. The next message runs there.` });
+  }
+
   /** Called by the daemon at startup for sessions with a parked turn on disk. */
   restorePending(): void {
     try {

@@ -565,6 +565,19 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
         hasEarlier,
       };
     }
+    case 'setSessionCwd': {
+      if (!path.isAbsolute(req.cwd)) throw new Error('The folder must be an absolute path');
+      let isDir = false;
+      try {
+        isDir = fs.statSync(req.cwd).isDirectory();
+      } catch {
+        // missing
+      }
+      if (!isDir) throw new Error(`${req.cwd} is not a folder on this machine`);
+      getSession(req.sessionId).moveTo(path.resolve(req.cwd));
+      broadcastAll({ kind: 'sessions_changed' });
+      return sessionInfo(req.sessionId);
+    }
     case 'workPlaces': {
       const meta = registry.get(req.sessionId);
       if (!meta) throw new Error(`unknown session ${req.sessionId}`);

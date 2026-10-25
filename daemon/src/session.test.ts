@@ -1269,3 +1269,21 @@ test('an errored session is not quietly relabelled running', () => {
   feed(session, { type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'text', text: 'x' }] } });
   assert.equal(session.status, 'error');
 });
+
+// ---------- moving a chat to another folder ---------------------------------
+
+test('moveTo: the folder changes and the chat says so', () => {
+  const session = makeSession(`move-${Date.now()}`, { cwd: '/tmp' });
+  session.moveTo(os.tmpdir() + '/elsewhere');
+  assert.equal((session as unknown as { meta: { cwd: string } }).meta.cwd, os.tmpdir() + '/elsewhere');
+  const last = session.eventsSince(0, 10).events.at(-1)?.event as { type: string; detail?: string };
+  assert.equal(last.type, 'status');
+  assert.match(last.detail ?? '', /Working folder changed to .*elsewhere/);
+});
+
+test('moveTo: refused while a turn is running, nothing changed', () => {
+  const session = makeSession(`move-busy-${Date.now()}`, { cwd: '/tmp' });
+  session.status = 'running';
+  assert.throws(() => session.moveTo('/srv'), /working/);
+  assert.equal((session as unknown as { meta: { cwd: string } }).meta.cwd, '/tmp');
+});

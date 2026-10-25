@@ -164,6 +164,16 @@ test('e2e: a chat says which branch it works on', async () => {
   assert.deepEqual((await call('workPlaces', { sessionId: plain.id })).result, { places: [] });
 });
 
+test('e2e: a chat moves to another folder, and only to a real one', async () => {
+  const a = fs.mkdtempSync(path.join(home, 'from-'));
+  const b = fs.mkdtempSync(path.join(home, 'to-'));
+  const s = (await call('createSession', { cwd: a, title: 'mover' })).result as { id: string };
+  const moved = (await call('setSessionCwd', { sessionId: s.id, cwd: b })).result as { cwd: string };
+  assert.equal(moved.cwd, b);
+  assert.equal((await call('setSessionCwd', { sessionId: s.id, cwd: path.join(b, 'nope') })).ok, false);
+  assert.equal((await call('setSessionCwd', { sessionId: s.id, cwd: 'relative/dir' })).ok, false);
+});
+
 test('e2e: history answers with older events, read-only', async () => {
   const dir = fs.mkdtempSync(path.join(home, 'history-'));
   const s = (await call('createSession', { cwd: dir, title: 'history source' })).result as { id: string };

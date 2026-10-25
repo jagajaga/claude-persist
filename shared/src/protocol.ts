@@ -296,6 +296,8 @@ export type Request =
   | { id: number; op: 'hello'; protocolVersion: number }
   | { id: number; op: 'listSessions' }
   | { id: number; op: 'createSession'; cwd: string; title?: string }
+  /** Move a chat to another folder; its next turn runs there, history intact. Refused mid-turn. */
+  | { id: number; op: 'setSessionCwd'; sessionId: string; cwd: string }
   /**
    * `limit` caps how many events come back, keeping the newest. A long-running
    * session can hold tens of thousands; replaying all of them would ship

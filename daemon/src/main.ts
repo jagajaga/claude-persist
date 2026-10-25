@@ -130,6 +130,9 @@ const FEED_EVENT_TYPES = new Set([
   'tool_result',
   'permission_request',
   'question_request',
+  // So a phone hears that a request was answered -- here, in the editor, by
+  // anyone -- and can take down its notification and resolve the card.
+  'permission_resolved',
   'result',
 ]);
 

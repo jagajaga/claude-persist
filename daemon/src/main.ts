@@ -116,7 +116,17 @@ const feedSubscribers = new Set<Client>();
  * the detail of a chat, not news from it, and on a bad network it is most of
  * the bytes.
  */
-const FEED_EVENT_TYPES = new Set(['user_message', 'assistant_text', 'permission_request', 'question_request', 'result']);
+// Tool calls and their results too: the phone shows the feed as one long chat
+// across every running agent, tool cards and all, not as a list of headlines.
+const FEED_EVENT_TYPES = new Set([
+  'user_message',
+  'assistant_text',
+  'tool_use',
+  'tool_result',
+  'permission_request',
+  'question_request',
+  'result',
+]);
 
 function broadcast(sessionId: string, message: ServerMessage): void {
   const subs = subscribers.get(sessionId);
@@ -488,7 +498,7 @@ const processSampler = new ProcessSampler();
 
 /** Sessions worth reading for the feed: recently active ones, newest first. */
 const FEED_SESSIONS = 30;
-const FEED_PER_SESSION = 40;
+const FEED_PER_SESSION = 80;
 
 /**
  * The newest feed-worthy events across recently active chats, newest first.
@@ -550,6 +560,10 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
         events,
         hasEarlier,
       };
+    }
+    case 'history': {
+      const limit = req.limit && req.limit > 0 ? Math.min(req.limit, 1000) : DEFAULT_REPLAY_LIMIT;
+      return getSession(req.sessionId).eventsBefore(req.beforeSeq, limit);
     }
     case 'detach': {
       client.attached.delete(req.sessionId);

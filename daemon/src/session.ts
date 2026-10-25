@@ -330,6 +330,19 @@ export class DaemonSession {
    * here so a request bounded to `limit` never has to materialize more).
    * `hasEarlier` tells the caller whether older events were cut off.
    */
+  /** The newest `limit` events before `beforeSeq`, for scrolling back through a chat. */
+  eventsBefore(beforeSeq: number, limit: number): { events: PersistedEvent[]; hasEarlier: boolean } {
+    const end = Math.min(Math.max(0, beforeSeq), this.totalCount);
+    const start = Math.max(0, end - Math.max(1, limit));
+    if (end <= start) return { events: [], hasEarlier: false };
+    const tailStart = this.totalCount - this.tail.length;
+    const events =
+      start >= tailStart
+        ? this.tail.slice(start - tailStart, end - tailStart)
+        : readRange(allLogFiles(this.meta.id), start, end);
+    return { events, hasEarlier: start > 0 };
+  }
+
   eventsSince(seq: number, limit: number): { events: PersistedEvent[]; hasEarlier: boolean } {
     const start = Math.max(0, seq);
     const total = this.totalCount;

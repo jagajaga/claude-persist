@@ -160,6 +160,39 @@ test('appending past ROTATE_THRESHOLD rotates the active log without losing or r
   );
 });
 
+// ---------- history: paging back -------------------------------------------
+
+test('eventsBefore: the newest `limit` before a seq, oldest first', () => {
+  const session = makeSession(`before-${Date.now()}`);
+  for (let i = 0; i < 10; i++) append(session, { type: 'assistant_text', text: `m${i}` });
+  const page = session.eventsBefore(7, 3);
+  assert.deepEqual(page.events.map((e) => e.seq), [4, 5, 6]);
+  assert.equal(page.hasEarlier, true);
+});
+
+test('eventsBefore: the first page says there is nothing earlier', () => {
+  const session = makeSession(`before-first-${Date.now()}`);
+  for (let i = 0; i < 5; i++) append(session, { type: 'assistant_text', text: `m${i}` });
+  assert.deepEqual(session.eventsBefore(3, 100).events.map((e) => e.seq), [0, 1, 2]);
+  assert.equal(session.eventsBefore(3, 100).hasEarlier, false);
+  assert.deepEqual(session.eventsBefore(0, 100), { events: [], hasEarlier: false });
+});
+
+/** A long chat's early history is only on disk, in rotated archives, not in the in-memory tail. */
+test('eventsBefore: pages back past the in-memory tail into rotated archives', () => {
+  const id = `before-disk-${Date.now()}`;
+  const writer = makeSession(id);
+  const n = 4500;
+  for (let i = 0; i < n; i++) append(writer, { type: 'assistant_text', text: `msg ${i}` });
+  const session = makeSession(id); // reloaded: only the newest MAX_TAIL are in memory
+  const deep = session.eventsBefore(100, 50);
+  assert.deepEqual(deep.events.map((e) => e.seq), Array.from({ length: 50 }, (_, i) => 50 + i));
+  assert.equal((deep.events[0].event as { text: string }).text, 'msg 50');
+  // Straddling the boundary between disk and memory is still contiguous.
+  const edge = session.eventsBefore(n - 990, 20);
+  assert.deepEqual(edge.events.map((e) => e.seq), Array.from({ length: 20 }, (_, i) => n - 1010 + i));
+});
+
 /**
  * A daemon restart used to kill whatever was mid-turn: shutdown() disposes every
  * session, closing the SDK query, and nothing recorded that work had been in

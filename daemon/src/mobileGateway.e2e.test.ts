@@ -137,6 +137,14 @@ test('e2e: a resent message with the same client id is recorded once', async () 
   assert.equal(copies.length, 1);
 });
 
+test('e2e: history answers with older events, read-only', async () => {
+  const dir = fs.mkdtempSync(path.join(home, 'history-'));
+  const s = (await call('createSession', { cwd: dir, title: 'history source' })).result as { id: string };
+  const r = await call('history', { sessionId: s.id, beforeSeq: 0, limit: 50 });
+  assert.equal(r.ok, true, String(r.error));
+  assert.deepEqual(r.result, { events: [], hasEarlier: false });
+});
+
 test('e2e: the feed answers with recent events across chats', async () => {
   const r = await call('feed', { limit: 50 });
   assert.equal(r.ok, true);

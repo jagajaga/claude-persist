@@ -304,6 +304,12 @@ export type Request =
   | { id: number; op: 'attach'; sessionId: string; sinceSeq: number; limit?: number }
   | { id: number; op: 'detach'; sessionId: string }
   /**
+   * Older events, for scrolling back: the newest `limit` before `beforeSeq`.
+   * Answers `{ events, hasEarlier }`. Read-only, so it neither attaches nor
+   * subscribes -- a phone paging back through a long chat is just reading.
+   */
+  | { id: number; op: 'history'; sessionId: string; beforeSeq: number; limit?: number }
+  /**
    * Answers `{ duplicate: true }`, and sends nothing, when a message with the
    * same `clientMessageId` is already in the transcript: a retry from a client
    * that never saw the first acknowledgement.

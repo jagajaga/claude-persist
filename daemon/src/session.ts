@@ -109,6 +109,8 @@ class InputQueue<T> implements AsyncIterable<T> {
 
 export interface SessionCallbacks {
   onEvent(sessionId: string, event: PersistedEvent): void;
+  /** Each API call's token usage, subagents' too, as it arrives: for the token-flow meter. */
+  onTokens?(sessionId: string, usage: Record<string, unknown>, messageId?: string): void;
   onDelta(sessionId: string, text: string): void;
   onMetaChanged(): void;
   /** A session renamed itself; persist it and tell the windows. */
@@ -1541,6 +1543,10 @@ export class DaemonSession {
         // make the context ring show someone else's window.
         if (message?.usage && msg.parent_tool_use_id == null) {
           this.lastCallUsage = message.usage;
+        }
+        if (message?.usage) {
+          const id = (message as { id?: unknown }).id;
+          this.callbacks.onTokens?.(this.meta.id, message.usage, typeof id === 'string' ? id : undefined);
         }
         for (const block of message?.content ?? []) {
           if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {

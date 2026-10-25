@@ -1,3 +1,4 @@
+import { TokenMeter } from './tokenFlow.js';
 import { findGitDir, registeredWorktrees, workPlaces } from './gitBranch.js';
 import { dirsInUseBySession } from './activeDirs.js';
 import { appRelease } from './appRelease.js';
@@ -348,6 +349,9 @@ const callbacks = {
   onMetaChanged(): void {
     registry.save();
   },
+  onTokens(sessionId: string, usage: Record<string, unknown>, messageId?: string): void {
+    tokenMeter.record(sessionId, usage, messageId);
+  },
   /**
    * A session named itself. Unlike onMetaChanged this has to reach the windows:
    * the name is on a tab and in a tree, and nothing else will tell them.
@@ -498,6 +502,8 @@ function sessionInfo(id: string): SessionInfo {
 }
 
 const statsSampler = new StatsSampler();
+/** Tokens through Claude across every chat, for the phone's top bar and Server tab. */
+const tokenMeter = new TokenMeter();
 const processSampler = new ProcessSampler();
 
 /** Sessions worth reading for the feed: recently active ones, newest first. */
@@ -613,7 +619,7 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
       return { duplicate: !accepted };
     }
     case 'serverStats':
-      return statsSampler.sample();
+      return { ...statsSampler.sample(), tokens: tokenMeter.snapshot() };
     case 'fsList':
       return listDirectory(req.path);
     case 'fsRead':

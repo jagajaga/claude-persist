@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RESCUE_OOM_ADJ, protectRescuePath, protectionScript, rescueFailure, rescueTargets } from './rescue.js';
+import { RESCUE_NICE, RESCUE_OOM_ADJ, protectRescuePath, protectionScript, rescueFailure, rescueTargets, sweepInherited, type PriorityIo } from './rescue.js';
 import type { ProcSource } from './processes.js';
 
 function source(cmds: Record<number, string>, self = 50): ProcSource {
@@ -79,4 +79,73 @@ test('failure: no sudo is said plainly', () => {
 
 test('failure: anything else shows its own first line, not the command', () => {
   assert.equal(rescueFailure('Command failed: sudo -n sh -c long script', 'sh: renice: not found\n'), 'sh: renice: not found');
+});
+
+// ---------- inheritance -------------------------------------------------------
+
+/** A /proc of oom_score_adj and per-thread nice values that records what was changed. */
+function fakeIo(procs: Record<number, { oom: number; threads: Record<number, number> }>): PriorityIo {
+  return {
+    oomAdj: (pid) => procs[pid]?.oom ?? null,
+    setOomAdj: (pid, v) => {
+      if (!procs[pid]) throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+      procs[pid].oom = v;
+    },
+    threads: (pid) => Object.keys(procs[pid]?.threads ?? {}).map(Number),
+    nice: (tid) => {
+      for (const p of Object.values(procs)) if (tid in p.threads) return p.threads[tid];
+      return null;
+    },
+    setNice: (tid, v) => {
+      for (const p of Object.values(procs)) if (tid in p.threads) p.threads[tid] = v;
+    },
+  };
+}
+
+/** The point of it: a dev server started from a protected terminal must be killable first. */
+test('sweep: an inheritor is put back to normal, threads and all', () => {
+  const procs = {
+    50: { oom: RESCUE_OOM_ADJ, threads: { 50: RESCUE_NICE, 51: RESCUE_NICE } }, // the daemon
+    700: { oom: RESCUE_OOM_ADJ, threads: { 700: RESCUE_NICE, 701: RESCUE_NICE } }, // vite, inherited
+  };
+  const reset = sweepInherited([50, 700], new Set([50]), fakeIo(procs));
+  assert.deepEqual(reset, [700]);
+  assert.equal(procs[700].oom, 0);
+  assert.deepEqual(procs[700].threads, { 700: 0, 701: 0 });
+});
+
+test('sweep: the targets keep their protection', () => {
+  const procs = { 50: { oom: RESCUE_OOM_ADJ, threads: { 50: RESCUE_NICE } } };
+  sweepInherited([50], new Set([50]), fakeIo(procs));
+  assert.equal(procs[50].oom, RESCUE_OOM_ADJ);
+  assert.equal(procs[50].threads[50], RESCUE_NICE);
+});
+
+test('sweep: values someone else chose are left alone', () => {
+  const procs = {
+    800: { oom: -500, threads: { 800: RESCUE_NICE } }, // not ours
+    900: { oom: RESCUE_OOM_ADJ, threads: { 900: 10 } }, // ours, but niced down by its owner since
+  };
+  const reset = sweepInherited([800, 900], new Set(), fakeIo(procs));
+  assert.deepEqual(reset, [900]);
+  assert.equal(procs[800].oom, -500);
+  assert.equal(procs[800].threads[800], RESCUE_NICE);
+  assert.equal(procs[900].threads[900], 10);
+});
+
+test('sweep: a process that exits mid-sweep is skipped, not thrown', () => {
+  const io = fakeIo({});
+  const gone: PriorityIo = { ...io, oomAdj: () => RESCUE_OOM_ADJ };
+  assert.deepEqual(sweepInherited([12345], new Set(), gone), []);
+});
+
+test('protect: the sweep starts only once protection has worked', () => {
+  let started = 0;
+  const ok = ((_c: string, _a: string[], _o: unknown, cb: (err: Error | null) => void) => cb(null)) as unknown as typeof import('node:child_process').execFile;
+  const bad = ((_c: string, _a: string[], _o: unknown, cb: (err: Error | null, o: string, e: string) => void) =>
+    cb(new Error('Command failed'), '', 'sh: echo: I/O error')) as unknown as typeof import('node:child_process').execFile;
+  protectRescuePath([50], () => {}, bad, () => started++);
+  assert.equal(started, 0);
+  protectRescuePath([50], () => {}, ok, () => started++);
+  assert.equal(started, 1);
 });

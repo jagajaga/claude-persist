@@ -818,9 +818,19 @@ async function start(): Promise<void> {
   // The phone's way in. See gateway.ts; off unless gateway.json asks for it.
   const mobilePort = gatewayPort();
   if (mobilePort !== null && gatewayProtect()) {
-    void import('./rescue.js').then(({ protectRescuePath, rescueTargets }) =>
-      protectRescuePath(rescueTargets(realProcSource), logLine),
-    );
+    void import('./rescue.js').then(({ protectRescuePath, rescueTargets, sweepInherited, SWEEP_MS }) => {
+      const targets = rescueTargets(realProcSource);
+      protectRescuePath(targets, logLine, undefined, () => {
+        // Children inherit the protection; take it back from all but the targets.
+        const keep = new Set(targets);
+        const sweep = (): void => {
+          const reset = sweepInherited(realProcSource.pids(), keep);
+          if (reset.length) logLine(`rescue: took inherited protection back from ${reset.length} process(es)`);
+        };
+        sweep();
+        setInterval(sweep, SWEEP_MS).unref();
+      });
+    });
   }
   if (mobilePort !== null) {
     // Loaded only when switched on: the gateway pulls in `ws`, and a daemon

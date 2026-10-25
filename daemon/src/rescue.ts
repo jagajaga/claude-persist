@@ -13,6 +13,8 @@
 // sudo if the host has it, once, at startup -- while the machine is healthy
 // enough to run it -- and does nothing at all if it does not.
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import type { ProcSource } from './processes.js';
 
 /** Low enough that the kernel kills almost anything else first; not -1000, which is "never". */
@@ -65,18 +67,92 @@ export function rescueFailure(message: string, stderr: string): string {
   return (stderr.trim().split('\n')[0] || message.split('\n')[0]).slice(0, 200);
 }
 
-/** Apply it; reports what happened, never throws. */
+/** Apply it; reports what happened, never throws. `onProtected` runs only if it worked. */
 export function protectRescuePath(
   pids: number[],
   log: (message: string) => void,
   run: typeof execFile = execFile,
+  onProtected: () => void = () => {},
 ): void {
   if (pids.length === 0) return;
   run('sudo', ['-n', 'sh', '-c', protectionScript(pids)], { timeout: 10_000 }, (err, _stdout, stderr) => {
     if (!err) {
       log(`rescue: protected pids ${pids.join(',')} (oom_score_adj ${RESCUE_OOM_ADJ}, nice ${RESCUE_NICE})`);
+      onProtected();
       return;
     }
     log(`rescue: could not protect ${pids.join(',')}: ${rescueFailure(err.message, String(stderr ?? ''))}; continuing unprotected`);
   });
 }
+
+// ---------------------------------------------------------------- inheritance
+//
+// A child starts with its parent's oom_score_adj and nice. Protect code-server
+// and this daemon, and every process started afterwards inherits it: each chat
+// the daemon runs, each terminal code-server opens, and each dev server those
+// launch. The hog would be protected along with the way in, which is worse
+// than no protection at all. So whatever carries the protection without being
+// a target is put back to normal. Raising either value needs no privilege.
+
+export interface PriorityIo {
+  oomAdj(pid: number): number | null;
+  setOomAdj(pid: number, value: number): void;
+  threads(pid: number): number[];
+  nice(tid: number): number | null;
+  setNice(tid: number, value: number): void;
+}
+
+export const realPriorityIo: PriorityIo = {
+  oomAdj: (pid) => {
+    try {
+      return Number(fs.readFileSync(`/proc/${pid}/oom_score_adj`, 'utf8'));
+    } catch {
+      return null;
+    }
+  },
+  setOomAdj: (pid, value) => fs.writeFileSync(`/proc/${pid}/oom_score_adj`, String(value)),
+  threads: (pid) => {
+    try {
+      return fs.readdirSync(`/proc/${pid}/task`).map(Number);
+    } catch {
+      return [];
+    }
+  },
+  nice: (tid) => {
+    try {
+      return os.getPriority(tid);
+    } catch {
+      return null;
+    }
+  },
+  setNice: (tid, value) => os.setPriority(tid, value),
+};
+
+/**
+ * Put every inheritor of the protection back to normal; returns the pids reset.
+ * Only exactly our values are touched, so anything set by someone else stands.
+ */
+export function sweepInherited(pids: number[], targets: ReadonlySet<number>, io: PriorityIo = realPriorityIo): number[] {
+  const reset: number[] = [];
+  for (const pid of pids) {
+    if (targets.has(pid) || io.oomAdj(pid) !== RESCUE_OOM_ADJ) continue;
+    try {
+      io.setOomAdj(pid, 0);
+    } catch {
+      continue; // gone, or not ours
+    }
+    for (const tid of io.threads(pid)) {
+      if (io.nice(tid) !== RESCUE_NICE) continue;
+      try {
+        io.setNice(tid, 0);
+      } catch {
+        // exited between the read and the write
+      }
+    }
+    reset.push(pid);
+  }
+  return reset;
+}
+
+/** How often inheritors are swept: a new hog carries the protection this long at most. */
+export const SWEEP_MS = 10_000;

@@ -1,3 +1,5 @@
+import { findGitDir, registeredWorktrees, workPlaces } from './gitBranch.js';
+import { dirsInUseBySession } from './activeDirs.js';
 import { appRelease } from './appRelease.js';
 import { keepImageCopies, uploadChunk } from './uploads.js';
 import net from 'node:net';
@@ -562,6 +564,16 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
         events,
         hasEarlier,
       };
+    }
+    case 'workPlaces': {
+      const meta = registry.get(req.sessionId);
+      if (!meta) throw new Error(`unknown session ${req.sessionId}`);
+      const info = findGitDir(meta.cwd);
+      if (!info) return { places: [] };
+      const registered = registeredWorktrees(info);
+      const owners = dirsInUseBySession(registered.map((w) => w.path));
+      const active = [...owners].filter(([, ids]) => ids.has(req.sessionId)).map(([dir]) => dir);
+      return { places: workPlaces(info, meta.cwd, active) };
     }
     case 'appRelease':
       return appRelease({ download: req.download === true });

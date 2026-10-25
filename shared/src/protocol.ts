@@ -304,6 +304,12 @@ export type Request =
   | { id: number; op: 'attach'; sessionId: string; sinceSeq: number; limit?: number }
   | { id: number; op: 'detach'; sessionId: string }
   /**
+   * Where a chat is working, as the panel's branch chip shows it: its own
+   * checkout (branch or worktree) plus any agent worktree its processes are
+   * in. Answers `{ places: Array<{ name, branch, path, worktree, current }> }`.
+   */
+  | { id: number; op: 'workPlaces'; sessionId: string }
+  /**
    * The Android app's newest release: `{ tag, version, name, size, path? }`.
    * With `download`, fetched to this machine first, and `path` is then
    * servable from the gateway's /file.

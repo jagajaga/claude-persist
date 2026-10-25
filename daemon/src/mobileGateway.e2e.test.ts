@@ -150,6 +150,20 @@ test('e2e: a file uploads in chunks and lands beside the session', async () => {
   assert.equal(bad.ok, false);
 });
 
+test('e2e: a chat says which branch it works on', async () => {
+  const dir = fs.mkdtempSync(path.join(home, 'repo-'));
+  fs.mkdirSync(path.join(dir, '.git', 'refs', 'heads'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.git', 'HEAD'), 'ref: refs/heads/feature-x\n');
+  const s = (await call('createSession', { cwd: dir, title: 'in a repo' })).result as { id: string };
+  const r = (await call('workPlaces', { sessionId: s.id })).result as { places: Array<{ name: string; branch: string; current: boolean; worktree: boolean }> };
+  assert.equal(r.places.length, 1);
+  assert.equal(r.places[0].branch, 'feature-x');
+  assert.equal(r.places[0].current, true);
+  assert.equal(r.places[0].worktree, false);
+  const plain = (await call('createSession', { cwd: fs.mkdtempSync(path.join(home, 'plain-')), title: 'no repo' })).result as { id: string };
+  assert.deepEqual((await call('workPlaces', { sessionId: plain.id })).result, { places: [] });
+});
+
 test('e2e: history answers with older events, read-only', async () => {
   const dir = fs.mkdtempSync(path.join(home, 'history-'));
   const s = (await call('createSession', { cwd: dir, title: 'history source' })).result as { id: string };

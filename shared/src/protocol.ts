@@ -94,6 +94,10 @@ export type Attachment =
    * never persisted (it would bloat every replay) and the original file may be
    * moved or deleted.
    */
+  /**
+   * `data` may be left out when `path` names an upload already on this
+   * machine (see uploadChunk): the daemon reads it from there.
+   */
   | { kind: 'image'; name: string; mediaType: string; data: string; path?: string }
   | { kind: 'file'; path: string };
 

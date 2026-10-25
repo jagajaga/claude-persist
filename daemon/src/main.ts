@@ -2,7 +2,7 @@ import { TokenMeter } from './tokenFlow.js';
 import { findGitDir, registeredWorktrees, workPlaces } from './gitBranch.js';
 import { dirsInUseBySession } from './activeDirs.js';
 import { appRelease } from './appRelease.js';
-import { keepImageCopies, uploadChunk } from './uploads.js';
+import { keepImageCopies, loadImageData, uploadChunk } from './uploads.js';
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -616,7 +616,9 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
       const session = getSession(req.sessionId);
       // A retry of a message already here writes no second copy of its images.
       const duplicate = req.clientMessageId !== undefined && session.hasClientMessage(req.clientMessageId);
-      const attachments = duplicate ? (req.attachments ?? []) : keepImageCopies(req.sessionId, req.attachments ?? []);
+      const attachments = duplicate
+        ? (req.attachments ?? [])
+        : keepImageCopies(req.sessionId, loadImageData(req.attachments ?? []));
       const accepted = session.sendMessage(req.text, attachments, req.clientMessageId);
       if (accepted) registry.touch(req.sessionId);
       return { duplicate: !accepted };

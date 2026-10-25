@@ -90,3 +90,23 @@ export function keepImageCopies<A extends { kind: string; name?: string; data?: 
     }
   });
 }
+
+/**
+ * Fill in the bytes of images sent by reference. A phone uploads a photo in
+ * resumable chunks (four photos inline made one 8 MB request that a phone
+ * link could not finish in time, and every retry began again) and then sends
+ * only its path. Only paths inside the uploads directory are read: a message
+ * must not be able to pull an arbitrary file off the disk into the model.
+ */
+export function loadImageData<A extends { kind: string; data?: string; path?: string }>(
+  attachments: A[],
+  root: string = uploadsDir,
+): A[] {
+  const base = path.resolve(root) + path.sep;
+  return attachments.map((a) => {
+    if (a.kind !== 'image' || a.data || !a.path) return a;
+    const resolved = path.resolve(a.path);
+    if (!resolved.startsWith(base)) throw new Error(`image ${a.path} is not an upload`);
+    return { ...a, data: fs.readFileSync(resolved).toString('base64') };
+  });
+}

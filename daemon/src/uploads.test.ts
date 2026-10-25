@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { MAX_UPLOAD_BYTES, keepImageCopies, safeName, uploadChunk } from './uploads.js';
+import { MAX_UPLOAD_BYTES, keepImageCopies, loadImageData, safeName, uploadChunk } from './uploads.js';
 
 const root = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cp-uploads-'));
 const b64 = (s: string) => Buffer.from(s).toString('base64');
@@ -86,4 +86,24 @@ test('an image sent without a copy gets one beside the session', () => {
 test('an image that already has a copy is left as it is', () => {
   const a = { kind: 'image', name: 'x.png', data: 'AA==', path: '/w/x.png' };
   assert.deepEqual(keepImageCopies('sess-1', [a], root()), [a]);
+});
+
+/** A phone uploads photos in chunks and sends only the path. */
+test('an image sent by its upload path gets its bytes from there', () => {
+  const r = root();
+  const done = uploadChunk({ ...base, name: 'shot.jpg', offset: 0, data: b64('jpeg!'), done: true }, r);
+  const [img] = loadImageData([{ kind: 'image', name: 'shot.jpg', mediaType: 'image/jpeg', path: done.path! }], r);
+  assert.equal(Buffer.from((img as unknown as { data: string }).data, 'base64').toString(), 'jpeg!');
+});
+
+test('an image path outside the uploads is refused, not read', () => {
+  assert.throws(() => loadImageData([{ kind: 'image', name: 'x', mediaType: 'image/png', path: '/etc/passwd' }], root()), /not an upload/);
+  const r = root();
+  assert.throws(() => loadImageData([{ kind: 'image', name: 'x', mediaType: 'image/png', path: path.join(r, '..', 'escape.png') }], r), /not an upload/);
+});
+
+test('inline images and files pass through untouched', () => {
+  const inline = { kind: 'image', name: 'a', mediaType: 'image/png', data: 'AAAA' };
+  const file = { kind: 'file', path: '/etc/hosts' };
+  assert.deepEqual(loadImageData([inline, file], root()), [inline, file]);
 });

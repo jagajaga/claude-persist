@@ -1,5 +1,5 @@
 import { appRelease } from './appRelease.js';
-import { uploadChunk } from './uploads.js';
+import { keepImageCopies, uploadChunk } from './uploads.js';
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -580,7 +580,10 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
     }
     case 'sendMessage': {
       const session = getSession(req.sessionId);
-      const accepted = session.sendMessage(req.text, req.attachments ?? [], req.clientMessageId);
+      // A retry of a message already here writes no second copy of its images.
+      const duplicate = req.clientMessageId !== undefined && session.hasClientMessage(req.clientMessageId);
+      const attachments = duplicate ? (req.attachments ?? []) : keepImageCopies(req.sessionId, req.attachments ?? []);
+      const accepted = session.sendMessage(req.text, attachments, req.clientMessageId);
       if (accepted) registry.touch(req.sessionId);
       return { duplicate: !accepted };
     }

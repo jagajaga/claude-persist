@@ -65,3 +65,28 @@ export function uploadChunk(chunk: UploadChunk, root: string = uploadsDir): Uplo
   fs.renameSync(partPath, finalPath);
   return { received, path: finalPath };
 }
+
+/**
+ * Give every image sent without a copy on disk one, beside the session's
+ * other uploads. The editor saves its own; a phone sends only the bytes, so
+ * without this the picture could never be opened again from the chat.
+ */
+export function keepImageCopies<A extends { kind: string; name?: string; data?: string; path?: string }>(
+  sessionId: string,
+  attachments: A[],
+  root: string = uploadsDir,
+): A[] {
+  if (!/^[A-Za-z0-9-]{1,80}$/.test(sessionId)) return attachments;
+  return attachments.map((a) => {
+    if (a.kind !== 'image' || a.path || !a.data) return a;
+    try {
+      const dir = path.join(root, sessionId);
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName(a.name ?? 'image')}`);
+      fs.writeFileSync(file, Buffer.from(a.data, 'base64'));
+      return { ...a, path: file };
+    } catch {
+      return a; // a preview is a nicety; never fail the send over it
+    }
+  });
+}

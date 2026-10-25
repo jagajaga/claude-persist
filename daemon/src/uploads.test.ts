@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { MAX_UPLOAD_BYTES, safeName, uploadChunk } from './uploads.js';
+import { MAX_UPLOAD_BYTES, keepImageCopies, safeName, uploadChunk } from './uploads.js';
 
 const root = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cp-uploads-'));
 const b64 = (s: string) => Buffer.from(s).toString('base64');
@@ -68,4 +68,22 @@ test('a file over the limit is refused and its partial copy removed', () => {
   fs.truncateSync(path.join(r, 'sess-1', '.part-up-1'), MAX_UPLOAD_BYTES - 512);
   assert.throws(() => uploadChunk(over, r), /larger than/);
   assert.equal(fs.existsSync(path.join(r, 'sess-1', '.part-up-1')), false);
+});
+
+/** A phone sends only the bytes; without a copy the chat could never show the picture again. */
+test('an image sent without a copy gets one beside the session', () => {
+  const r = root();
+  const [img, file] = keepImageCopies('sess-1', [
+    { kind: 'image', name: 'shot.png', mediaType: 'image/png', data: Buffer.from('png!').toString('base64') },
+    { kind: 'file', path: '/w/notes.txt' },
+  ], r);
+  assert.equal(fs.readFileSync(img.path!, 'utf8'), 'png!');
+  assert.equal(path.dirname(img.path!), path.join(r, 'sess-1'));
+  assert.match(img.path!, /shot\.png$/);
+  assert.deepEqual(file, { kind: 'file', path: '/w/notes.txt' });
+});
+
+test('an image that already has a copy is left as it is', () => {
+  const a = { kind: 'image', name: 'x.png', data: 'AA==', path: '/w/x.png' };
+  assert.deepEqual(keepImageCopies('sess-1', [a], root()), [a]);
 });

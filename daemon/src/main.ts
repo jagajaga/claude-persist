@@ -1,3 +1,4 @@
+import { uploadChunk } from './uploads.js';
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -560,6 +561,10 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
         events,
         hasEarlier,
       };
+    }
+    case 'uploadChunk': {
+      if (!registry.get(req.sessionId)) throw new Error(`unknown session ${req.sessionId}`);
+      return uploadChunk(req);
     }
     case 'history': {
       const limit = req.limit && req.limit > 0 ? Math.min(req.limit, 1000) : DEFAULT_REPLAY_LIMIT;

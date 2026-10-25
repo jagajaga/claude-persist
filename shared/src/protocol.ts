@@ -304,6 +304,14 @@ export type Request =
   | { id: number; op: 'attach'; sessionId: string; sinceSeq: number; limit?: number }
   | { id: number; op: 'detach'; sessionId: string }
   /**
+   * Upload a file from a client not on this machine, a chunk at a time. Answers
+   * `{ received, path? }`: where the next chunk must start, and once `done`,
+   * the file's path here -- which is then sent as a `{ kind: 'file' }`
+   * attachment. A chunk at the wrong offset writes nothing and just answers
+   * where to carry on, so a retried or out-of-order chunk is harmless.
+   */
+  | { id: number; op: 'uploadChunk'; sessionId: string; uploadId: string; name: string; offset: number; data: string; done?: boolean }
+  /**
    * Older events, for scrolling back: the newest `limit` before `beforeSeq`.
    * Answers `{ events, hasEarlier }`. Read-only, so it neither attaches nor
    * subscribes -- a phone paging back through a long chat is just reading.

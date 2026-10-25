@@ -137,6 +137,19 @@ test('e2e: a resent message with the same client id is recorded once', async () 
   assert.equal(copies.length, 1);
 });
 
+test('e2e: a file uploads in chunks and lands beside the session', async () => {
+  const dir = fs.mkdtempSync(path.join(home, 'upload-'));
+  const s = (await call('createSession', { cwd: dir, title: 'upload target' })).result as { id: string };
+  const chunk = (offset: number, text: string, done = false) =>
+    call('uploadChunk', { sessionId: s.id, uploadId: 'u1', name: 'log.txt', offset, data: Buffer.from(text).toString('base64'), done });
+  assert.deepEqual((await chunk(0, 'part one, ')).result, { received: 10 });
+  const done = (await chunk(10, 'part two', true)).result as { received: number; path: string };
+  assert.equal(fs.readFileSync(done.path, 'utf8'), 'part one, part two');
+  assert.ok(done.path.includes(s.id));
+  const bad = await call('uploadChunk', { sessionId: 'no-such-chat', uploadId: 'u', name: 'x', offset: 0, data: '' });
+  assert.equal(bad.ok, false);
+});
+
 test('e2e: history answers with older events, read-only', async () => {
   const dir = fs.mkdtempSync(path.join(home, 'history-'));
   const s = (await call('createSession', { cwd: dir, title: 'history source' })).result as { id: string };

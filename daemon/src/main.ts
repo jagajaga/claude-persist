@@ -1,3 +1,4 @@
+import { appRelease } from './appRelease.js';
 import { uploadChunk } from './uploads.js';
 import net from 'node:net';
 import fs from 'node:fs';
@@ -562,6 +563,8 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
         hasEarlier,
       };
     }
+    case 'appRelease':
+      return appRelease({ download: req.download === true });
     case 'uploadChunk': {
       if (!registry.get(req.sessionId)) throw new Error(`unknown session ${req.sessionId}`);
       return uploadChunk(req);

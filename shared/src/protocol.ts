@@ -304,6 +304,12 @@ export type Request =
   | { id: number; op: 'attach'; sessionId: string; sinceSeq: number; limit?: number }
   | { id: number; op: 'detach'; sessionId: string }
   /**
+   * The Android app's newest release: `{ tag, version, name, size, path? }`.
+   * With `download`, fetched to this machine first, and `path` is then
+   * servable from the gateway's /file.
+   */
+  | { id: number; op: 'appRelease'; download?: boolean }
+  /**
    * Upload a file from a client not on this machine, a chunk at a time. Answers
    * `{ received, path? }`: where the next chunk must start, and once `done`,
    * the file's path here -- which is then sent as a `{ kind: 'file' }`

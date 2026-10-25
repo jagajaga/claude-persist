@@ -16,6 +16,7 @@
 //    WebSockets keep dying or are filtered outright. With `attach` and a
 //    `sinceSeq`, polling it is a complete, if slower, fallback: the daemon's
 //    replay-by-sequence means nothing is missed between polls.
+import { serveFile } from './fileServe.js';
 import http from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 
@@ -87,6 +88,10 @@ export function startGateway<Handle>(opts: GatewayOptions<Handle>): Promise<Gate
       res.end(text);
     };
     const url = (req.url ?? '/').split('?')[0];
+    if ((req.method === 'GET' || req.method === 'HEAD') && url.endsWith('/file')) {
+      serveFile(req, res);
+      return;
+    }
     if (req.method === 'GET' && url.endsWith('/health')) {
       reply(200, { ok: true });
       return;

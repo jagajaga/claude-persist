@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  parseNetDev,
   StatsSampler,
   cpuPercentBetween,
   parseCpuTimes,
@@ -89,4 +90,37 @@ test('sampler: a missing /proc is degraded, not fatal', () => {
   assert.equal(s.cpuPercent, null);
   assert.equal(s.memory.totalBytes, 0);
   assert.equal(s.cores, 16);
+});
+
+const NETDEV = (eth: [number, number], extra = '') => `Inter-|   Receive |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo: 999999 1 0 0 0 0 0 0 999999 1 0 0 0 0 0 0
+  eth0: ${eth[0]} 10 0 0 0 0 0 0 ${eth[1]} 10 0 0 0 0 0 0
+${extra}`;
+
+test('network: real interfaces summed; loopback, bridges and veths left out', () => {
+  const text = NETDEV([1000, 500], `  wlan0: 200 1 0 0 0 0 0 0 100 1 0 0 0 0 0 0
+docker0: 5000 1 0 0 0 0 0 0 5000 1 0 0 0 0 0 0
+vethab12: 7000 1 0 0 0 0 0 0 7000 1 0 0 0 0 0 0
+br-9f3e: 8000 1 0 0 0 0 0 0 8000 1 0 0 0 0 0 0`);
+  assert.deepEqual(parseNetDev(text), { rx: 1200, tx: 600 });
+  assert.equal(parseNetDev('Inter-|\n face |\n    lo: 1 1 0 0 0 0 0 0 1 1 0 0 0 0 0 0'), null);
+});
+
+test('sampler: network is a rate between two samples, never negative', () => {
+  let t = 0;
+  let net = NETDEV([0, 0]);
+  const base = source([STAT(0, 0), STAT(500, 500), STAT(600, 600)]);
+  const sampler = new StatsSampler({
+    ...base,
+    read: (f) => (f === '/proc/net/dev' ? net : base.read(f)),
+    now: () => t,
+  }, '/');
+  assert.equal(sampler.sample().network, null, 'nothing to compare with yet');
+  t = 2000;
+  net = NETDEV([4_000_000, 1_000_000]);
+  assert.deepEqual(sampler.sample().network, { rxBytesPerSec: 2_000_000, txBytesPerSec: 500_000 });
+  t = 3000;
+  net = NETDEV([10, 10]); // counters reset
+  assert.deepEqual(sampler.sample().network, { rxBytesPerSec: 0, txBytesPerSec: 0 });
 });

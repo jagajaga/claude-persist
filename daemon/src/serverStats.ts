@@ -27,7 +27,32 @@ export interface ServerStats {
   disk: { path: string; totalBytes: number; freeBytes: number } | null;
   uptimeSeconds: number;
   processes: number | null;
+  /** Bytes per second over the last sample interval, all real interfaces together; null on the first sample. */
+  network: { rxBytesPerSec: number; txBytesPerSec: number } | null;
   sampledAt: number;
+}
+
+/**
+ * /proc/net/dev, summed over the interfaces that carry real traffic. The
+ * loopback and the bridges and veth pairs of containers are left out: they
+ * count the same bytes again, or bytes that never leave the machine.
+ */
+export function parseNetDev(text: string): { rx: number; tx: number } | null {
+  let rx = 0;
+  let tx = 0;
+  let any = false;
+  for (const line of text.split('\n').slice(2)) {
+    const m = /^\s*([^:\s]+):\s*(.*)$/.exec(line);
+    if (!m) continue;
+    const name = m[1];
+    if (name === 'lo' || /^(docker|br-|veth|virbr|cni|flannel|kube)/.test(name)) continue;
+    const fields = m[2].trim().split(/\s+/).map(Number);
+    if (fields.length < 9 || fields.some((f) => Number.isNaN(f))) continue;
+    rx += fields[0];
+    tx += fields[8];
+    any = true;
+  }
+  return any ? { rx, tx } : null;
 }
 
 /** The aggregate "cpu" line of /proc/stat, as busy and total jiffies. */
@@ -120,6 +145,7 @@ const realSource: StatsSource = {
  */
 export class StatsSampler {
   private last: CpuTimes | null = null;
+  private lastNet: { rx: number; tx: number; at: number } | null = null;
 
   constructor(
     private readonly source: StatsSource = realSource,
@@ -140,6 +166,18 @@ export class StatsSampler {
     const mem = safe(() => parseMeminfo(this.source.read('/proc/meminfo')));
     const load = safe(() => parseLoadavg(this.source.read('/proc/loadavg')));
     const disk = this.source.disk(this.diskPath);
+    const now = this.source.now();
+    const net = safe(() => parseNetDev(this.source.read('/proc/net/dev')));
+    let network: ServerStats['network'] = null;
+    if (net && this.lastNet && now > this.lastNet.at) {
+      const seconds = (now - this.lastNet.at) / 1000;
+      // A counter that went backwards (interface reset) gives 0, not a negative rate.
+      network = {
+        rxBytesPerSec: Math.max(0, (net.rx - this.lastNet.rx) / seconds),
+        txBytesPerSec: Math.max(0, (net.tx - this.lastNet.tx) / seconds),
+      };
+    }
+    if (net) this.lastNet = { ...net, at: now };
     return {
       cpuPercent,
       cores: this.source.cores(),
@@ -149,7 +187,8 @@ export class StatsSampler {
       disk: disk ? { path: this.diskPath, ...disk } : null,
       uptimeSeconds: this.source.uptime(),
       processes: load?.processes ?? null,
-      sampledAt: this.source.now(),
+      network,
+      sampledAt: now,
     };
   }
 }

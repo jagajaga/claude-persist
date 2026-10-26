@@ -35,6 +35,8 @@ export interface GatewayOptions<Handle> {
   handlers: GatewayHandlers<Handle>;
   /** How often the server pings; a client missing two in a row is dropped. */
   heartbeatMs?: number;
+  /** Further HTTP routes (the raw upload); answers true when it handled the request. */
+  http?: (req: http.IncomingMessage, res: http.ServerResponse, path: string) => boolean;
   /** Largest single message or /rpc body. An image attachment is the big one. */
   maxPayloadBytes?: number;
   log?: (message: string) => void;
@@ -53,6 +55,9 @@ const DEFAULT_MAX_PAYLOAD = 24 * 1024 * 1024;
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
+
+/** Heartbeats a silent client may miss before it is dropped: 30 s at the default 10 s. */
+const MAX_MISSED = 3;
 
 export function startGateway<Handle>(opts: GatewayOptions<Handle>): Promise<Gateway> {
   const host = opts.host ?? '127.0.0.1';
@@ -88,6 +93,7 @@ export function startGateway<Handle>(opts: GatewayOptions<Handle>): Promise<Gate
       res.end(text);
     };
     const url = (req.url ?? '/').split('?')[0];
+    if (opts.http?.(req, res, url)) return;
     if ((req.method === 'GET' || req.method === 'HEAD') && url.endsWith('/file')) {
       serveFile(req, res);
       return;
@@ -132,11 +138,22 @@ export function startGateway<Handle>(opts: GatewayOptions<Handle>): Promise<Gate
   });
 
   const wss = new WebSocketServer({ server, maxPayload, perMessageDeflate: true });
-  const alive = new WeakMap<WebSocket, boolean>();
+  /**
+   * Heartbeats missed in a row. Anything arriving counts as alive, not only a
+   * pong: a phone in the middle of sending a big frame cannot get its pong
+   * through until the frame is done (control frames wait behind it), and
+   * dropping it for that cut every large upload short -- 260 drops in one
+   * evening, each losing the chunk in flight and starting it over.
+   */
+  const missed = new WeakMap<WebSocket, number>();
 
-  wss.on('connection', (ws) => {
-    alive.set(ws, true);
-    ws.on('pong', () => alive.set(ws, true));
+  wss.on('connection', (ws, req) => {
+    missed.set(ws, 0);
+    const heard = (): void => {
+      missed.set(ws, 0);
+    };
+    ws.on('pong', heard);
+    req.socket.on('data', heard);
     const handle = handlers.open((message) => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
     });
@@ -166,12 +183,13 @@ export function startGateway<Handle>(opts: GatewayOptions<Handle>): Promise<Gate
   // pile up behind TCP's retransmission timeout for many minutes.
   const sweep = setInterval(() => {
     for (const ws of wss.clients) {
-      if (alive.get(ws) === false) {
+      const count = (missed.get(ws) ?? 0) + 1;
+      if (count > MAX_MISSED) {
         log('gateway: client stopped answering pings; dropping it');
         ws.terminate();
         continue;
       }
-      alive.set(ws, false);
+      missed.set(ws, count);
       try {
         ws.ping();
       } catch {

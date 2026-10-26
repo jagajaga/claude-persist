@@ -2,7 +2,7 @@ import { TokenMeter } from './tokenFlow.js';
 import { findGitDir, registeredWorktrees, workPlaces } from './gitBranch.js';
 import { dirsInUseBySession } from './activeDirs.js';
 import { appRelease } from './appRelease.js';
-import { keepImageCopies, loadImageData, uploadChunk } from './uploads.js';
+import { handleHttpUpload, keepImageCopies, loadImageData, uploadChunk } from './uploads.js';
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -919,6 +919,11 @@ async function start(): Promise<void> {
         close: closeClient,
       },
       log: logLine,
+      http: (req, res, url) => {
+        if (req.method !== 'PUT' || !url.endsWith('/upload')) return false;
+        handleHttpUpload(req, res, (id) => registry.get(id) !== undefined, logLine);
+        return true;
+      },
     }))
       .catch((err: unknown) => {
       // A taken port must not take the daemon with it: the editor does not

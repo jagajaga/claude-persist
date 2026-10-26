@@ -38,6 +38,11 @@ export function safeName(name: string): string {
 }
 
 export function uploadChunk(chunk: UploadChunk, root: string = uploadsDir): UploadProgress {
+  return uploadBytes({ ...chunk, bytes: Buffer.from(chunk.data, 'base64') }, root);
+}
+
+/** The same, with raw bytes: what the HTTP upload sends, a third smaller than base64 and off the chat socket. */
+export function uploadBytes(chunk: Omit<UploadChunk, 'data'> & { bytes: Buffer }, root: string = uploadsDir): UploadProgress {
   if (!/^[A-Za-z0-9-]{1,80}$/.test(chunk.sessionId)) throw new Error('bad session id');
   if (!/^[A-Za-z0-9-]{1,80}$/.test(chunk.uploadId)) throw new Error('bad upload id');
   if (!Number.isInteger(chunk.offset) || chunk.offset < 0) throw new Error('bad offset');
@@ -54,7 +59,7 @@ export function uploadChunk(chunk: UploadChunk, root: string = uploadsDir): Uplo
   // Either way, say where to continue from and write nothing.
   if (chunk.offset !== held) return { received: held };
 
-  const bytes = Buffer.from(chunk.data, 'base64');
+  const bytes = chunk.bytes;
   if (held + bytes.length > MAX_UPLOAD_BYTES) {
     fs.rmSync(partPath, { force: true });
     throw new Error(`file is larger than ${MAX_UPLOAD_BYTES / 1024 / 1024} MB`);
@@ -108,5 +113,70 @@ export function loadImageData<A extends { kind: string; data?: string; path?: st
     const resolved = path.resolve(a.path);
     if (!resolved.startsWith(base)) throw new Error(`image ${a.path} is not an upload`);
     return { ...a, data: fs.readFileSync(resolved).toString('base64') };
+  });
+}
+
+/** Largest body one HTTP upload request may carry; bigger files take several. */
+export const MAX_HTTP_CHUNK = 16 * 1024 * 1024;
+
+/**
+ * PUT /upload?sessionId=&uploadId=&name=&offset=&done=1 with the raw bytes as
+ * the body. Answers like uploadChunk: { received, path? }. Separate requests
+ * over plain HTTPS rather than frames on the chat socket, so a big upload
+ * neither blocks the socket's heartbeats nor pays base64's third.
+ */
+export function handleHttpUpload(
+  req: import('node:http').IncomingMessage,
+  res: import('node:http').ServerResponse,
+  sessionExists: (id: string) => boolean,
+  log: (m: string) => void = () => {},
+  root: string = uploadsDir,
+): void {
+  const q = new URL(req.url ?? '/', 'http://x').searchParams;
+  const reply = (status: number, body: unknown): void => {
+    const text = JSON.stringify(body);
+    res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(text);
+  };
+  const sessionId = q.get('sessionId') ?? '';
+  if (!sessionExists(sessionId)) {
+    reply(404, { ok: false, error: `unknown session ${sessionId}` });
+    req.resume();
+    return;
+  }
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let refused = false;
+  req.on('data', (c: Buffer) => {
+    size += c.length;
+    if (size > MAX_HTTP_CHUNK && !refused) {
+      refused = true;
+      reply(413, { ok: false, error: 'chunk too large' });
+      req.destroy();
+      return;
+    }
+    if (!refused) chunks.push(c);
+  });
+  req.on('end', () => {
+    if (refused) return;
+    try {
+      const result = uploadBytes(
+        {
+          sessionId,
+          uploadId: q.get('uploadId') ?? '',
+          name: q.get('name') ?? 'file',
+          offset: Number(q.get('offset') ?? 'NaN'),
+          done: q.get('done') === '1',
+          bytes: Buffer.concat(chunks),
+        },
+        root,
+      );
+      if (result.path) log(`gateway upload ${q.get('uploadId')} done: ${result.path}`);
+      reply(200, { ok: true, result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`gateway upload failed: ${message}`);
+      reply(400, { ok: false, error: message });
+    }
   });
 }

@@ -174,6 +174,22 @@ test('e2e: a chat moves to another folder, and only to a real one', async () => 
   assert.equal((await call('setSessionCwd', { sessionId: s.id, cwd: 'relative/dir' })).ok, false);
 });
 
+test('e2e: raw bytes upload over plain HTTP, resumable by offset', async () => {
+  const dir = fs.mkdtempSync(path.join(home, 'raw-'));
+  const s = (await call('createSession', { cwd: dir, title: 'raw upload' })).result as { id: string };
+  const put = (offset: number, body: Buffer, done: boolean) =>
+    fetch(`http://127.0.0.1:${port}/proxy/7790/upload?sessionId=${s.id}&uploadId=raw1&name=photo.jpg&offset=${offset}${done ? '&done=1' : ''}`, { method: 'PUT', body })
+      .then(async (r) => ({ status: r.status, body: (await r.json()) as { ok: boolean; result?: { received: number; path?: string }; error?: string } }));
+  const first = await put(0, Buffer.from('JPEG-part-1;'), false);
+  assert.deepEqual(first.body.result, { received: 12 });
+  const again = await put(0, Buffer.from('JPEG-part-1;'), false);
+  assert.equal(again.body.result?.received, 12, 'a repeat writes nothing and says where to go on');
+  const done = await put(12, Buffer.from('part-2'), true);
+  assert.equal(fs.readFileSync(done.body.result!.path!, 'utf8'), 'JPEG-part-1;part-2');
+  const bad = await fetch(`http://127.0.0.1:${port}/proxy/7790/upload?sessionId=nope&uploadId=x&name=y&offset=0`, { method: 'PUT', body: 'x' });
+  assert.equal(bad.status, 404);
+});
+
 test('e2e: history answers with older events, read-only', async () => {
   const dir = fs.mkdtempSync(path.join(home, 'history-'));
   const s = (await call('createSession', { cwd: dir, title: 'history source' })).result as { id: string };

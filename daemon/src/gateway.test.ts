@@ -105,7 +105,7 @@ test('ws: a client that stops answering pings is dropped', async () => {
   const ws = await connect(gw.port);
   // Stop answering: the ws client auto-replies to pings unless we cut it off.
   (ws as unknown as { _socket: { pause(): void } })._socket.pause();
-  await new Promise((r) => setTimeout(r, 200));
+  await new Promise((r) => setTimeout(r, 300));
   assert.equal(d.handles[0].closed, true, 'released after missing pongs');
   ws.terminate();
   await gw.close();
@@ -119,6 +119,31 @@ test('ws: a client that answers pings is kept', async () => {
   assert.equal(d.handles[0].closed, false);
   ws.close();
   await gw.close();
+});
+
+/**
+ * A phone busy sending a big frame can't get its pong through until the
+ * frame is done. It was dropped for that -- 260 times in one evening, each
+ * drop losing the chunk in flight. Data arriving counts as alive.
+ */
+test('ws: a client still sending is kept though it answers no pings', async () => {
+  const d = fakeDaemon();
+  const gw = await startGateway({ port: 0, handlers: d.handlers, heartbeatMs: 40 });
+  const ws = new WebSocket(`ws://127.0.0.1:${gw.port}`, { autoPong: false });
+  await new Promise((r, j) => { ws.once('open', r); ws.once('error', j); });
+  const busy = setInterval(() => ws.send('x'.repeat(1000)), 15);
+  try {
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal(d.handles[0].closed, false, 'still sending: kept');
+    clearInterval(busy);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(d.handles[0].closed, true, 'silent and no pongs: dropped');
+  } finally {
+    // Closed whatever happened, so a failure fails rather than hanging the run.
+    clearInterval(busy);
+    ws.terminate();
+    await gw.close();
+  }
 });
 
 /** For networks where WebSockets die or are filtered: one request, plain HTTP. */

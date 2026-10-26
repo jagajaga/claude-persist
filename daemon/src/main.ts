@@ -901,7 +901,21 @@ async function start(): Promise<void> {
       port: mobilePort,
       handlers: {
         open: (send) => openClient(send as (message: ServerMessage) => void),
-        request: (client, req) => handleRequest(client, req as unknown as Request),
+        // The phone's requests leave a trace: every refusal with its reason, and
+        // each message and finished upload, so a queue stuck on a phone can be
+        // read from here instead of guessed at.
+        request: async (client, req) => {
+          const r = req as unknown as Request;
+          try {
+            const result = await handleRequest(client, r);
+            if (r.op === 'sendMessage') logLine(`gateway sendMessage ${r.clientMessageId ?? '-'} to ${r.sessionId}: ${(result as { duplicate?: boolean })?.duplicate ? 'duplicate' : 'accepted'}`);
+            if (r.op === 'uploadChunk' && (result as { path?: string })?.path) logLine(`gateway upload ${r.uploadId} done: ${(result as { path: string }).path}`);
+            return result;
+          } catch (err) {
+            logLine(`gateway ${r.op} failed: ${err instanceof Error ? err.message : String(err)}`);
+            throw err;
+          }
+        },
         close: closeClient,
       },
       log: logLine,

@@ -1,3 +1,4 @@
+import { shareAccountSetup } from './sharedSetup.js';
 import { TokenMeter } from './tokenFlow.js';
 import { findGitDir, registeredWorktrees, workPlaces } from './gitBranch.js';
 import { dirsInUseBySession } from './activeDirs.js';
@@ -253,6 +254,12 @@ function pollAccounts(): void {
   // shared ones before it is offered for use.
   const { claudeDir, accountsDir } = accountsStore.dirs;
   shareUserConfig(claudeDir, accountsDir, logLine);
+  // MCP servers, plugins and settings (and their logins) the same in every account.
+  try {
+    shareAccountSetup({ claudeDir: claudeDir, defaultClaudeJson: path.join(path.dirname(claudeDir), '.claude.json'), accountsDir: accountsDir }, logLine);
+  } catch (err) {
+    logLine(`sharing the account setup failed: ${String(err)}`);
+  }
   broadcastAccounts(accounts);
 }
 
@@ -999,6 +1006,12 @@ async function start(): Promise<void> {
   // this daemon was not running.
   const accountDirs = accountsStore.dirs;
   shareUserConfig(accountDirs.claudeDir, accountDirs.accountsDir, logLine);
+  // MCP servers, plugins and settings (and their logins) the same in every account.
+  try {
+    shareAccountSetup({ claudeDir: accountDirs.claudeDir, defaultClaudeJson: path.join(path.dirname(accountDirs.claudeDir), '.claude.json'), accountsDir: accountDirs.accountsDir }, logLine);
+  } catch (err) {
+    logLine(`sharing the account setup failed: ${String(err)}`);
+  }
 
   // Seed the cache, then keep watching for logins.
   lastAccountsJson = JSON.stringify(accountsStore.list());

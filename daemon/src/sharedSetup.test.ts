@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { mergeSettings, shareAccountSetup } from './sharedSetup.js';
+import { mergeSettings, newestLogins, shareAccountSetup } from './sharedSetup.js';
 
 /** A home with a default account and two named ones, laid out as on the real machine. */
 function home() {
@@ -97,4 +97,28 @@ test('a second run with nothing new writes nothing', () => {
   const logs: string[] = [];
   shareAccountSetup(h.paths, (m) => logs.push(m), () => 2);
   assert.deepEqual(logs, []);
+});
+
+/** Found on the real machine: every MCP login was an empty stub from a sign-in never finished. */
+test('logins: a real one beats an empty stub, and the newest real one wins', () => {
+  const stub = { accessToken: '', serverUrl: 'https://mcp.sentry.dev/mcp' };
+  const old = { accessToken: 'old-token' };
+  const fresh = { accessToken: 'fresh-token' };
+  assert.deepEqual(newestLogins([{ logins: { s: stub }, savedAt: 9 }, { logins: { s: old }, savedAt: 1 }]), { s: old });
+  assert.deepEqual(newestLogins([{ logins: { s: old }, savedAt: 1 }, { logins: { s: fresh }, savedAt: 5 }]), { s: fresh });
+  assert.deepEqual(newestLogins([{ logins: { s: fresh }, savedAt: 5 }, { logins: { s: old }, savedAt: 1 }]), { s: fresh });
+});
+
+test('signing in again in any account reaches all the others', () => {
+  const h = home();
+  shareAccountSetup(h.paths);
+  // Signed in to Sentry afresh, in the home account, after sharing.
+  const homeCreds = path.join(h.b, '.credentials.json');
+  const c = h.read(homeCreds);
+  c.mcpOAuth['sentry|1'] = { accessToken: 'brand-new' };
+  fs.writeFileSync(homeCreds, JSON.stringify(c));
+  const later = new Date(Date.now() + 60_000);
+  fs.utimesSync(homeCreds, later, later);
+  shareAccountSetup(h.paths);
+  for (const d of [h.claudeDir, h.a]) assert.equal(h.read(path.join(d, '.credentials.json')).mcpOAuth['sentry|1'].accessToken, 'brand-new');
 });

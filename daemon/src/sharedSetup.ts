@@ -56,6 +56,26 @@ export function mergeSettings(all: Json[]): Json {
   return out;
 }
 
+/**
+ * MCP logins from every account, one per server. A real login beats an empty
+ * stub (Claude Code writes one when a sign-in starts and is never finished),
+ * and of two real ones the most recently saved wins -- signing in again in any
+ * account must not be overruled by a stale copy elsewhere.
+ */
+export function newestLogins(sources: Array<{ logins: Json | undefined; savedAt: number }>): Json {
+  const best = new Map<string, { value: Json; filled: boolean; savedAt: number }>();
+  for (const { logins, savedAt } of sources) {
+    if (!isObj(logins)) continue;
+    for (const [key, value] of Object.entries(logins)) {
+      if (!isObj(value)) continue;
+      const filled = typeof value.accessToken === 'string' && value.accessToken.length > 0;
+      const held = best.get(key);
+      if (!held || (filled && !held.filled) || (filled === held.filled && savedAt > held.savedAt)) best.set(key, { value, filled, savedAt });
+    }
+  }
+  return Object.fromEntries([...best].map(([k, v]) => [k, v.value]));
+}
+
 /** Maps joined by key, the first holder of a key winning. */
 export function unionByKey(maps: Array<Json | undefined>): Json {
   const out: Json = {};
@@ -192,8 +212,17 @@ function shareMcp(p: SetupPaths, dirs: string[], log: (m: string) => void): void
       if (writeIfChanged(r.file, r.json, { ...r.json, mcpServers: servers })) log(`mcp: ${path.basename(path.dirname(r.file))} has every account's MCP servers`);
     }
   }
-  const creds = [p.claudeDir, ...dirs].map((d) => ({ file: path.join(d, '.credentials.json'), json: readJson(path.join(d, '.credentials.json')) }));
-  const tokens = unionByKey(creds.map((c) => c.json?.mcpOAuth as Json | undefined));
+  const creds = [p.claudeDir, ...dirs].map((d) => {
+    const file = path.join(d, '.credentials.json');
+    let mtime = 0;
+    try {
+      mtime = fs.statSync(file).mtimeMs;
+    } catch {
+      // none yet
+    }
+    return { file, json: readJson(file), mtime };
+  });
+  const tokens = newestLogins(creds.map((c) => ({ logins: c.json?.mcpOAuth as Json | undefined, savedAt: c.mtime })));
   if (Object.keys(tokens).length === 0) return;
   for (const c of creds) {
     if (!c.json) continue; // an account never logged in: nothing of its own to keep beside them

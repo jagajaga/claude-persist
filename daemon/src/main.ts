@@ -625,6 +625,9 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
     }
     case 'serverStats':
       return { ...statsSampler.sample(), tokens: tokenMeter.snapshot() };
+    case 'fsHighlight':
+      // Loaded on first use: Shiki is large, and most daemons never colour a file.
+      return import('./highlight.js').then(({ highlightFile }) => highlightFile(req.path));
     case 'fsMkdir':
       return makeDirectory(req.path);
     case 'fsList':

@@ -10,6 +10,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "*",
     "@claude-persist/shared": "0.1.0",
+    "shiki": "^3.23.0",
     "ws": "^8.22.0"
   },
   "devDependencies": {

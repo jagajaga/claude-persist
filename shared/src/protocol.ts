@@ -378,6 +378,11 @@ export type Request =
   | { id: number; op: 'fsList'; path: string }
   /** Make one new folder (the parent must exist). Answers `{ path }`. */
   | { id: number; op: 'fsMkdir'; path: string }
+  /**
+   * A source file coloured as VS Code colours it (Shiki, Light+): `{ language,
+   * theme, fg, bg, lines: [text, colour | null, style][][], truncated, size }`.
+   */
+  | { id: number; op: 'fsHighlight'; path: string }
   /** One page of a file; text when it is text, else base64. */
   | { id: number; op: 'fsRead'; path: string; offset?: number; length?: number }
   /**

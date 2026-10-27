@@ -55,6 +55,10 @@ cp -r shared/dist extension/daemon/node_modules/@claude-persist/shared/dist
 mkdir -p extension/daemon/node_modules/ws
 cp -r node_modules/ws/. extension/daemon/node_modules/ws/
 
+# Shiki, for source files on the phone (daemon/src/highlight.ts), with the
+# forty-odd packages it needs: VS Code's own grammars and themes.
+node scripts/copy-deps.mjs extension/daemon/node_modules shiki
+
 cp -r node_modules/@anthropic-ai/claude-agent-sdk \
       extension/daemon/node_modules/@anthropic-ai/
 # The SDK package that matches CP_TARGET. Derived rather than passed in, so

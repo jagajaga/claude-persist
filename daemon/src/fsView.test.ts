@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { MAX_READ_BYTES, listDirectory, looksLikeText, readFileSlice } from './fsView.js';
+import { MAX_READ_BYTES, listDirectory, looksLikeText, readFileSlice, makeDirectory } from './fsView.js';
 
 function tree(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-fs-'));
@@ -77,4 +77,18 @@ test('text detection: NUL means binary, a cut multibyte character does not', () 
   assert.equal(looksLikeText(Buffer.from([104, 0, 105])), false);
   const cut = Buffer.from('привет', 'utf8').subarray(0, 5); // ends mid-character
   assert.equal(looksLikeText(cut), true);
+});
+
+test('mkdir: makes one folder, and says where', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-mkdir-'));
+  assert.deepEqual(makeDirectory(path.join(dir, 'new')), { path: path.join(dir, 'new') });
+  assert.ok(fs.statSync(path.join(dir, 'new')).isDirectory());
+});
+
+test('mkdir: refuses a name that exists, a missing parent, and relative paths', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-mkdir-'));
+  fs.mkdirSync(path.join(dir, 'taken'));
+  assert.throws(() => makeDirectory(path.join(dir, 'taken')), /already exists/);
+  assert.throws(() => makeDirectory(path.join(dir, 'no', 'such')), /does not exist/);
+  assert.throws(() => makeDirectory('relative/x'), /absolute/);
 });

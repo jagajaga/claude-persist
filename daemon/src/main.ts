@@ -34,7 +34,7 @@ import { accountIdentity, accountsStore, shareUserConfig } from './accounts.js';
 import { LoginManager } from './login.js';
 import { applyRateLimitEvent, applyUsageResponse } from './usage.js';
 import { StatsSampler } from './serverStats.js';
-import { listDirectory, readFileSlice } from './fsView.js';
+import { listDirectory, makeDirectory, readFileSlice } from './fsView.js';
 import { ProcessSampler, childrenFrom, killProcess, realProcSource } from './processes.js';
 import {
   type IdentityOf,
@@ -625,6 +625,8 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
     }
     case 'serverStats':
       return { ...statsSampler.sample(), tokens: tokenMeter.snapshot() };
+    case 'fsMkdir':
+      return makeDirectory(req.path);
     case 'fsList':
       return listDirectory(req.path);
     case 'fsRead':

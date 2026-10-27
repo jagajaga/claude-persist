@@ -376,6 +376,8 @@ export type Request =
   | { id: number; op: 'serverStats' }
   /** A directory listing. Read-only; absolute paths only. */
   | { id: number; op: 'fsList'; path: string }
+  /** Make one new folder (the parent must exist). Answers `{ path }`. */
+  | { id: number; op: 'fsMkdir'; path: string }
   /** One page of a file; text when it is text, else base64. */
   | { id: number; op: 'fsRead'; path: string; offset?: number; length?: number }
   /**

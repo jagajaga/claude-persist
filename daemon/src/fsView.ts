@@ -133,3 +133,19 @@ export function readFileSlice(p: string, offset = 0, length = MAX_READ_BYTES): F
     fs.closeSync(fd);
   }
 }
+
+/**
+ * Make one new folder, for the phone's file browser. Absolute paths only;
+ * the parent must exist, and an existing name is refused rather than
+ * silently reused, so a typo is noticed.
+ */
+export function makeDirectory(p: string): { path: string } {
+  if (!path.isAbsolute(p)) throw new Error('The path must be absolute');
+  const target = path.resolve(p);
+  const name = path.basename(target);
+  if (!name || name === '.' || name === '..' || /[\\/\0]/.test(name)) throw new Error('Not a folder name');
+  if (fs.existsSync(target)) throw new Error(`${name} already exists`);
+  if (!fs.statSync(path.dirname(target), { throwIfNoEntry: false })?.isDirectory()) throw new Error('The folder it goes in does not exist');
+  fs.mkdirSync(target);
+  return { path: target };
+}

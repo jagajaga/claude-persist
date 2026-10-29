@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { MAX_UPLOAD_BYTES, keepImageCopies, loadImageData, safeName, uploadChunk } from './uploads.js';
+import { MAX_UPLOAD_BYTES, keepImageCopies, loadImageData, safeName, uploadChunk, uploadTiming } from './uploads.js';
 
 const root = () => fs.mkdtempSync(path.join(os.tmpdir(), 'cp-uploads-'));
 const b64 = (s: string) => Buffer.from(s).toString('base64');
@@ -106,4 +106,15 @@ test('inline images and files pass through untouched', () => {
   const inline = { kind: 'image', name: 'a', mediaType: 'image/png', data: 'AAAA' };
   const file = { kind: 'file', path: '/etc/hosts' };
   assert.deepEqual(loadImageData([inline, file], root()), [inline, file]);
+});
+
+test('uploadTiming splits the wait for the first byte from the transfer, with the rate', () => {
+  assert.equal(
+    uploadTiming('http', 'u1', 2 * 1024 * 1024, 0, 1000, 1300, 2300),
+    'gateway upload u1 http: 2097152 B at 0, wait 300 ms, body 1000 ms (2.0 MB/s)',
+  );
+});
+
+test('uploadTiming says instant rather than dividing by zero', () => {
+  assert.equal(uploadTiming('socket', 'u2', 10, 4, 5, 5, 5), 'gateway upload u2 socket: 10 B at 4, wait 0 ms, body 0 ms (instant)');
 });

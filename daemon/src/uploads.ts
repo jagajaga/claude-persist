@@ -125,6 +125,17 @@ export const MAX_HTTP_CHUNK = 16 * 1024 * 1024;
  * over plain HTTPS rather than frames on the chat socket, so a big upload
  * neither blocks the socket's heartbeats nor pays base64's third.
  */
+/**
+ * One upload request as a log line: its size, how long it took to start
+ * arriving and to arrive, and the rate. `wait` is time before the first byte
+ * (the proxies and the phone getting going); `body` is the transfer itself.
+ */
+export function uploadTiming(route: string, uploadId: string, bytes: number, offset: number, started: number, firstByte: number, ended: number): string {
+  const body = Math.max(0, ended - firstByte);
+  const rate = body > 0 ? `${((bytes / 1024 / 1024) / (body / 1000)).toFixed(1)} MB/s` : 'instant';
+  return `gateway upload ${uploadId} ${route}: ${bytes} B at ${offset}, wait ${Math.max(0, firstByte - started)} ms, body ${body} ms (${rate})`;
+}
+
 export function handleHttpUpload(
   req: import('node:http').IncomingMessage,
   res: import('node:http').ServerResponse,
@@ -147,7 +158,12 @@ export function handleHttpUpload(
   const chunks: Buffer[] = [];
   let size = 0;
   let refused = false;
+  // When the request arrived and when its first byte did: a slow upload is
+  // then a number in the log, the network's or ours, not a guess.
+  const started = Date.now();
+  let firstByte = 0;
   req.on('data', (c: Buffer) => {
+    if (!firstByte) firstByte = Date.now();
     size += c.length;
     if (size > MAX_HTTP_CHUNK && !refused) {
       refused = true;
@@ -171,6 +187,7 @@ export function handleHttpUpload(
         },
         root,
       );
+      log(uploadTiming('http', q.get('uploadId') ?? '', size, Number(q.get('offset')), started, firstByte || Date.now(), Date.now()));
       if (result.path) log(`gateway upload ${q.get('uploadId')} done: ${result.path}`);
       reply(200, { ok: true, result });
     } catch (err) {

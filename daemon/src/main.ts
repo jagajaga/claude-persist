@@ -3,7 +3,7 @@ import { TokenMeter } from './tokenFlow.js';
 import { findGitDir, registeredWorktrees, workPlaces } from './gitBranch.js';
 import { dirsInUseBySession } from './activeDirs.js';
 import { appRelease } from './appRelease.js';
-import { handleHttpUpload, keepImageCopies, loadImageData, uploadChunk } from './uploads.js';
+import { handleHttpUpload, keepImageCopies, loadImageData, uploadChunk, uploadTiming } from './uploads.js';
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -919,7 +919,9 @@ async function start(): Promise<void> {
         request: async (client, req) => {
           const r = req as unknown as Request;
           try {
+            const opStarted = Date.now();
             const result = await handleRequest(client, r);
+            if (r.op === 'uploadChunk') logLine(uploadTiming('socket', r.uploadId, Buffer.byteLength(r.data ?? '', 'base64'), r.offset, opStarted, opStarted, Date.now()));
             if (r.op === 'sendMessage') logLine(`gateway sendMessage ${r.clientMessageId ?? '-'} to ${r.sessionId}: ${(result as { duplicate?: boolean })?.duplicate ? 'duplicate' : 'accepted'}`);
             if (r.op === 'uploadChunk' && (result as { path?: string })?.path) logLine(`gateway upload ${r.uploadId} done: ${(result as { path: string }).path}`);
             return result;

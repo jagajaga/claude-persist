@@ -328,6 +328,9 @@ export type Request =
    * attachment. A chunk at the wrong offset writes nothing and just answers
    * where to carry on, so a retried or out-of-order chunk is harmless.
    */
+  /** A phone's Firebase token, so notifications reach it through Google. Answers `{ enabled }`: whether this server can send them. */
+  | { id: number; op: 'registerPush'; token: string }
+  | { id: number; op: 'unregisterPush'; token: string }
   | { id: number; op: 'uploadChunk'; sessionId: string; uploadId: string; name: string; offset: number; data: string; done?: boolean }
   /**
    * Older events, for scrolling back: the newest `limit` before `beforeSeq`.

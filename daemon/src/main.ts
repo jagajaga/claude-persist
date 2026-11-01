@@ -3,6 +3,7 @@ import { TokenMeter } from './tokenFlow.js';
 import { findGitDir, registeredWorktrees, workPlaces } from './gitBranch.js';
 import { dirsInUseBySession } from './activeDirs.js';
 import { appRelease } from './appRelease.js';
+import { FcmSender, PushTokens, createPush } from './push.js';
 import { handleHttpUpload, keepImageCopies, loadImageData, uploadChunk, uploadTiming } from './uploads.js';
 import net from 'node:net';
 import fs from 'node:fs';
@@ -23,7 +24,7 @@ import type { HelloResult } from '@claude-persist/shared';
 import { PROTOCOL_VERSION } from '@claude-persist/shared';
 import { NO_CLAUDE_MESSAGE, claudeExecutable } from './claudeExecutable.js';
 import { AccountUsageStore } from './accountUsage.js';
-import { ensureDirs, gatewayPort, gatewayProtect, socketPath, socketIsFile, lockPath, sessionLogPath, logPath, pendingTurnSessionIds, pendingTurnPath } from './paths.js';
+import { baseDir, ensureDirs, gatewayPort, gatewayProtect, socketPath, socketIsFile, lockPath, sessionLogPath, logPath, pendingTurnSessionIds, pendingTurnPath } from './paths.js';
 import { releaseLock } from './lock.js';
 import { claimOwnership } from './ownership.js';
 import { Registry } from './registry.js';
@@ -105,6 +106,13 @@ if (quarantined) {
 }
 
 const sessions = new Map<string, DaemonSession>();
+
+// Phone notifications through Google, when its service account key is here.
+const push = createPush({
+  sender: FcmSender.fromFile(path.join(baseDir, 'fcm-service-account.json')),
+  tokens: new PushTokens(path.join(baseDir, 'push-tokens.json')),
+  log: (m) => logLine(m),
+});
 /** sessionId -> set of client connections subscribed to it */
 const subscribers = new Map<string, Set<Client>>();
 
@@ -346,6 +354,7 @@ const callbacks = {
   },
   onEvent(sessionId: string, event: PersistedEvent): void {
     broadcast(sessionId, { kind: 'event', sessionId, event });
+    void push.onEvent(sessionId, registry.get(sessionId)?.title ?? '', event);
     // Status flips (idle/running/error) should update every client's session
     // list, not just subscribers of this session — e.g. the sidebar tree.
     if (event.event.type === 'status') broadcastAll({ kind: 'sessions_changed' });
@@ -604,6 +613,11 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
       const active = [...owners].filter(([, ids]) => ids.has(req.sessionId)).map(([dir]) => dir);
       return { places: workPlaces(info, meta.cwd, active) };
     }
+    case 'registerPush':
+      return push.register(req.token);
+    case 'unregisterPush':
+      push.unregister(req.token);
+      return null;
     case 'appRelease':
       return appRelease({ download: req.download === true });
     case 'uploadChunk': {

@@ -98,3 +98,32 @@ test('without a key nothing is sent, and registering says so', async () => {
   assert.deepEqual(push.register('t1'), { enabled: false });
   await push.onEvent('s1', 't', ev({ type: 'result', summary: 'ok' }));
 });
+
+test('a phone hears only the kinds it shows; old token files mean all kinds', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'push-'));
+  fs.writeFileSync(path.join(dir, 't.json'), JSON.stringify(['legacy']));
+  const tokens = new PushTokens(path.join(dir, 't.json'));
+  const g = fakeGoogle(200);
+  const push = createPush({ sender: new FcmSender(account, g.fetchImpl), tokens, log: () => {} });
+  push.register('quiet', ['attention']);
+  await push.onEvent('s1', 't', ev({ type: 'result', summary: 'ok' }));
+  const to = () => g.calls.filter((c) => c.url.includes('messages:send')).map((c) => JSON.parse(c.body).message.token);
+  assert.deepEqual(to(), ['legacy']);
+  assert.deepEqual(new PushTokens(path.join(dir, 't.json')).wanting('done'), ['legacy']);
+});
+
+test('an answered request is pushed only if its request was', async () => {
+  const tokens = new PushTokens(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'push-')), 't.json'));
+  const g = fakeGoogle(200);
+  const push = createPush({ sender: new FcmSender(account, g.fetchImpl), tokens, log: () => {} });
+  push.register('p', ['attention', 'done']);
+  const kinds = () => g.calls.filter((c) => c.url.includes('messages:send')).map((c) => JSON.parse(c.body).message.data.kind);
+  // Answered in the editor, never announced: no wake-up for it.
+  await push.onEvent('s1', 't', ev({ type: 'permission_resolved', requestId: 'r0', allowed: true }));
+  assert.deepEqual(kinds(), []);
+  await push.onEvent('s1', 't', ev({ type: 'permission_request', requestId: 'r1', toolName: 'Bash', input: {} }));
+  await push.onEvent('s1', 't', ev({ type: 'permission_resolved', requestId: 'r1', allowed: true }));
+  await push.onEvent('s1', 't', ev({ type: 'permission_resolved', requestId: 'r1', allowed: true }));
+  assert.deepEqual(kinds(), ['attention', 'resolved']);
+});
+

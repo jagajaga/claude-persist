@@ -58,26 +58,51 @@ export function noticeFor(sessionId: string, chatTitle: string, stored: Persiste
   }
 }
 
-/** The phones to notify: their FCM tokens, kept on disk. */
+export type NoticeKind = 'attention' | 'done';
+const ALL_KINDS: NoticeKind[] = ['attention', 'done'];
+
+/** The phones to notify: their FCM tokens and which notices each shows, kept on disk. */
 export class PushTokens {
-  private tokens = new Set<string>();
+  private tokens = new Map<string, NoticeKind[]>();
 
   constructor(private readonly file: string) {
     try {
       const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
-      if (Array.isArray(raw)) for (const t of raw) if (typeof t === 'string' && t) this.tokens.add(t);
+      if (Array.isArray(raw)) {
+        for (const t of raw) {
+          // Plain strings are from before phones said what they show: everything.
+          if (typeof t === 'string' && t) this.tokens.set(t, ALL_KINDS);
+          else if (t && typeof t === 'object' && typeof (t as { token?: unknown }).token === 'string') {
+            const e = t as { token: string; kinds?: unknown };
+            this.tokens.set(e.token, PushTokens.kinds(e.kinds));
+          }
+        }
+      }
     } catch {
       // None yet, or unreadable: phones register again on their next connect.
     }
   }
 
-  list(): string[] {
-    return [...this.tokens];
+  static kinds(raw: unknown): NoticeKind[] {
+    if (!Array.isArray(raw)) return ALL_KINDS;
+    return ALL_KINDS.filter((k) => raw.includes(k));
   }
 
-  add(token: string): boolean {
-    if (!token || this.tokens.has(token)) return false;
-    this.tokens.add(token);
+  list(): string[] {
+    return [...this.tokens.keys()];
+  }
+
+  /** The phones that show this kind. */
+  wanting(kind: NoticeKind): string[] {
+    return [...this.tokens].filter(([, kinds]) => kinds.includes(kind)).map(([t]) => t);
+  }
+
+  /** Added or changed: true when anything is new. */
+  add(token: string, kinds: NoticeKind[] = ALL_KINDS): boolean {
+    if (!token) return false;
+    const had = this.tokens.get(token);
+    if (had && had.length === kinds.length && had.every((k) => kinds.includes(k))) return false;
+    this.tokens.set(token, kinds);
     this.save();
     return true;
   }
@@ -91,7 +116,7 @@ export class PushTokens {
   private save(): void {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     const tmp = `${this.file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(this.list()), { mode: 0o600 });
+    fs.writeFileSync(tmp, JSON.stringify([...this.tokens].map(([token, kinds]) => ({ token, kinds }))), { mode: 0o600 });
     fs.renameSync(tmp, this.file);
   }
 }
@@ -188,10 +213,16 @@ export class FcmSender {
 /** Every registered phone hears every notice; a phone that is gone is forgotten. */
 export function createPush(opts: { sender: FcmSender | null; tokens: PushTokens; log: (m: string) => void }) {
   const { sender, tokens, log } = opts;
+  /**
+   * Requests a phone was told about. Only those get an "answered" push: in
+   * most chats requests are answered in the editor or allowed by the mode,
+   * and each of those woke the phone to take down a notice it never showed.
+   */
+  const announced = new Set<string>();
   return {
     enabled: sender !== null,
-    register(token: string): { enabled: boolean } {
-      if (tokens.add(token)) log(`push: a phone registered (${tokens.list().length} in all)`);
+    register(token: string, kinds?: unknown): { enabled: boolean } {
+      if (tokens.add(token, PushTokens.kinds(kinds))) log(`push: a phone registered for ${PushTokens.kinds(kinds).join(', ') || 'nothing'} (${tokens.list().length} in all)`);
       return { enabled: sender !== null };
     },
     unregister(token: string): void {
@@ -201,8 +232,21 @@ export function createPush(opts: { sender: FcmSender | null; tokens: PushTokens;
       if (!sender) return;
       const notice = noticeFor(sessionId, chatTitle, stored);
       if (!notice) return;
+      const key = `${sessionId}:${notice.requestId ?? ''}`;
+      let to: string[];
+      if (notice.kind === 'resolved') {
+        if (!announced.delete(key)) return;
+        to = tokens.wanting('attention');
+      } else {
+        to = tokens.wanting(notice.kind);
+        if (notice.kind === 'attention' && to.length > 0) {
+          announced.add(key);
+          // Bounded: requests answered while the daemon was down never resolve here.
+          if (announced.size > 500) announced.delete(announced.values().next().value as string);
+        }
+      }
       await Promise.all(
-        tokens.list().map(async (token) => {
+        to.map(async (token) => {
           try {
             if ((await sender.send(token, notice)) === 'gone') {
               tokens.remove(token);

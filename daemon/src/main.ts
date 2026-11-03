@@ -4,6 +4,7 @@ import { findGitDir, registeredWorktrees, workPlaces } from './gitBranch.js';
 import { dirsInUseBySession } from './activeDirs.js';
 import { appRelease } from './appRelease.js';
 import { FcmSender, PushTokens, createPush } from './push.js';
+import { coalescingSender } from './coalesce.js';
 import { handleHttpUpload, keepImageCopies, loadImageData, uploadChunk, uploadTiming } from './uploads.js';
 import net from 'node:net';
 import fs from 'node:fs';
@@ -120,6 +121,8 @@ const subscribers = new Map<string, Set<Client>>();
 interface Client {
   send(message: ServerMessage): void;
   attached: Set<string>;
+  /** Stops whatever the connection keeps running (its text gathering). */
+  dispose?: () => void;
 }
 
 /** Clients following every session at once: the phone's feed across all chats. */
@@ -614,7 +617,7 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
       return { places: workPlaces(info, meta.cwd, active) };
     }
     case 'registerPush':
-      return push.register(req.token);
+      return push.register(req.token, req.kinds);
     case 'unregisterPush':
       push.unregister(req.token);
       return null;
@@ -926,7 +929,14 @@ async function start(): Promise<void> {
       .then(({ startGateway }) => startGateway<Client>({
       port: mobilePort,
       handlers: {
-        open: (send) => openClient(send as (message: ServerMessage) => void),
+        // Streamed text gathered a few times a second: on a phone each frame is
+        // radio time and a redraw (see coalesce.ts).
+        open: (send) => {
+          const sender = coalescingSender(send as (message: ServerMessage) => void);
+          const client = openClient((m) => sender.send(m));
+          client.dispose = sender.close;
+          return client;
+        },
         // The phone's requests leave a trace: every refusal with its reason, and
         // each message and finished upload, so a queue stuck on a phone can be
         // read from here instead of guessed at.
@@ -944,7 +954,10 @@ async function start(): Promise<void> {
             throw err;
           }
         },
-        close: closeClient,
+        close: (client) => {
+          client.dispose?.();
+          closeClient(client);
+        },
       },
       log: logLine,
       http: (req, res, url) => {

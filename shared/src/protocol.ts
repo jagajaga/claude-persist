@@ -329,7 +329,12 @@ export type Request =
    * where to carry on, so a retried or out-of-order chunk is harmless.
    */
   /** A phone's Firebase token, so notifications reach it through Google. Answers `{ enabled }`: whether this server can send them. */
-  | { id: number; op: 'registerPush'; token: string }
+  /**
+   * `kinds`: which notices this phone shows ('attention', 'done'); the rest
+   * are not sent, so a switched-off kind no longer wakes the phone to be thrown
+   * away. Absent means all.
+   */
+  | { id: number; op: 'registerPush'; token: string; kinds?: string[] }
   | { id: number; op: 'unregisterPush'; token: string }
   | { id: number; op: 'uploadChunk'; sessionId: string; uploadId: string; name: string; offset: number; data: string; done?: boolean }
   /**

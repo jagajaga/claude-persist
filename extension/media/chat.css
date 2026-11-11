@@ -121,6 +121,7 @@ body { display: flex; flex-direction: column; }
 .thinking-card .tool-desc { font-family: inherit; font-size: 0.95em; font-style: italic; }
 /* Open, the body says it all: the same line in the header would read twice. */
 .thinking-card.open .tool-desc { visibility: hidden; }
+.thinking-card.superseded { display: none; }
 .thinking-body {
   color: var(--vscode-descriptionForeground);
   line-height: 1.55;

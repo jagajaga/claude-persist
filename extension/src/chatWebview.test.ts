@@ -2721,3 +2721,19 @@ test('thinking from history is a collapsed card; a stopped turn keeps what strea
   assert.equal(h.document.querySelectorAll('.thinking-card').length, 3);
 });
 
+test('only the newest thinking card is shown, the earlier ones hidden', () => {
+  const h = createHarness();
+  const shown = () =>
+    Array.from(h.document.querySelectorAll('.thinking-card'))
+      .filter((c) => !c.classList.contains('superseded'))
+      .map((c) => c.querySelector('.tool-desc')?.textContent);
+  h.send(liveEvent({ type: 'thinking', text: 'First thought.' }));
+  h.send(liveEvent({ type: 'assistant_text', text: 'answer' }));
+  h.send(liveEvent({ type: 'thinking', text: 'Second thought.' }));
+  assert.deepEqual(shown(), ['Second thought.']);
+  h.send({ type: 'thinkingDelta', text: 'Third, live' });
+  assert.deepEqual(shown(), ['Third, live']);
+  h.send(liveEvent({ type: 'thinking', text: 'Third, done.' }));
+  assert.deepEqual(shown(), ['Third, done.']);
+});
+

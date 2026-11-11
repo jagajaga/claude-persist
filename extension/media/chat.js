@@ -1389,12 +1389,22 @@
     return { card, dot, desc, body, raw: '' };
   }
 
+  /**
+   * Only the newest stretch of thinking is shown: the earlier ones are what
+   * Claude moved past, and a thread of them read as noise between the work.
+   */
+  function showOnlyLastThinking() {
+    const cards = threadEl.querySelectorAll('.thinking-card');
+    cards.forEach((c, i) => c.classList.toggle('superseded', i < cards.length - 1));
+  }
+
   function appendThinking(text) {
     if (!liveThinking) {
       endStreaming();
       liveThinking = makeThinkingCard(null);
       liveThinking.dot.classList.add('spin');
       threadEl.appendChild(liveThinking.card);
+      showOnlyLastThinking();
       setRunning(true);
     }
     liveThinking.raw += text;
@@ -1408,7 +1418,10 @@
   function renderThinking(event) {
     const t = liveThinking && !event.agent ? liveThinking : makeThinkingCard(event);
     if (t === liveThinking) liveThinking = null;
-    else threadEl.appendChild(t.card);
+    else {
+      threadEl.appendChild(t.card);
+      showOnlyLastThinking();
+    }
     t.dot.classList.remove('spin');
     t.desc.textContent = thinkingLine(event.text, false);
     t.body.replaceChildren(renderMarkdown(event.text));

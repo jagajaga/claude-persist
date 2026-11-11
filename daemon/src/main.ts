@@ -5,6 +5,7 @@ import { dirsInUseBySession } from './activeDirs.js';
 import { appRelease } from './appRelease.js';
 import { FcmSender, PushTokens, createPush } from './push.js';
 import { coalescingSender } from './coalesce.js';
+import { newestOfEachFamily } from './modelList.js';
 import { handleHttpUpload, keepImageCopies, loadImageData, uploadChunk, uploadTiming } from './uploads.js';
 import net from 'node:net';
 import fs from 'node:fs';
@@ -184,7 +185,7 @@ function toDescriptors(models: unknown[]): ModelDescriptor[] {
 }
 
 function cacheModels(models: unknown[]): void {
-  const descriptors = toDescriptors(models);
+  const descriptors = newestOfEachFamily(toDescriptors(models));
   if (descriptors.length === 0) return;
   const changed = JSON.stringify(descriptors) !== JSON.stringify(modelCache);
   modelCache = descriptors;

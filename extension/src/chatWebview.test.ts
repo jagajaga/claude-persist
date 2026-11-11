@@ -2724,7 +2724,10 @@ test('thinking from history is a collapsed card; a stopped turn keeps what strea
 test('only the newest thinking card is shown, the earlier ones hidden', () => {
   const h = createHarness();
   const shown = () =>
-    Array.from(h.document.querySelectorAll('.thinking-card'))
+    (Array.from(h.document.querySelectorAll('.thinking-card')) as Array<{
+      classList: { contains(name: string): boolean };
+      querySelector(sel: string): { textContent: string | null } | null;
+    }>)
       .filter((c) => !c.classList.contains('superseded'))
       .map((c) => c.querySelector('.tool-desc')?.textContent);
   h.send(liveEvent({ type: 'thinking', text: 'First thought.' }));

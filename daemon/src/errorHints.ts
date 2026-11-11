@@ -9,11 +9,15 @@
 // The original text is kept: it is the only diagnostic when the guess is wrong.
 import { NO_CLAUDE_MESSAGE } from './claudeExecutable.js';
 
-/** Where sign-in actually is, in the two places a user can reach it. */
+/**
+ * Where sign-in is, in words true on every screen that shows it. It named the
+ * editor's Command Palette, which a phone does not have, so on the phone it
+ * read as "you can't sign in here". The status event also carries the account
+ * (action 'signin'), which the panel and the phone turn into a button.
+ */
 export const SIGN_IN_HINT =
-  'Not signed in to Claude. Run "Claude Persist: Add Account (Sign In)" from the ' +
-  'Command Palette, or open the model pill at the bottom of this chat and choose ' +
-  '"Log in to another account…".';
+  'Not signed in to Claude, or the login has expired. Sign in again with the button below, ' +
+  'or from the model pill at the bottom of this chat, under Account.';
 
 const AUTH = [
   /invalid api key/i,

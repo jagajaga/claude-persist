@@ -9,7 +9,7 @@ import { SIGN_IN_HINT, friendlyError, isSetupFailure, needsSignIn } from './erro
  */
 test('a missing login says where sign-in is', () => {
   const out = friendlyError('Invalid API key · Please run /login');
-  assert.match(out, /Add Account/);
+  assert.match(out, /Sign in again/);
   assert.match(out, /model pill/);
 });
 
@@ -57,9 +57,11 @@ test('empty and nullish messages are safe', () => {
   assert.equal(isSetupFailure(''), false);
 });
 
-test('the hint names both routes to sign-in, since only one exists per context', () => {
-  assert.match(SIGN_IN_HINT, /Command Palette/);
+test('the hint points at what every screen has, never at the editor alone', () => {
+  assert.match(SIGN_IN_HINT, /button/);
   assert.match(SIGN_IN_HINT, /model pill/);
+  // A phone has no Command Palette: naming it told phone users they could not sign in.
+  assert.doesNotMatch(SIGN_IN_HINT, /Command Palette/);
 });
 
 /**

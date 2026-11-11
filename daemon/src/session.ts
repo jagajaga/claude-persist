@@ -112,6 +112,8 @@ export interface SessionCallbacks {
   /** Each API call's token usage, subagents' too, as it arrives: for the token-flow meter. */
   onTokens?(sessionId: string, usage: Record<string, unknown>, messageId?: string): void;
   onDelta(sessionId: string, text: string): void;
+  /** Thinking as it streams. Optional: tests and old callers need not care. */
+  onThinkingDelta?(sessionId: string, text: string): void;
   onMetaChanged(): void;
   /** A session renamed itself; persist it and tell the windows. */
   onRetitled(): void;
@@ -1237,6 +1239,11 @@ export class DaemonSession {
         cwd: this.workingDirectory(),
         ...(this.meta.sdkSessionId ? { resume: this.meta.sdkSessionId } : {}),
         includePartialMessages: true,
+        // Readable thinking: by default Claude sends only a signature, and a
+        // long think showed as nothing but "Working..." for minutes. This asks
+        // for the summary Claude gives of it; it changes what is shown, not
+        // whether or how much the model thinks.
+        extraArgs: { 'thinking-display': 'summarized' },
         permissionMode: this.meta.permissionMode ?? 'default',
         ...(this.meta.model ? { model: this.meta.model } : {}),
         ...(this.meta.effort ? { effort: this.meta.effort } : {}),
@@ -1549,7 +1556,9 @@ export class DaemonSession {
           this.callbacks.onTokens?.(this.meta.id, message.usage, typeof id === 'string' ? id : undefined);
         }
         for (const block of message?.content ?? []) {
-          if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
+          if (block.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim()) {
+            this.appendEvent({ type: 'thinking', text: block.thinking.trim(), ...(agent ? { agent } : {}) });
+          } else if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
             this.appendEvent({ type: 'assistant_text', text: block.text, ...(agent ? { agent } : {}) });
           } else if (block.type === 'tool_use') {
             const toolName = String(block.name ?? 'tool');
@@ -1602,6 +1611,8 @@ export class DaemonSession {
           // block completes.
           if (delta?.type === 'text_delta' && typeof delta.text === 'string' && !agent) {
             this.callbacks.onDelta(this.meta.id, delta.text);
+          } else if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string' && delta.thinking && !agent) {
+            this.callbacks.onThinkingDelta?.(this.meta.id, delta.thinking);
           }
         }
         break;

@@ -1287,3 +1287,44 @@ test('moveTo: refused while a turn is running, nothing changed', () => {
   assert.throws(() => session.moveTo('/srv'), /working/);
   assert.equal((session as unknown as { meta: { cwd: string } }).meta.cwd, '/tmp');
 });
+
+// ---------------------------------------------------------------------------
+// Thinking: Claude's summary of it streams, and each finished block is kept.
+// ---------------------------------------------------------------------------
+
+test('thinking streams from the main thread, and lands as its own event before the answer', () => {
+  const thinking: string[] = [];
+  const meta = { id: `think-${Date.now()}`, title: 't', cwd: '/tmp', createdAt: 0, lastActivityAt: 0 };
+  const session = new DaemonSession(meta, {
+    ...noopCallbacks,
+    onThinkingDelta(_id: string, text: string): void {
+      thinking.push(text);
+    },
+  });
+  const delta = (parent: string | null, piece: string) =>
+    feed(session, {
+      type: 'stream_event',
+      parent_tool_use_id: parent,
+      event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: piece } },
+    });
+  delta(null, 'Counting ');
+  delta('toolu_a', 'a subagent thinks ');
+  delta(null, 'solutions');
+  assert.deepEqual(thinking, ['Counting ', 'solutions']);
+
+  feed(session, {
+    type: 'assistant',
+    message: {
+      content: [
+        { type: 'thinking', thinking: 'Counting solutions to a+b+c=10.\n\n', signature: 'x' },
+        { type: 'thinking', thinking: '', signature: 'only a signature' },
+        { type: 'text', text: '54' },
+      ],
+    },
+  });
+  const kinds = session.eventsSince(0, 400).events.map((e) => e.event.type).filter((t) => t === 'thinking' || t === 'assistant_text');
+  assert.deepEqual(kinds, ['thinking', 'assistant_text']);
+  const kept = session.eventsSince(0, 400).events.find((e) => e.event.type === 'thinking');
+  assert.equal((kept?.event as { text: string }).text, 'Counting solutions to a+b+c=10.');
+});
+

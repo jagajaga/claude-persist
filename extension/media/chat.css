@@ -115,6 +115,21 @@ body { display: flex; flex-direction: column; }
 .dot.ok { background: var(--vscode-charts-green, #3fb950); }
 .dot.err { background: var(--vscode-errorForeground, #f14c4c); }
 .dot.spin { animation: pulse 1.1s ease-in-out infinite; }
+/* Thinking is neither a success nor a failure: the quiet text colour. */
+.dot.think { background: var(--vscode-descriptionForeground, #8b8b8b); }
+/* Prose, not code: the thread's own font, quiet and italic on the one line. */
+.thinking-card .tool-desc { font-family: inherit; font-size: 0.95em; font-style: italic; }
+/* Open, the body says it all: the same line in the header would read twice. */
+.thinking-card.open .tool-desc { visibility: hidden; }
+.thinking-body {
+  color: var(--vscode-descriptionForeground);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.thinking-body > * { white-space: normal; }
+.thinking-body .md > :first-child { margin-top: 0; }
+.thinking-body .md > :last-child { margin-bottom: 0; }
 @keyframes pulse { 50% { opacity: 0.35; } }
 
 .tool-name { font-weight: 600; }

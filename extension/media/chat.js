@@ -1318,6 +1318,7 @@
 
   function renderToolUse(event) {
     endStreaming();
+    if (!event.agent) settleThinking();
     if (event.toolName === 'TodoWrite') {
       renderTodoCard(event.input);
       return;
@@ -1348,6 +1349,77 @@
     head.addEventListener('click', () => card.classList.toggle('open'));
     threadEl.appendChild(card);
     if (event.toolUseId) toolCards.set(event.toolUseId, { body, dot });
+  }
+
+  // ---------- thinking ------------------------------------------------------
+  //
+  // Claude's summary of its thinking, as a card like a tool call's: collapsed
+  // to one line, opened with a click. While it streams the line shows the
+  // latest of it, so a long think reads as thinking rather than as a frozen
+  // "Working...". The finished block then arrives as a 'thinking' event and
+  // settles the same card, open or closed as you left it.
+
+  let liveThinking = null; // { card, dot, desc, body, raw }
+
+  /** The last non-empty line, short enough for the card's one line. */
+  function thinkingLine(text, fromEnd) {
+    const lines = String(text).split('\n').map((l) => l.trim()).filter(Boolean);
+    const line = (fromEnd ? lines[lines.length - 1] : lines[0]) || '';
+    return line.replace(/\*\*/g, '');
+  }
+
+  function makeThinkingCard(event) {
+    const card = el('div', 'tool-card thinking-card');
+    const head = el('div', 'tool-head');
+    const dot = el('span', 'dot think');
+    head.appendChild(dot);
+    if (event && event.agent) {
+      card.classList.add('from-agent');
+      card.dataset.tint = agentTint(event.agent);
+      head.appendChild(agentBadge(event.agent));
+    }
+    head.appendChild(el('span', 'tool-name', 'Thinking'));
+    const desc = el('span', 'tool-desc', '');
+    head.appendChild(desc);
+    head.appendChild(el('span', 'chevron', '▸'));
+    const body = el('div', 'tool-body thinking-body');
+    card.appendChild(head);
+    card.appendChild(body);
+    head.addEventListener('click', () => card.classList.toggle('open'));
+    return { card, dot, desc, body, raw: '' };
+  }
+
+  function appendThinking(text) {
+    if (!liveThinking) {
+      endStreaming();
+      liveThinking = makeThinkingCard(null);
+      liveThinking.dot.classList.add('spin');
+      threadEl.appendChild(liveThinking.card);
+      setRunning(true);
+    }
+    liveThinking.raw += text;
+    liveThinking.desc.textContent = thinkingLine(liveThinking.raw, true);
+    liveThinking.body.textContent = liveThinking.raw;
+    keepWorkingLast();
+    if (pinned) scrollToBottom();
+  }
+
+  /** The finished block: settle the live card, or draw one for a block from history. */
+  function renderThinking(event) {
+    const t = liveThinking && !event.agent ? liveThinking : makeThinkingCard(event);
+    if (t === liveThinking) liveThinking = null;
+    else threadEl.appendChild(t.card);
+    t.dot.classList.remove('spin');
+    t.desc.textContent = thinkingLine(event.text, false);
+    t.body.replaceChildren(renderMarkdown(event.text));
+  }
+
+  /** A turn ended with thinking still open (stopped, failed): keep what streamed. */
+  function settleThinking() {
+    if (!liveThinking) return;
+    liveThinking.dot.classList.remove('spin');
+    if (!liveThinking.raw.trim()) liveThinking.card.remove();
+    liveThinking = null;
   }
 
   function renderToolResult(event) {
@@ -1525,10 +1597,14 @@
         schedulePromptBar();
         break;
       }
+      case 'thinking':
+        renderThinking(event);
+        break;
       case 'assistant_text': {
         // Authoritative text for this block — supersedes every preview
         // fragment, including ones stranded above tool cards.
         dropPreviews();
+        settleThinking();
         const wrap = el('div', 'assistant');
         wrap.appendChild(renderMarkdown(event.text));
         threadEl.appendChild(withAgent(wrap, event));
@@ -1589,6 +1665,7 @@
         if (event.status === 'running') setRunning(true, event.detail, ts);
         else {
           settlePreviews();
+          settleThinking();
           setRunning(false);
           if (event.status === 'error') {
             const notice = el('div', 'meta error', `⚠︎ ${event.detail || 'error'}`);
@@ -1611,6 +1688,7 @@
       }
       case 'result': {
         settlePreviews();
+        settleThinking();
         const bits = [];
         // Sent-at time leads the line: it is the one part that answers "when",
         // and it reads naturally before the cost of the turn.
@@ -1988,6 +2066,7 @@
     setRunning(false);
     threadEl.replaceChildren();
     toolCards.clear();
+    liveThinking = null;
     loadEarlierRow = null;
     firstRenderedSeq = null;
     agentTints.clear();
@@ -2236,7 +2315,11 @@
       case 'event':
         renderEvent(msg.event.event, msg.event.ts);
         break;
+      case 'thinkingDelta':
+        appendThinking(msg.text);
+        break;
       case 'delta': {
+        settleThinking();
         if (!streamingEl) {
           streamingEl = makePreview();
           threadEl.appendChild(streamingEl);

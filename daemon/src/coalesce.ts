@@ -26,14 +26,15 @@ export function coalescingSender<M extends Message>(
   windowMs = 250,
   timers: Timers = realTimers,
 ): { send(message: M): void; close(): void } {
-  /** Text gathered per chat since the window opened. */
-  const gathered = new Map<string, string>();
+  /** Text gathered per chat and kind (answer or thinking) since the window opened, in arrival order. */
+  const gathered = new Map<string, { kind: string; sessionId: string; text: string }>();
+  const streamed = (kind: string) => kind === 'delta' || kind === 'thinking_delta';
   let timer: unknown = null;
 
-  const deltaOf = (sessionId: string, text: string) => ({ kind: 'delta', sessionId, text }) as unknown as M;
+  const out = (g: { kind: string; sessionId: string; text: string }) => ({ kind: g.kind, sessionId: g.sessionId, text: g.text }) as unknown as M;
 
   const flushAll = (): void => {
-    for (const [sessionId, text] of gathered) send(deltaOf(sessionId, text));
+    for (const g of gathered.values()) send(out(g));
     gathered.clear();
   };
 
@@ -49,23 +50,26 @@ export function coalescingSender<M extends Message>(
 
   return {
     send(message: M): void {
-      if (message.kind === 'delta' && message.sessionId && typeof message.text === 'string') {
+      if (streamed(message.kind) && message.sessionId && typeof message.text === 'string') {
         if (timer === null) {
           // Nothing recent: this piece goes now, so an answer starts without delay.
           send(message);
           timer = timers.setTimeout(tick, windowMs);
           return;
         }
-        gathered.set(message.sessionId, (gathered.get(message.sessionId) ?? '') + message.text);
+        const key = `${message.kind}\u0000${message.sessionId}`;
+        const had = gathered.get(key);
+        if (had) had.text += message.text;
+        else gathered.set(key, { kind: message.kind, sessionId: message.sessionId, text: message.text });
         return;
       }
       // Anything else about a chat follows the text gathered for it.
       const sessionId = message.sessionId;
       if (sessionId !== undefined) {
-        const text = gathered.get(sessionId);
-        if (text !== undefined) {
-          gathered.delete(sessionId);
-          send(deltaOf(sessionId, text));
+        for (const [key, g] of gathered) {
+          if (g.sessionId !== sessionId) continue;
+          gathered.delete(key);
+          send(out(g));
         }
       }
       send(message);

@@ -56,3 +56,17 @@ test('closed, nothing more is sent', () => {
   t.fire();
   assert.equal(sent.length, 1);
 });
+
+test('thinking and answer text are gathered apart and sent in the order they began', () => {
+  const sent: M[] = [];
+  const t = fakeTimers();
+  const s = coalescingSender<M>((m) => sent.push(m), 250, t.timers);
+  s.send({ kind: 'thinking_delta', sessionId: 's1', text: 'I ' });
+  s.send({ kind: 'thinking_delta', sessionId: 's1', text: 'count' });
+  s.send({ kind: 'thinking_delta', sessionId: 's1', text: '.' });
+  s.send({ kind: 'delta', sessionId: 's1', text: '5' });
+  s.send({ kind: 'delta', sessionId: 's1', text: '4' });
+  t.fire();
+  assert.deepEqual(sent.map((m) => `${m.kind}:${m.text}`), ['thinking_delta:I ', 'thinking_delta:count.', 'delta:54']);
+});
+

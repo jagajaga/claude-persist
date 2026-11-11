@@ -230,6 +230,11 @@ export class ChatPanelManager {
     if (entry) this.post(entry, { type: 'delta', text });
   }
 
+  handleThinkingDelta(sessionId: string, text: string): void {
+    const entry = this.panels.get(sessionId);
+    if (entry) this.post(entry, { type: 'thinkingDelta', text });
+  }
+
   handleModels(models: ModelDescriptor[]): void {
     this.lastModels = models;
     const merged = this.mergedModels();

@@ -195,6 +195,8 @@ export interface AttachResult {
 type PushHandler = {
   onEvent(sessionId: string, event: PersistedEvent): void;
   onDelta(sessionId: string, text: string): void;
+  /** Claude's thinking as it streams. Optional, so older handlers need not care. */
+  onThinkingDelta?(sessionId: string, text: string): void;
   onAgents(sessionId: string, agents: ActiveAgent[]): void;
   onSessionsChanged(): void;
   onModels(models: ModelDescriptor[]): void;
@@ -466,6 +468,9 @@ export class DaemonClient {
         break;
       case 'delta':
         this.handler.onDelta(message.sessionId, message.text);
+        break;
+      case 'thinking_delta':
+        this.handler.onThinkingDelta?.(message.sessionId, message.text);
         break;
       case 'agents':
         this.handler.onAgents(message.sessionId, message.agents);

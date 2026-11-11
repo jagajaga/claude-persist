@@ -2675,3 +2675,49 @@ test('composer: a paste reads clipboardData.types before .files or .items', () =
   box.dispatchEvent(pasteEvent(h, data));
   assert.equal(order[0], 'types', `read in the order ${order.join(', ')}`);
 });
+
+// ---------------------------------------------------------------------------
+// Thinking: a collapsed card that streams its latest line, opens on a click,
+// and is settled (not duplicated) by the finished block.
+// ---------------------------------------------------------------------------
+
+test('thinking streams into one collapsed card that opens on a click and is settled by the finished block', () => {
+  const h = createHarness();
+  h.send({ type: 'thinkingDelta', text: 'Reading the draft.\nComparing the three ' });
+  h.send({ type: 'thinkingDelta', text: 'versions' });
+  const cards = () => h.document.querySelectorAll('.thinking-card');
+  assert.equal(cards().length, 1);
+  const card = cards()[0];
+  assert.equal(card.querySelector('.tool-name')?.textContent, 'Thinking');
+  assert.equal(card.querySelector('.tool-desc')?.textContent, 'Comparing the three versions');
+  assert.ok(card.querySelector('.dot.spin'), 'live thinking pulses');
+  assert.ok(!card.classList.contains('open'), 'collapsed until clicked');
+
+  (card.querySelector('.tool-head') as unknown as { click(): void }).click();
+  assert.ok(card.classList.contains('open'));
+  assert.match(card.querySelector('.thinking-body')?.textContent ?? '', /Comparing the three versions/);
+
+  h.send(liveEvent({ type: 'thinking', text: '**Reading the draft.** Comparing the three versions.' }));
+  assert.equal(cards().length, 1, 'the finished block settles the live card');
+  assert.ok(card.classList.contains('open'), 'stays open as you left it');
+  assert.ok(!card.querySelector('.dot.spin'));
+  assert.equal(card.querySelector('.tool-desc')?.textContent, 'Reading the draft. Comparing the three versions.');
+  assert.ok(card.querySelector('.thinking-body .md'), 'the finished text goes through the markdown renderer');
+});
+
+test('thinking from history is a collapsed card; a stopped turn keeps what streamed', () => {
+  const h = createHarness();
+  h.send(liveEvent({ type: 'thinking', text: 'Earlier thought.' }));
+  const card = h.document.querySelector('.thinking-card');
+  assert.ok(card && !card.classList.contains('open'));
+
+  h.send({ type: 'thinkingDelta', text: 'Half a thought' });
+  h.send(liveEvent({ type: 'status', status: 'idle' }));
+  const all = h.document.querySelectorAll('.thinking-card');
+  assert.equal(all.length, 2);
+  assert.ok(!all[1].querySelector('.dot.spin'), 'no longer pulsing once the turn stopped');
+  // The next turn's thinking starts a card of its own.
+  h.send({ type: 'thinkingDelta', text: 'New turn' });
+  assert.equal(h.document.querySelectorAll('.thinking-card').length, 3);
+});
+

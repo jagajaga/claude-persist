@@ -121,6 +121,11 @@ export type ChatEvent =
   | { type: 'user_message'; text: string; attachments?: AttachmentRef[]; clientMessageId?: string }
   /** `agent` names the subagent that wrote it; absent means the main thread. */
   | { type: 'assistant_text'; text: string; agent?: string }
+  /**
+   * What Claude thought before answering, as the summary Claude gives of it
+   * (the raw thinking is not exposed). Shown collapsed; open it to read.
+   */
+  | { type: 'thinking'; text: string; agent?: string }
   | { type: 'tool_use'; toolUseId?: string; toolName: string; input: unknown; agent?: string }
   | { type: 'tool_result'; toolUseId?: string; summary: string; isError: boolean; agent?: string }
   | { type: 'permission_request'; requestId: string; toolName: string; input: unknown }
@@ -421,6 +426,8 @@ export type Push =
   | { kind: 'rateLimits'; usage: UsageSnapshot }
   /** Live-only streaming text; not persisted, superseded by the next assistant_text event. */
   | { kind: 'delta'; sessionId: string; text: string }
+  /** Thinking as it streams, before its `thinking` event lands. */
+  | { kind: 'thinking_delta'; sessionId: string; text: string }
   | { kind: 'sessions_changed' }
   /** Broadcast whenever the active account or the set of known accounts changes. */
   | { kind: 'accounts'; accounts: AccountInfo[] };

@@ -366,6 +366,9 @@ const callbacks = {
   onDelta(sessionId: string, text: string): void {
     broadcast(sessionId, { kind: 'delta', sessionId, text });
   },
+  onThinkingDelta(sessionId: string, text: string): void {
+    broadcast(sessionId, { kind: 'thinking_delta', sessionId, text });
+  },
   onAgents(sessionId: string, agents: Array<{ id: string; description: string }>): void {
     broadcast(sessionId, { kind: 'agents', sessionId, agents });
   },

@@ -8,6 +8,12 @@ export interface SessionMeta {
   cwd: string;
   /** Claude Agent SDK session id, once known — used to resume after a daemon restart. */
   sdkSessionId?: string;
+  /**
+   * A fork not yet started: its sdkSessionId is still the original's, and the
+   * first query resumes that with forkSession, so Claude branches the
+   * conversation into a new id and the original is left as it was.
+   */
+  forkPending?: boolean;
   permissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
   model?: string;
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -151,6 +157,29 @@ export class Registry {
       lastActivityAt: now,
     };
     this.sessions.set(meta.id, meta);
+    this.save();
+    return meta;
+  }
+
+  /**
+   * A new chat that carries on from [sourceId]'s conversation: same folder,
+   * model, effort and permissions, its history copied by [copyLog] so the
+   * fork opens showing what came before. Claude branches the conversation on
+   * the fork's first message (see forkPending).
+   */
+  fork(sourceId: string, copyLog: (fromId: string, toId: string) => void): SessionMeta {
+    const source = this.sessions.get(sourceId);
+    if (!source) throw new Error(`unknown session ${sourceId}`);
+    if (!source.sdkSessionId) throw new Error('This chat has no conversation to fork yet');
+    const meta = this.create(source.cwd, `${source.title} (fork)`);
+    meta.sdkSessionId = source.sdkSessionId;
+    meta.forkPending = true;
+    // Named for what it is; the auto-titler must not rename it to its parent's name.
+    meta.titleSetByUser = true;
+    if (source.model) meta.model = source.model;
+    if (source.effort) meta.effort = source.effort;
+    if (source.permissionMode) meta.permissionMode = source.permissionMode;
+    copyLog(source.id, meta.id);
     this.save();
     return meta;
   }

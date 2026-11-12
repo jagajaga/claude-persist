@@ -581,6 +581,17 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
       broadcastAll({ kind: 'sessions_changed' });
       return sessionInfo(meta.id);
     }
+    case 'forkSession': {
+      const meta = registry.fork(req.sessionId, (from, to) => {
+        try {
+          fs.copyFileSync(sessionLogPath(from), sessionLogPath(to));
+        } catch {
+          // No history on disk yet: the fork opens empty but still carries on the conversation.
+        }
+      });
+      broadcastAll({ kind: 'sessions_changed' });
+      return sessionInfo(meta.id);
+    }
     case 'attach': {
       const session = getSession(req.sessionId);
       client.attached.add(req.sessionId);

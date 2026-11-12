@@ -101,3 +101,37 @@ test('save: a reader never observes a partially written registry', () => {
     assert.equal(parsed.length, 20);
   }
 });
+
+test('fork: a new chat in the same folder and settings that branches off the original', () => {
+  const file = registryFile();
+  const registry = new Registry(file);
+  const source = registry.create('/home/me/shalyto', 'shl|Copy');
+  source.sdkSessionId = 'sdk-orig';
+  source.model = 'claude-fable-5-2';
+  source.effort = 'max';
+  source.permissionMode = 'bypassPermissions';
+  const copied: Array<[string, string]> = [];
+  const fork = registry.fork(source.id, (from, to) => copied.push([from, to]));
+
+  assert.notEqual(fork.id, source.id);
+  assert.equal(fork.cwd, '/home/me/shalyto');
+  assert.equal(fork.title, 'shl|Copy (fork)');
+  assert.equal(fork.titleSetByUser, true);
+  assert.deepEqual([fork.model, fork.effort, fork.permissionMode], ['claude-fable-5-2', 'max', 'bypassPermissions']);
+  assert.equal(fork.sdkSessionId, 'sdk-orig');
+  assert.equal(fork.forkPending, true);
+  assert.deepEqual(copied, [[source.id, fork.id]]);
+  // The original is left exactly as it was.
+  assert.equal(source.forkPending, undefined);
+  // And the fork survives a restart still waiting to branch.
+  const again = new Registry(file);
+  again.load();
+  assert.equal(again.get(fork.id)?.forkPending, true);
+});
+
+test('fork: a chat with no conversation yet cannot be forked', () => {
+  const registry = new Registry(registryFile());
+  const empty = registry.create('/tmp', 'new');
+  assert.throws(() => registry.fork(empty.id, () => {}), /no conversation/);
+  assert.throws(() => registry.fork('nope', () => {}), /unknown session/);
+});

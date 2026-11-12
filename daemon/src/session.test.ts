@@ -13,7 +13,7 @@ const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-session-test-'));
 fs.mkdirSync(path.join(tmpHome, '.claude-persist', 'sessions'), { recursive: true });
 process.env.HOME = tmpHome;
 
-const { DaemonSession } = await import('./session.js');
+const { DaemonSession, resumeOptions } = await import('./session.js');
 
 function sessionsDir(): string {
   return path.join(tmpHome, '.claude-persist', 'sessions');
@@ -1328,3 +1328,16 @@ test('thinking streams from the main thread, and lands as its own event before t
   assert.equal((kept?.event as { text: string }).text, 'Counting solutions to a+b+c=10.');
 });
 
+
+test('a fork branches off the original on its first query, then resumes its own conversation', () => {
+  assert.deepEqual(resumeOptions({}), {});
+  assert.deepEqual(resumeOptions({ sdkSessionId: 'a' }), { resume: 'a' });
+  assert.deepEqual(resumeOptions({ sdkSessionId: 'a', forkPending: true }), { resume: 'a', forkSession: true });
+
+  const meta = { id: `fork-${Date.now()}`, title: 't', cwd: '/tmp', createdAt: 0, lastActivityAt: 0, sdkSessionId: 'orig', forkPending: true };
+  const session = new DaemonSession(meta, noopCallbacks);
+  feed(session, { type: 'system', subtype: 'init', session_id: 'branched' });
+  assert.equal(session.meta.sdkSessionId, 'branched');
+  assert.equal(session.meta.forkPending, undefined);
+  assert.deepEqual(resumeOptions(session.meta), { resume: 'branched' });
+});

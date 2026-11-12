@@ -107,6 +107,12 @@ class InputQueue<T> implements AsyncIterable<T> {
   }
 }
 
+/** How a session's query picks up its conversation: resumed, or for a new fork, branched off the original. */
+export function resumeOptions(meta: Pick<SessionMeta, 'sdkSessionId' | 'forkPending'>): { resume?: string; forkSession?: boolean } {
+  if (!meta.sdkSessionId) return {};
+  return meta.forkPending ? { resume: meta.sdkSessionId, forkSession: true } : { resume: meta.sdkSessionId };
+}
+
 export interface SessionCallbacks {
   onEvent(sessionId: string, event: PersistedEvent): void;
   /** Each API call's token usage, subagents' too, as it arrives: for the token-flow meter. */
@@ -1237,7 +1243,7 @@ export class DaemonSession {
       prompt: this.input as AsyncIterable<never>,
       options: {
         cwd: this.workingDirectory(),
-        ...(this.meta.sdkSessionId ? { resume: this.meta.sdkSessionId } : {}),
+        ...resumeOptions(this.meta),
         includePartialMessages: true,
         // Readable thinking: by default Claude sends only a signature, and a
         // long think showed as nothing but "Working..." for minutes. This asks
@@ -1528,6 +1534,8 @@ export class DaemonSession {
         if (msg.subtype === 'init') {
           if (typeof msg.session_id === 'string' && this.meta.sdkSessionId !== msg.session_id) {
             this.meta.sdkSessionId = msg.session_id;
+            // A fork has its own conversation now: from here on it resumes that.
+            if (this.meta.forkPending) delete this.meta.forkPending;
             this.callbacks.onMetaChanged();
           }
           // The one place anything says which model is actually answering. It

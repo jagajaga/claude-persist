@@ -305,6 +305,12 @@ export type Request =
   | { id: number; op: 'hello'; protocolVersion: number }
   | { id: number; op: 'listSessions' }
   | { id: number; op: 'createSession'; cwd: string; title?: string }
+  /**
+   * A new chat carrying on from this one: same folder and settings, its
+   * history shown, the conversation branched on its first message so the
+   * original is untouched. Answers the new chat's SessionInfo.
+   */
+  | { id: number; op: 'forkSession'; sessionId: string }
   /** Move a chat to another folder; its next turn runs there, history intact. Refused mid-turn. */
   | { id: number; op: 'setSessionCwd'; sessionId: string; cwd: string }
   /**

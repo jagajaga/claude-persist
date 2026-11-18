@@ -13,7 +13,7 @@ const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-session-test-'));
 fs.mkdirSync(path.join(tmpHome, '.claude-persist', 'sessions'), { recursive: true });
 process.env.HOME = tmpHome;
 
-const { DaemonSession, resumeOptions } = await import('./session.js');
+const { DaemonSession, resumeOptions, modelToRun } = await import('./session.js');
 
 function sessionsDir(): string {
   return path.join(tmpHome, '.claude-persist', 'sessions');
@@ -1340,4 +1340,13 @@ test('a fork branches off the original on its first query, then resumes its own 
   assert.equal(session.meta.sdkSessionId, 'branched');
   assert.equal(session.meta.forkPending, undefined);
   assert.deepEqual(resumeOptions(session.meta), { resume: 'branched' });
+});
+
+test('a chat with no model chosen runs Opus, not whatever Claude recommends', () => {
+  assert.equal(modelToRun(undefined), 'opus');
+  assert.equal(modelToRun(null), 'opus');
+  assert.equal(modelToRun(''), 'opus');
+  assert.equal(modelToRun('default'), 'opus');
+  assert.equal(modelToRun('claude-fable-5-2'), 'claude-fable-5-2');
+  assert.equal(modelToRun('sonnet'), 'sonnet');
 });

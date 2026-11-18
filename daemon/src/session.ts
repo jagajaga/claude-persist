@@ -107,6 +107,17 @@ class InputQueue<T> implements AsyncIterable<T> {
   }
 }
 
+/**
+ * The model a chat runs. A chat with none chosen ("default") runs the newest
+ * Opus, not whatever Claude recommends: the recommendation is Anthropic's to
+ * change, and the owner wants Opus unless a chat says otherwise. 'opus' is
+ * Claude's alias for its newest Opus, so this moves on with new releases.
+ */
+export const DEFAULT_MODEL = 'opus';
+export function modelToRun(chosen?: string | null): string {
+  return chosen && chosen !== 'default' ? chosen : DEFAULT_MODEL;
+}
+
 /** How a session's query picks up its conversation: resumed, or for a new fork, branched off the original. */
 export function resumeOptions(meta: Pick<SessionMeta, 'sdkSessionId' | 'forkPending'>): { resume?: string; forkSession?: boolean } {
   if (!meta.sdkSessionId) return {};
@@ -1065,7 +1076,7 @@ export class DaemonSession {
     try {
       if (this.activeQuery) {
         if (opts.model !== undefined) {
-          await this.activeQuery.setModel(opts.model ?? undefined);
+          await this.activeQuery.setModel(modelToRun(opts.model));
         }
         if (opts.effort !== undefined) {
           await this.activeQuery.applyFlagSettings({ effortLevel: opts.effort ?? null });
@@ -1251,7 +1262,7 @@ export class DaemonSession {
         // whether or how much the model thinks.
         extraArgs: { 'thinking-display': 'summarized' },
         permissionMode: this.meta.permissionMode ?? 'default',
-        ...(this.meta.model ? { model: this.meta.model } : {}),
+        model: modelToRun(this.meta.model),
         ...(this.meta.effort ? { effort: this.meta.effort } : {}),
         // Launch with the bypass *capability* so the mode can be toggled
         // mid-session; actual behavior is still governed by permissionMode.

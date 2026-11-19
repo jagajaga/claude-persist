@@ -14,6 +14,8 @@ export interface SessionMeta {
    * conversation into a new id and the original is left as it was.
    */
   forkPending?: boolean;
+  /** Super bypass: permissions the chat still asks for are allowed by the server (see setAutoApprove). */
+  autoApprove?: boolean;
   permissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
   model?: string;
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';

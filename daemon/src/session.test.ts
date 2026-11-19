@@ -13,7 +13,7 @@ const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-session-test-'));
 fs.mkdirSync(path.join(tmpHome, '.claude-persist', 'sessions'), { recursive: true });
 process.env.HOME = tmpHome;
 
-const { DaemonSession, resumeOptions, modelToRun } = await import('./session.js');
+const { DaemonSession, resumeOptions, modelToRun, autoApprovedLine } = await import('./session.js');
 
 function sessionsDir(): string {
   return path.join(tmpHome, '.claude-persist', 'sessions');
@@ -1349,4 +1349,45 @@ test('a chat with no model chosen runs Opus, not whatever Claude recommends', ()
   assert.equal(modelToRun('default'), 'opus');
   assert.equal(modelToRun('claude-fable-5-2'), 'claude-fable-5-2');
   assert.equal(modelToRun('sonnet'), 'sonnet');
+});
+
+// ---------------------------------------------------------------------------
+// Super bypass: what a chat still asks for in bypass mode is allowed here.
+// ---------------------------------------------------------------------------
+
+type CanUse = (tool: string, input: Record<string, unknown>) => Promise<{ behavior: string; updatedInput?: unknown }>;
+const canUse = (s: InstanceType<typeof DaemonSession>) => (s as unknown as { canUseTool: CanUse }).canUseTool;
+const pendingCount = (s: InstanceType<typeof DaemonSession>) =>
+  (s as unknown as { pendingPermissions: Map<string, unknown> }).pendingPermissions.size;
+
+test('super bypass allows what the chat asks, says so, and releases what was already waiting; questions still wait', async () => {
+  const session = makeSession(`super-${Date.now()}`);
+  session.meta.permissionMode = 'bypassPermissions';
+  // Asked before super bypass: waits, as before.
+  const waiting = canUse(session)('Bash', { command: 'docker rm -f mg-ab' });
+  const question = canUse(session)('AskUserQuestion', { questions: [{ question: 'Which?', header: 'h', options: [] }] });
+  assert.equal(pendingCount(session), 2);
+
+  await session.setAutoApprove(true);
+  assert.equal((await waiting).behavior, 'allow');
+  assert.equal(pendingCount(session), 1, 'the question still waits for an answer');
+
+  const later = await canUse(session)('Bash', { command: 'kill 1234' });
+  assert.equal(later.behavior, 'allow');
+  const notes = session.eventsSince(0, 400).events.map((e) => e.event).filter((e) => e.type === 'status') as Array<{ detail?: string }>;
+  assert.ok(notes.some((n) => n.detail === 'Super bypass allowed: Bash: kill 1234'));
+  const requests = session.eventsSince(0, 400).events.filter((e) => e.event.type === 'permission_request');
+  assert.equal(requests.length, 1, 'no card, and no notification, for what was allowed automatically');
+  void question;
+});
+
+test('super bypass turns bypass on with it, and leaving bypass leaves super bypass', async () => {
+  const session = makeSession(`super-mode-${Date.now()}`);
+  await session.setAutoApprove(true);
+  assert.equal(session.meta.permissionMode, 'bypassPermissions');
+  assert.equal(session.meta.autoApprove, true);
+  await session.setPermissionMode('default');
+  assert.equal(session.meta.autoApprove, undefined);
+  assert.equal(autoApprovedLine('Bash', { command: 'a\n  b' }), 'Bash: a b');
+  assert.equal(autoApprovedLine('WebFetch', {}), 'WebFetch');
 });

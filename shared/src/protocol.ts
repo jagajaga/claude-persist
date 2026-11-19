@@ -60,6 +60,12 @@ export interface SessionInfo {
   cwd: string;
   status: SessionStatus;
   permissionMode: PermissionMode;
+  /**
+   * Super bypass: on top of bypassPermissions, every permission a chat still
+   * asks for (a settings hook returning "ask", say) is allowed by the server
+   * itself. Questions Claude asks still wait for you.
+   */
+  autoApprove?: boolean;
   /** Model alias/id override; undefined = account default. */
   model?: string;
   /**
@@ -363,6 +369,8 @@ export type Request =
   | { id: number; op: 'interrupt'; sessionId: string }
   | { id: number; op: 'permission'; sessionId: string; requestId: string; allow: boolean; message?: string; answers?: Record<string, string> }
   | { id: number; op: 'setPermissionMode'; sessionId: string; mode: PermissionMode }
+  /** Super bypass on or off; on also turns bypassPermissions on, off leaves the mode alone. */
+  | { id: number; op: 'setAutoApprove'; sessionId: string; on: boolean }
   | { id: number; op: 'renameSession'; sessionId: string; title: string }
   /** undefined = leave unchanged; null = reset to default. */
   | { id: number; op: 'setSessionOptions'; sessionId: string; model?: string | null; effort?: EffortLevel | null }

@@ -517,6 +517,7 @@ function sessionInfo(id: string): SessionInfo {
     cwd: meta.cwd,
     status: live?.status ?? 'idle',
     permissionMode: meta.permissionMode ?? 'default',
+    ...(meta.autoApprove ? { autoApprove: true } : {}),
     ...(meta.model ? { model: meta.model } : {}),
     ...(meta.activeModel ? { activeModel: meta.activeModel } : {}),
     ...(meta.effort ? { effort: meta.effort } : {}),
@@ -712,6 +713,14 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
     case 'setPermissionMode': {
       void getSession(req.sessionId).setPermissionMode(req.mode);
       return null;
+    }
+    case 'setAutoApprove': {
+      return getSession(req.sessionId)
+        .setAutoApprove(req.on)
+        .then(() => {
+          broadcastAll({ kind: 'sessions_changed' });
+          return null;
+        });
     }
     case 'setSessionOptions': {
       void getSession(req.sessionId).setOptions({ model: req.model, effort: req.effort });

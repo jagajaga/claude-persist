@@ -107,6 +107,14 @@ class InputQueue<T> implements AsyncIterable<T> {
   }
 }
 
+/** "Bash: docker rm -f x", short enough for one line in the chat. */
+export function autoApprovedLine(toolName: string, input: Record<string, unknown> | undefined): string {
+  const o = input ?? {};
+  const detail = ['command', 'file_path', 'path', 'url', 'pattern'].map((k) => o[k]).find((v) => typeof v === 'string' && v.trim());
+  const text = typeof detail === 'string' ? detail.replace(/\s+/g, ' ').trim() : '';
+  return text ? `${toolName}: ${text.length > 160 ? `${text.slice(0, 159)}…` : text}` : toolName;
+}
+
 /**
  * The model a chat runs. A chat with none chosen ("default") runs the newest
  * Opus, not whatever Claude recommends: the recommendation is Anthropic's to
@@ -1041,8 +1049,27 @@ export class DaemonSession {
     await this.activeQuery?.interrupt();
   }
 
+  /**
+   * Super bypass. Bypass mode does not skip a hook's "ask" (the owner's own
+   * ask-risky-shell hook puts docker rm, kill, ssh and the like back in front
+   * of him), so chats in bypass still stopped and waited. With this on, those
+   * are allowed here, each one noted in the chat; anything already waiting is
+   * allowed at once. Questions Claude asks are never answered for you.
+   */
+  async setAutoApprove(on: boolean): Promise<void> {
+    if (on) this.meta.autoApprove = true;
+    else delete this.meta.autoApprove;
+    this.callbacks.onMetaChanged();
+    if (on) {
+      if (this.meta.permissionMode !== 'bypassPermissions') await this.setPermissionMode('bypassPermissions');
+      else for (const [requestId, pending] of [...this.pendingPermissions.entries()]) if (!pending.isQuestion) this.resolvePermission(requestId, true);
+    }
+  }
+
   async setPermissionMode(mode: NonNullable<SessionMeta['permissionMode']>): Promise<void> {
     this.meta.permissionMode = mode;
+    // Leaving bypass leaves super bypass too: it only ever meant "bypass, and more".
+    if (mode !== 'bypassPermissions' && this.meta.autoApprove) delete this.meta.autoApprove;
     this.callbacks.onMetaChanged();
     // Bypass mode stops future canUseTool prompts; unblock any prompt that is
     // already waiting, otherwise the turn stays parked on a stale question.
@@ -1332,6 +1359,13 @@ export class DaemonSession {
           },
         });
       });
+    }
+
+    if (this.meta.autoApprove) {
+      // Allowed without asking, but never silently: the chat says what went through.
+      const what = autoApprovedLine(toolName, input);
+      this.appendEvent({ type: 'status', status: this.status, detail: `Super bypass allowed: ${what}` });
+      return { behavior: 'allow', updatedInput: input };
     }
 
     this.appendEvent({ type: 'permission_request', requestId, toolName, input });

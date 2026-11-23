@@ -228,4 +228,40 @@ function shareMcp(p: SetupPaths, dirs: string[], log: (m: string) => void): void
     if (!c.json) continue; // an account never logged in: nothing of its own to keep beside them
     if (writeIfChanged(c.file, c.json, { ...c.json, mcpOAuth: tokens }, 0o600)) log(`mcp: ${path.basename(path.dirname(c.file))} has every account's MCP logins`);
   }
+  // When each server's login was last saved anywhere: the newest file holding a real token for it.
+  const signedInAt: Record<string, number> = {};
+  for (const c of creds) {
+    for (const [key, value] of Object.entries((c.json?.mcpOAuth as Json | undefined) ?? {})) {
+      const token = value as { accessToken?: unknown };
+      if (typeof token?.accessToken !== 'string' || !token.accessToken) continue;
+      const name = key.split('|')[0];
+      signedInAt[name] = Math.max(signedInAt[name] ?? 0, c.mtime);
+    }
+  }
+  for (const dir of [p.claudeDir, ...dirs]) {
+    const cleared = forgetStaleNeedsAuth(path.join(dir, 'mcp-needs-auth-cache.json'), signedInAt);
+    if (cleared.length) log(`mcp: ${path.basename(dir)} will try ${cleared.join(', ')} again (signed in since)`);
+  }
+}
+
+/**
+ * Claude notes per account which MCP servers "need auth" and skips them until
+ * the note runs out. Signing in on one account and sharing the login left the
+ * others skipping the server anyway: DocSend, signed in at 18:41, stayed
+ * "needs-auth" on three accounts noted at 18:39. A note older than the newest
+ * login for its server is out of date; one written after it means the login
+ * really failed, and stays.
+ */
+export function forgetStaleNeedsAuth(file: string, signedInAt: Record<string, number>): string[] {
+  const cache = readJson(file);
+  if (!cache) return [];
+  const cleared: string[] = [];
+  const kept: Json = {};
+  for (const [name, note] of Object.entries(cache)) {
+    const at = (note as { timestamp?: unknown })?.timestamp;
+    if (typeof at === 'number' && signedInAt[name] !== undefined && at < signedInAt[name]) cleared.push(name);
+    else kept[name] = note;
+  }
+  if (cleared.length) writeIfChanged(file, cache, kept);
+  return cleared;
 }

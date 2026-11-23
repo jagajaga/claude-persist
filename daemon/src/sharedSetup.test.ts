@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { mergeSettings, newestLogins, shareAccountSetup } from './sharedSetup.js';
+import { forgetStaleNeedsAuth, mergeSettings, newestLogins, shareAccountSetup } from './sharedSetup.js';
 
 /** A home with a default account and two named ones, laid out as on the real machine. */
 function home() {
@@ -121,4 +121,26 @@ test('signing in again in any account reaches all the others', () => {
   fs.utimesSync(homeCreds, later, later);
   shareAccountSetup(h.paths);
   for (const d of [h.claudeDir, h.a]) assert.equal(h.read(path.join(d, '.credentials.json')).mcpOAuth['sentry|1'].accessToken, 'brand-new');
+});
+
+test('a login shared to an account clears that account\'s out-of-date "needs auth" note, and keeps a newer one', () => {
+  const h = home();
+  const signedIn = fs.statSync(path.join(h.a, '.credentials.json')).mtimeMs;
+  // Noted before the sign-in on "work": out of date once the login is shared.
+  fs.writeFileSync(path.join(h.b, 'mcp-needs-auth-cache.json'), JSON.stringify({ sentry: { timestamp: signedIn - 120_000 }, slack: { timestamp: 1 } }));
+  // Noted after the sign-in: the login really failed there; it stays.
+  fs.writeFileSync(path.join(h.claudeDir, 'mcp-needs-auth-cache.json'), JSON.stringify({ sentry: { timestamp: signedIn + 60_000 } }));
+  const logs: string[] = [];
+  shareAccountSetup(h.paths, (m) => logs.push(m));
+  assert.deepEqual(h.read(path.join(h.b, 'mcp-needs-auth-cache.json')), { slack: { timestamp: 1 } }, 'sentry cleared, slack (no login anywhere) kept');
+  assert.ok(h.read(path.join(h.claudeDir, 'mcp-needs-auth-cache.json')).sentry, 'a note newer than the login stays');
+  assert.ok(logs.some((l) => l.includes('will try sentry again')));
+});
+
+test('forgetStaleNeedsAuth leaves a missing or unreadable cache alone', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-auth-'));
+  assert.deepEqual(forgetStaleNeedsAuth(path.join(dir, 'none.json'), { x: 5 }), []);
+  fs.writeFileSync(path.join(dir, 'bad.json'), '{not json');
+  assert.deepEqual(forgetStaleNeedsAuth(path.join(dir, 'bad.json'), { x: 5 }), []);
+  assert.equal(fs.readFileSync(path.join(dir, 'bad.json'), 'utf8'), '{not json');
 });

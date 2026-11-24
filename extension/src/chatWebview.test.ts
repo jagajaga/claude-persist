@@ -2740,3 +2740,20 @@ test('only the newest thinking card is shown, the earlier ones hidden', () => {
   assert.deepEqual(shown(), ['Third, done.']);
 });
 
+test('upload: several chunks travel at once, and each ack sends the next', async () => {
+  const h = createHarness('upload-window');
+  const box = h.document.getElementById('input');
+  // ~6 MB: twelve chunks of ~512 KB.
+  const file = new (h.window as unknown as { File: typeof File }).File([new Uint8Array(6 * 1024 * 1024)], 'big.pdf', { type: 'application/pdf' });
+  box.dispatchEvent(pasteEvent(h, { files: [file], items: [], getData: () => '' }));
+  for (let i = 0; i < 100 && !h.posted.some((m) => m.type === 'uploadBegin'); i++) await new Promise((r) => setTimeout(r, 20));
+  const begin = h.posted.find((m) => m.type === 'uploadBegin') as { uploadId: string; chunks: number };
+  assert.equal(begin.chunks, 12);
+  const sent = () => h.posted.filter((m) => m.type === 'uploadChunk').map((m) => (m as { index: number }).index);
+  assert.deepEqual(sent(), [0, 1, 2, 3, 4, 5, 6, 7], 'a window of eight goes out before any ack');
+  h.send({ type: 'uploadAck', uploadId: begin.uploadId, received: 1, total: 12 });
+  assert.deepEqual(sent().slice(8), [8], 'one ack, one more chunk');
+  for (let r = 2; r <= 12; r++) h.send({ type: 'uploadAck', uploadId: begin.uploadId, received: r, total: 12 });
+  assert.deepEqual([...sent()].sort((a, b) => a - b), [...Array(12).keys()], 'every chunk sent exactly once');
+});
+

@@ -2509,9 +2509,12 @@
     attachMenu.hidden = true;
   }
 
-  // Chunked upload with per-chunk acks: on slow connections the transfer to
-  // the server takes real time, so chips show actual delivery progress.
-  const UPLOAD_CHUNK = 176 * 1024; // base64 chars (~128KB binary) per message
+  // Chunked upload with per-chunk acks, so the chip shows real delivery
+  // progress. Several chunks travel at once: sent one at a time, each waited a
+  // full round trip through the editor connection for its ack, and a 9 MB PDF
+  // in 128 KB chunks took ~30 s on a fast line -- round trips, not bandwidth.
+  const UPLOAD_CHUNK = 704 * 1024; // base64 chars (~512KB binary) per message
+  const UPLOAD_WINDOW = 8; // chunks in flight before waiting for an ack
   const pendingUploads = new Map(); // uploadId -> {name, chunks, chip, pctEl}
 
   function makeUploadChip(uploadId, name) {
@@ -2623,7 +2626,8 @@
       if (chunks.length === 0) chunks.push('');
       const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const ui = makeUploadChip(uploadId, file.name);
-      pendingUploads.set(uploadId, { name: file.name, chunks, next: 1, ...ui });
+      const first = Math.min(UPLOAD_WINDOW, chunks.length);
+      pendingUploads.set(uploadId, { name: file.name, chunks, next: first, ...ui });
       vscode.postMessage({
         type: 'uploadBegin',
         uploadId,
@@ -2631,8 +2635,10 @@
         mediaType: file.type || 'application/octet-stream',
         chunks: chunks.length,
       });
-      // First chunk goes immediately; the rest flow on acks.
-      vscode.postMessage({ type: 'uploadChunk', uploadId, index: 0, data: chunks[0] });
+      // A window of chunks goes at once; each ack lets the next one go.
+      for (let index = 0; index < first; index++) {
+        vscode.postMessage({ type: 'uploadChunk', uploadId, index, data: chunks[index] });
+      }
     };
     reader.readAsDataURL(file);
   }

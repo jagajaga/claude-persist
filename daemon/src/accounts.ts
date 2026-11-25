@@ -325,6 +325,18 @@ export function ensureSdkTranscript(
  * Returns null when identity is unknowable (never logged in, config not written
  * yet); callers must treat null as "distinct from everything", never as a match.
  */
+/** The email this account is signed in as, from its own Claude config; null if none recorded. */
+export function accountEmail(configDir: string | null, homeDir = os.homedir()): string | null {
+  const configFile = configDir ? path.join(configDir, '.claude.json') : path.join(homeDir, '.claude.json');
+  try {
+    const raw = JSON.parse(fs.readFileSync(configFile, 'utf8')) as { oauthAccount?: { emailAddress?: unknown } };
+    const email = raw.oauthAccount?.emailAddress;
+    return typeof email === 'string' && email ? email : null;
+  } catch {
+    return null;
+  }
+}
+
 export function accountIdentity(configDir: string | null, homeDir = os.homedir()): string | null {
   const configFile = configDir
     ? path.join(configDir, '.claude.json')

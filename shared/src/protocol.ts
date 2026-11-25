@@ -305,6 +305,8 @@ export interface AccountInfo {
    * found out from the next failed turn.
    */
   loginExpired: boolean;
+  /** The email this account is signed in as, when its config records one. */
+  email?: string;
 }
 
 export type Request =

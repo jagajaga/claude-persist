@@ -11,6 +11,7 @@ import path from 'node:path';
 // that care set it themselves and put it back.
 delete process.env.CLAUDE_CONFIG_DIR;
 import {
+  accountEmail,
   AccountsStore,
   accountIdentity,
   defaultTwin,
@@ -750,4 +751,15 @@ test('store: an explicit choice of another account is left alone', () => {
   store.setActive(blooper);
   assert.equal(store.active, blooper);
   assert.deepEqual(store.list().filter((a) => a.active).map((a) => a.name), ['blooper']);
+});
+
+test('accountEmail reads the signed-in email from the account config, null when absent', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-email-'));
+  const dir = path.join(home, 'acct');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'me@example.com', accountUuid: 'u' } }));
+  assert.equal(accountEmail(dir, home), 'me@example.com');
+  assert.equal(accountEmail(path.join(home, 'none'), home), null);
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: {} }));
+  assert.equal(accountEmail(null, home), null);
 });

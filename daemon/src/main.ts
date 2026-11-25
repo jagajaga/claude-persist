@@ -35,7 +35,7 @@ import { DaemonSession } from './session.js';
 import { fetchOpenIncidents } from './statusPage.js';
 import type { StatusIncident } from './statusPage.js';
 import { importClaudeSession, listClaudeSessions } from './importer.js';
-import { accountIdentity, accountsStore, shareUserConfig } from './accounts.js';
+import { accountEmail, accountIdentity, accountsStore, shareUserConfig } from './accounts.js';
 import { LoginManager } from './login.js';
 import { applyRateLimitEvent, applyUsageResponse } from './usage.js';
 import { StatsSampler } from './serverStats.js';
@@ -241,10 +241,14 @@ let lastAccountsJson = '';
 function accountsWithUsage(accounts: AccountInfo[] = accountsStore.list()): AccountInfo[] {
   // The one place every list the client sees passes through, so the expiry
   // rotation knows about is attached here rather than at each call site.
-  return withLoginExpiry(accounts, rotation, identityOf).map((account) => ({
-    ...account,
-    lastUsage: accountUsage.get(accountKey(account.configDir)) ?? null,
-  }));
+  return withLoginExpiry(accounts, rotation, identityOf).map((account) => {
+    const email = accountEmail(account.configDir);
+    return {
+      ...account,
+      lastUsage: accountUsage.get(accountKey(account.configDir)) ?? null,
+      ...(email ? { email } : {}),
+    };
+  });
 }
 
 function broadcastAccounts(accounts: AccountInfo[]): void {

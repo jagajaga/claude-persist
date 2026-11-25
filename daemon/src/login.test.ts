@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { LoginManager, extractAuthUrl, loginFailureReason } from './login.js';
+import { LoginManager, extractAuthUrl, extractSetupToken, loginFailureReason } from './login.js';
 
 const ESC = '';
 
@@ -88,4 +88,21 @@ test('any other name still gets its own directory', () => {
 test('start rejects with an actionable message when there is no Claude Code', async () => {
   const manager = new LoginManager(null, '/home/u/.claude-accounts', () => undefined, '/home/u/.claude');
   await assert.rejects(() => manager.start('work'), /claude\.com\/download/);
+});
+
+// What `claude setup-token` writes under a terminal: words placed with cursor
+// moves, the link as a hyperlink escape (captured 2026-11-25, query shortened).
+const SETUP_TOKEN_OUTPUT =
+  '\x1b[2GBrowser\x1b[10Gdidn\'t\x1b[17Gopen?\r\r\n\r\r\n' +
+  '\x1b]8;id=49xpz4;https://claude.ai/oauth/authorize?code=true&client_id=abc&state=xyz\x1b\\https://claude.ai/oauth/authorize?code=true&cl\x1b]8;;\x1b\\\r\r\n' +
+  'Paste\x1b[8Gcode\x1b[13Ghere\r\r\n';
+
+test('extractAuthUrl: takes the exact link from a terminal hyperlink', () => {
+  assert.equal(extractAuthUrl(SETUP_TOKEN_OUTPUT), 'https://claude.ai/oauth/authorize?code=true&client_id=abc&state=xyz');
+});
+
+test('extractSetupToken: finds the token among terminal escapes, and nothing before it is printed', () => {
+  assert.equal(extractSetupToken(SETUP_TOKEN_OUTPUT), null);
+  const done = SETUP_TOKEN_OUTPUT + '\x1b[2K\x1b[1GYour\x1b[6GOAuth\x1b[12Gtoken:\r\r\n\x1b[32msk-ant-oat01-AbC_dEf-0123456789abcdefGHIJ\x1b[39m\r\r\nStore this token securely';
+  assert.equal(extractSetupToken(done), 'sk-ant-oat01-AbC_dEf-0123456789abcdefGHIJ');
 });

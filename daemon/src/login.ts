@@ -33,7 +33,20 @@ function stripAnsi(text: string): string {
 
 /** The authorize URL the CLI prints, or null if this chunk doesn't have it yet. */
 export function extractAuthUrl(output: string): string | null {
+  // Under a terminal (setup-token) the link is a hyperlink escape whose visible
+  // text is laid out with cursor moves; the escape's target is the exact URL.
+  // eslint-disable-next-line no-control-regex
+  const linked = /\x1b\]8;[^;]*;(https:\/\/[^\x07\x1b\s]*\/oauth\/authorize\?[^\x07\x1b\s]+)/.exec(output);
+  if (linked) return linked[1];
   const match = /https:\/\/[^\s"']*\/oauth\/authorize\?[^\s"']+/.exec(stripAnsi(output));
+  return match ? match[0] : null;
+}
+
+/** The long-lived token `claude setup-token` prints at the end, or null. */
+export function extractSetupToken(output: string): string | null {
+  // eslint-disable-next-line no-control-regex
+  const plain = output.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '').replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
+  const match = /sk-ant-oat\d\d-[A-Za-z0-9_-]{20,}/.exec(plain);
   return match ? match[0] : null;
 }
 
@@ -56,11 +69,15 @@ export function loginFailureReason(output: string): string | null {
 interface PendingLogin {
   id: string;
   name: string;
+  /** login: sign this account in. token: `claude setup-token`, a long-lived token for other programs. */
+  purpose: LoginPurpose;
   configDir: string;
   child: ChildProcessWithoutNullStreams;
   output: string;
   abandonTimer: NodeJS.Timeout;
 }
+
+export type LoginPurpose = 'login' | 'token';
 
 export interface LoginStarted {
   loginId: string;
@@ -97,7 +114,7 @@ export class LoginManager {
    * The child is left running with its stdin open: it is waiting for the code,
    * which arrives later via submitCode.
    */
-  start(name: string): Promise<LoginStarted> {
+  start(name: string, purpose: LoginPurpose = 'login'): Promise<LoginStarted> {
     // Nothing to sign in with. Saying so beats `spawn claude ENOENT`, which is
     // what a macOS or Windows user hit here: the bundled binary is built for
     // the packaged platform only.
@@ -110,17 +127,28 @@ export class LoginManager {
 
     // A Windows install can be a .cmd shim, which CreateProcess cannot run
     // directly; everything else is spawned without a shell, as before.
-    const child = spawn(this.claudeBin, ['auth', 'login', '--claudeai'], {
-      shell: /\.(cmd|bat)$/i.test(this.claudeBin),
-      // Piped stdio is what selects the hosted-callback, paste-a-code flow.
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, CLAUDE_CONFIG_DIR: configDir, BROWSER: 'true' },
-    }) as ChildProcessWithoutNullStreams;
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: configDir, BROWSER: 'true' };
+    const child = (
+      purpose === 'token'
+        ? // setup-token prints nothing without a terminal; `script` gives it one
+          // (util-linux). Wide, so the token is never wrapped across lines.
+          spawn('script', ['-qfc', `stty cols 1000; exec '${this.claudeBin.replace(/'/g, `'\\''`)}' setup-token`, '/dev/null'], {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            env: { ...env, COLUMNS: '1000' },
+          })
+        : spawn(this.claudeBin, ['auth', 'login', '--claudeai'], {
+            shell: /\.(cmd|bat)$/i.test(this.claudeBin),
+            // Piped stdio is what selects the hosted-callback, paste-a-code flow.
+            stdio: ['pipe', 'pipe', 'pipe'],
+            env,
+          })
+    ) as ChildProcessWithoutNullStreams;
 
     const id = randomUUID();
     const entry: PendingLogin = {
       id,
       name,
+      purpose,
       configDir,
       child,
       output: '',
@@ -177,7 +205,7 @@ export class LoginManager {
   async submitCode(
     loginId: string,
     code: string,
-  ): Promise<{ ok: boolean; error?: string; configDir?: string }> {
+  ): Promise<{ ok: boolean; error?: string; configDir?: string; token?: string }> {
     const entry = this.pending.get(loginId);
     if (!entry) return { ok: false, error: 'That sign-in is no longer active — start again.' };
     const trimmed = code.trim();
@@ -187,15 +215,43 @@ export class LoginManager {
       const done = (): void => resolve();
       entry.child.once('exit', done);
       setTimeout(done, EXCHANGE_TIMEOUT_MS).unref();
+      // A token is the whole answer: no need to wait for the CLI to exit.
+      if (entry.purpose === 'token') {
+        const poll = setInterval(() => {
+          if (extractSetupToken(entry.output)) {
+            clearInterval(poll);
+            done();
+          }
+        }, 200);
+        poll.unref();
+        entry.child.once('exit', () => clearInterval(poll));
+      }
     });
     try {
-      entry.child.stdin.write(`${trimmed}\n`);
+      // A terminal takes Enter as a carriage return.
+      entry.child.stdin.write(entry.purpose === 'token' ? `${trimmed}\r` : `${trimmed}\n`);
     } catch {
       return { ok: false, error: 'The sign-in process is no longer accepting input.' };
     }
     await exited;
     clearTimeout(entry.abandonTimer);
     this.pending.delete(loginId);
+
+    if (entry.purpose === 'token') {
+      const token = extractSetupToken(entry.output);
+      try {
+        entry.child.kill('SIGTERM');
+      } catch {
+        // already gone
+      }
+      // Never logged, never stored: it goes to the one who asked, once.
+      if (token) {
+        this.log(`setup-token ${entry.name}: issued`);
+        return { ok: true, token };
+      }
+      this.log(`setup-token ${entry.name}: failed`);
+      return { ok: false, error: loginFailureReason(entry.output) ?? 'No token came back. Check the code and try again.' };
+    }
 
     const loggedIn = await this.isLoggedIn(entry.configDir);
     if (loggedIn === 'unknown') {

@@ -391,7 +391,12 @@ export type Request =
    * localhost one the TTY path assumes — wrong whenever the browser is not on
    * the same machine as the daemon.
    */
-  | { id: number; op: 'startLogin'; name: string }
+  /**
+   * purpose 'token': `claude setup-token` for that account -- a long-lived
+   * token for another program (a bot). submitLoginCode then answers
+   * `{ ok, token }`; the token is not stored, and the account in use is not changed.
+   */
+  | { id: number; op: 'startLogin'; name: string; purpose?: 'login' | 'token' }
   | { id: number; op: 'submitLoginCode'; loginId: string; code: string }
   | { id: number; op: 'cancelLogin'; loginId: string }
   /** Stop one running subagent. Needs the SDK task id, not the tool_use id. */

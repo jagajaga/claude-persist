@@ -5,6 +5,7 @@ import { dirsInUseBySession } from './activeDirs.js';
 import { appRelease } from './appRelease.js';
 import { FcmSender, PushTokens, createPush } from './push.js';
 import { coalescingSender } from './coalesce.js';
+import { shouldActivateAfterSignIn } from './signInPolicy.js';
 import { newestOfEachFamily } from './modelList.js';
 import { handleHttpUpload, keepImageCopies, loadImageData, uploadChunk, uploadTiming } from './uploads.js';
 import net from 'node:net';
@@ -766,9 +767,11 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
       return options;
     }
     case 'startLogin':
-      return logins.start(req.name);
+      return logins.start(req.name, req.purpose === 'token' ? 'token' : 'login');
     case 'submitLoginCode':
       return logins.submitCode(req.loginId, req.code).then((result) => {
+        // A setup-token: handed back as is; no account is signed in or switched.
+        if (result.token !== undefined) return result;
         if (!result.ok || !result.configDir) return result;
         // Make the account we just signed into the one in use. Without this the
         // panel reported success and every message went on failing against the
@@ -782,7 +785,10 @@ function handleRequest(client: Client, req: Request): unknown | Promise<unknown>
         // A fresh token is exactly what "unusable" was waiting for.
         const repaired = accountsStore.list().find((a) => accountKey(a.configDir) === accountKey(signedIn));
         rotation.unusable.delete(repaired ? identityOf(repaired) : accountKey(signedIn));
-        activateAccount(signedIn, 'signed in');
+        // Only when the account in use cannot work: switching restarts every
+        // chat, and re-signing in a spare account must not interrupt them.
+        if (shouldActivateAfterSignIn(accountsWithUsage(), signedIn)) activateAccount(signedIn, 'signed in');
+        else broadcastAccounts(accountsStore.list());
         return result;
       });
     case 'cancelLogin': {

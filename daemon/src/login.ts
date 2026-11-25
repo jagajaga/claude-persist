@@ -42,6 +42,32 @@ export function extractAuthUrl(output: string): string | null {
   return match ? match[0] : null;
 }
 
+/**
+ * The code to give Claude, from whatever was pasted: the code itself
+ * (`code#state`), or the whole address of the page that showed it -- the
+ * easy thing to copy by mistake on a phone. Spaces and line breaks a
+ * keyboard adds are dropped.
+ */
+export function normalizeLoginCode(pasted: string): string {
+  const text = pasted.replace(/\s+/g, '');
+  if (!/^https?:\/\//i.test(text)) return text;
+  try {
+    const url = new URL(text);
+    const code = url.searchParams.get('code');
+    const state = url.searchParams.get('state') ?? (url.hash.length > 1 ? url.hash.slice(1) : null);
+    if (code) return state ? `${code}#${state}` : code;
+  } catch {
+    // not an address after all
+  }
+  return text;
+}
+
+/** What a pasted code looked like, for the log: never the code itself. */
+export function codeShape(pasted: string): string {
+  const t = pasted.trim();
+  return `${t.length} chars, ${t.includes('#') ? 'with' : 'no'} #, ${/^https?:\/\//i.test(t) ? 'an address' : 'not an address'}${/\s/.test(t) ? ', has spaces' : ''}`;
+}
+
 /** The long-lived token `claude setup-token` prints at the end, or null. */
 export function extractSetupToken(output: string): string | null {
   // eslint-disable-next-line no-control-regex
@@ -213,8 +239,9 @@ export class LoginManager {
   ): Promise<{ ok: boolean; error?: string; configDir?: string; token?: string }> {
     const entry = this.pending.get(loginId);
     if (!entry) return { ok: false, error: 'That sign-in is no longer active — start again.' };
-    const trimmed = code.trim();
+    const trimmed = normalizeLoginCode(code);
     if (!trimmed) return { ok: false, error: 'No code was entered.' };
+    this.log(`${entry.purpose === 'token' ? 'setup-token' : 'login'} ${entry.name}: code pasted (${codeShape(code)})`);
 
     const exited = new Promise<void>((resolve) => {
       const done = (): void => resolve();

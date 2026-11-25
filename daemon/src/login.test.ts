@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { LoginManager, extractAuthUrl, extractSetupToken, loginFailureReason } from './login.js';
+import { LoginManager, codeShape, extractAuthUrl, extractSetupToken, loginFailureReason, normalizeLoginCode } from './login.js';
 
 const ESC = '';
 
@@ -113,4 +113,18 @@ test('a refused setup-token code gives Claude\'s own reason', () => {
     loginFailureReason(out),
     "That code wasn't accepted. It may be incomplete, expired, already used, or from an earlier sign-in attempt. Sign in again to get a new code.",
   );
+});
+
+test('a pasted code is taken as is; a pasted address gives its code and state; keyboard spaces dropped', () => {
+  assert.equal(normalizeLoginCode('  abc123#st4te \n'), 'abc123#st4te');
+  assert.equal(normalizeLoginCode('abc 123#st4te'), 'abc123#st4te');
+  assert.equal(normalizeLoginCode('https://platform.claude.com/oauth/code/callback?code=abc123&state=st4te'), 'abc123#st4te');
+  assert.equal(normalizeLoginCode('https://console.anthropic.com/oauth/code/callback?code=abc123#st4te'), 'abc123#st4te');
+  assert.equal(normalizeLoginCode('https://example.com/no-code-here'), 'https://example.com/no-code-here');
+});
+
+test('the log gets the shape of a pasted code, never the code', () => {
+  const shape = codeShape('SECRETcode#SECRETstate');
+  assert.equal(shape, '22 chars, with #, not an address');
+  assert.ok(!shape.includes('SECRET'));
 });

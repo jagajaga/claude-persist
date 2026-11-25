@@ -58,6 +58,11 @@ export function extractSetupToken(output: string): string | null {
  * complaint so the user sees why it failed rather than a bare "login failed".
  */
 export function loginFailureReason(output: string): string | null {
+  // Under a terminal (setup-token) Claude says why in its own words; pass them on.
+  // eslint-disable-next-line no-control-regex
+  const flat = output.replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '').replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, ' ').replace(/\s+/g, ' ');
+  const own = /OAuth error:\s*(.+?)(?:\s*Press Enter to retry|$)/.exec(flat);
+  if (own) return own[1].trim();
   const clean = stripAnsi(output);
   if (/invalid.{0,20}code|code.{0,20}(invalid|expired)/i.test(clean)) {
     return 'That code was not accepted — it may have expired. Try signing in again.';
@@ -217,8 +222,10 @@ export class LoginManager {
       setTimeout(done, EXCHANGE_TIMEOUT_MS).unref();
       // A token is the whole answer: no need to wait for the CLI to exit.
       if (entry.purpose === 'token') {
+        const sentAt = entry.output.length;
         const poll = setInterval(() => {
-          if (extractSetupToken(entry.output)) {
+          // A token, or Claude refusing the code: either way the answer is in.
+          if (extractSetupToken(entry.output) || /OAuth error:/.test(entry.output.slice(sentAt))) {
             clearInterval(poll);
             done();
           }

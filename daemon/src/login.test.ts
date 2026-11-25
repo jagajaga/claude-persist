@@ -106,3 +106,11 @@ test('extractSetupToken: finds the token among terminal escapes, and nothing bef
   const done = SETUP_TOKEN_OUTPUT + '\x1b[2K\x1b[1GYour\x1b[6GOAuth\x1b[12Gtoken:\r\r\n\x1b[32msk-ant-oat01-AbC_dEf-0123456789abcdefGHIJ\x1b[39m\r\r\nStore this token securely';
   assert.equal(extractSetupToken(done), 'sk-ant-oat01-AbC_dEf-0123456789abcdefGHIJ');
 });
+
+test('a refused setup-token code gives Claude\'s own reason', () => {
+  const out = SETUP_TOKEN_OUTPUT + '\x1b[2K · Finishing sign-i … ✢ * ✘ OAuth\x1b[9Gerror: That code wasn\'t accepted. It may be incomplete, expired, already used, or from an earlier sign-in attempt. Sign in again to get a new code.\r\n Press Enter to retry';
+  assert.equal(
+    loginFailureReason(out),
+    "That code wasn't accepted. It may be incomplete, expired, already used, or from an earlier sign-in attempt. Sign in again to get a new code.",
+  );
+});

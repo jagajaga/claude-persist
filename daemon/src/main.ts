@@ -6,6 +6,7 @@ import { appRelease } from './appRelease.js';
 import { FcmSender, PushTokens, createPush } from './push.js';
 import { coalescingSender } from './coalesce.js';
 import { shouldActivateAfterSignIn } from './signInPolicy.js';
+import { accessTokenOf, fetchAccountLimits } from './accountLimits.js';
 import { newestOfEachFamily } from './modelList.js';
 import { handleHttpUpload, keepImageCopies, loadImageData, uploadChunk, uploadTiming } from './uploads.js';
 import net from 'node:net';
@@ -264,6 +265,22 @@ function broadcastAccounts(accounts: AccountInfo[]): void {
  * logged into via `claude /login` stayed missing from the model menu until the
  * window was reloaded.
  */
+/**
+ * Every account's limits, read with its own login (see accountLimits.ts), so
+ * Settings shows each one's usage and reset time, not only the account in use.
+ */
+const LIMITS_POLL_MS = 5 * 60_000;
+async function readAllLimits(): Promise<void> {
+  let changed = false;
+  for (const account of accountsStore.list()) {
+    const token = accessTokenOf(account.configDir);
+    if (!token) continue;
+    const windows = await fetchAccountLimits(token);
+    if (windows && Object.keys(windows).length > 0 && accountUsage.record(accountKey(account.configDir), windows)) changed = true;
+  }
+  if (changed) broadcastAll({ kind: 'accounts', accounts: accountsWithUsage() });
+}
+
 function pollAccounts(): void {
   const accounts = accountsStore.list();
   if (JSON.stringify(accounts) === lastAccountsJson) return;
@@ -1080,6 +1097,9 @@ async function start(): Promise<void> {
   lastAccountsJson = JSON.stringify(accountsStore.list());
   const accountsTimer = setInterval(pollAccounts, ACCOUNTS_POLL_MS);
   accountsTimer.unref();
+  void readAllLimits();
+  const limitsTimer = setInterval(() => void readAllLimits(), LIMITS_POLL_MS);
+  limitsTimer.unref();
 
   let finished = false;
   const finish = (): void => {
